@@ -1,0 +1,22 @@
+{
+  "name": "grindstone-irrigation-schedule",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && firebase deploy --only hosting,firestore:rules"
+  },
+  "dependencies": {
+    "firebase": "^10.13.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.0",
+    "vite-plugin-pwa": "^0.20.5"
+  }
+}

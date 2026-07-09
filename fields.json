@@ -1,0 +1,522 @@
+[
+  {
+    "id": "12A",
+    "fieldName": "12 A",
+    "irrigationName": "12A",
+    "acres": 34,
+    "crop": "SWEET CORN",
+    "demandGpm": 1.89,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "19A",
+    "fieldName": "19 A",
+    "irrigationName": "19A",
+    "acres": 51,
+    "crop": "SWEET CORN",
+    "demandGpm": 2.83,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "19C_MINI",
+    "fieldName": "18 E MINI",
+    "irrigationName": "19C MINI",
+    "acres": 20,
+    "crop": "SWEET CORN",
+    "demandGpm": 1.11,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "20D_MINI",
+    "fieldName": "19 E MINI",
+    "irrigationName": "20D MINI",
+    "acres": 19,
+    "crop": "SWEET CORN",
+    "demandGpm": 1.06,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "25B_MINI",
+    "fieldName": "23 C MINI",
+    "irrigationName": "25B MINI",
+    "acres": 21,
+    "crop": "SWEET CORN",
+    "demandGpm": 1.17,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "25C_MINI",
+    "fieldName": "25 C MINI",
+    "irrigationName": "25C MINI",
+    "acres": 15,
+    "crop": "SWEET CORN",
+    "demandGpm": 0.83,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "22_MINI",
+    "fieldName": "20 C MINI",
+    "irrigationName": "22 MINI",
+    "acres": 19,
+    "crop": "SQUASH",
+    "demandGpm": 1.06,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "11B_MAIN",
+    "fieldName": "11 B",
+    "irrigationName": "11B MAIN",
+    "acres": 63,
+    "crop": "POTATOES",
+    "demandGpm": 3.5,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "11B_MINI",
+    "fieldName": "11 B MINI",
+    "irrigationName": "11B MINI",
+    "acres": 12,
+    "crop": "POTATOES",
+    "demandGpm": 0.67,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "19E",
+    "fieldName": "19 E",
+    "irrigationName": "19E",
+    "acres": 115,
+    "crop": "POTATOES",
+    "demandGpm": 6.39,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "22B_MAIN",
+    "fieldName": "22 B",
+    "irrigationName": "22B MAIN",
+    "acres": 132,
+    "crop": "POTATOES",
+    "demandGpm": 7.33,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "22B_MINI",
+    "fieldName": "22 B MINI",
+    "irrigationName": "22B MINI",
+    "acres": 13,
+    "crop": "POTATOES",
+    "demandGpm": 0.72,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "22C",
+    "fieldName": "22 C",
+    "irrigationName": "22C",
+    "acres": 131,
+    "crop": "POTATOES",
+    "demandGpm": 7.28,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "22E",
+    "fieldName": "23 D MINI",
+    "irrigationName": "22E",
+    "acres": 37,
+    "crop": "POTATOES",
+    "demandGpm": 2.06,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "24B_MAIN",
+    "fieldName": "24 B",
+    "irrigationName": "24B MAIN",
+    "acres": 132,
+    "crop": "POTATOES",
+    "demandGpm": 7.33,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "24B_MINI",
+    "fieldName": "24 A MINI",
+    "irrigationName": "24B MINI",
+    "acres": 39,
+    "crop": "POTATOES",
+    "demandGpm": 2.17,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "27A",
+    "fieldName": "27 A",
+    "irrigationName": "27A",
+    "acres": 132,
+    "crop": "POTATOES",
+    "demandGpm": 7.33,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "18C",
+    "fieldName": "18 C",
+    "irrigationName": "18C",
+    "acres": 131,
+    "crop": "ONIONS",
+    "demandGpm": 7.28,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "19D",
+    "fieldName": "19 D",
+    "irrigationName": "19D",
+    "acres": 128,
+    "crop": "ONIONS",
+    "demandGpm": 7.11,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "27B_MAIN",
+    "fieldName": "27 B",
+    "irrigationName": "27B MAIN",
+    "acres": 93,
+    "crop": "MINT",
+    "demandGpm": 5.17,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "27B_MINI",
+    "fieldName": "27 B MINI",
+    "irrigationName": "27B MINI",
+    "acres": 37,
+    "crop": "MINT",
+    "demandGpm": 2.06,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "27C_N",
+    "fieldName": "27 C",
+    "irrigationName": "27C N",
+    "acres": 133,
+    "crop": "MINT",
+    "demandGpm": 7.39,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "18B",
+    "fieldName": "18 B",
+    "irrigationName": "18B",
+    "acres": 130,
+    "crop": "HAY",
+    "demandGpm": 7.22,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "20A",
+    "fieldName": "20 A",
+    "irrigationName": "20A",
+    "acres": 133,
+    "crop": "HAY",
+    "demandGpm": 7.39,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "20B",
+    "fieldName": "20 B",
+    "irrigationName": "20B",
+    "acres": 131,
+    "crop": "HAY",
+    "demandGpm": 7.28,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "23A_MAIN",
+    "fieldName": "23 A",
+    "irrigationName": "23A MAIN",
+    "acres": 131,
+    "crop": "HAY",
+    "demandGpm": 7.28,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "23D",
+    "fieldName": "23 D",
+    "irrigationName": "23D",
+    "acres": 132,
+    "crop": "HAY",
+    "demandGpm": 7.33,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "24A",
+    "fieldName": "24 A",
+    "irrigationName": "24A",
+    "acres": 97,
+    "crop": "HAY",
+    "demandGpm": 5.39,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "25A",
+    "fieldName": "25 A",
+    "irrigationName": "25A",
+    "acres": 132,
+    "crop": "HAY",
+    "demandGpm": 7.33,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "25D",
+    "fieldName": "25 D",
+    "irrigationName": "25D",
+    "acres": 74,
+    "crop": "HAY",
+    "demandGpm": 4.11,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "29A_WIPER",
+    "fieldName": "29 A",
+    "irrigationName": "29A WIPER",
+    "acres": 87,
+    "crop": "HAY",
+    "demandGpm": 4.83,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "15A",
+    "fieldName": "15 A",
+    "irrigationName": "15A",
+    "acres": 98,
+    "crop": "CORN",
+    "demandGpm": 5.44,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "15B_MAIN",
+    "fieldName": "15 B",
+    "irrigationName": "15B MAIN",
+    "acres": 101,
+    "crop": "CORN",
+    "demandGpm": 5.61,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "15C_MAIN",
+    "fieldName": "15 C",
+    "irrigationName": "15C MAIN",
+    "acres": 112,
+    "crop": "CORN",
+    "demandGpm": 6.22,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "18A",
+    "fieldName": "18 A",
+    "irrigationName": "18A",
+    "acres": 99,
+    "crop": "CORN",
+    "demandGpm": 5.5,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "18E_MAIN",
+    "fieldName": "18 E",
+    "irrigationName": "18E MAIN",
+    "acres": 131,
+    "crop": "CORN",
+    "demandGpm": 7.28,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "20C",
+    "fieldName": "20 C",
+    "irrigationName": "20C",
+    "acres": 133,
+    "crop": "CORN",
+    "demandGpm": 7.39,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "22D",
+    "fieldName": "22 D",
+    "irrigationName": "22D",
+    "acres": 132,
+    "crop": "CORN",
+    "demandGpm": 7.33,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "23C",
+    "fieldName": "23 C",
+    "irrigationName": "23C",
+    "acres": 135,
+    "crop": "CORN",
+    "demandGpm": 7.5,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "25C_MAIN",
+    "fieldName": "25 C",
+    "irrigationName": "25C MAIN",
+    "acres": 132,
+    "crop": "CORN",
+    "demandGpm": 7.33,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "28A_WIPER",
+    "fieldName": "28 A",
+    "irrigationName": "28A WIPER",
+    "acres": 63,
+    "crop": "CORN",
+    "demandGpm": 3.5,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "28B",
+    "fieldName": "28 B",
+    "irrigationName": "28B",
+    "acres": 65,
+    "crop": "CORN",
+    "demandGpm": 3.61,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "28C",
+    "fieldName": "28 C",
+    "irrigationName": "28C",
+    "acres": 124,
+    "crop": "CORN",
+    "demandGpm": 6.89,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "19C_MAIN",
+    "fieldName": "19 C",
+    "irrigationName": "19C MAIN",
+    "acres": 65,
+    "crop": "CARROTS",
+    "demandGpm": 3.61,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "15D_MAIN",
+    "fieldName": "15 D",
+    "irrigationName": "15D MAIN",
+    "acres": 75,
+    "crop": "BEETS",
+    "demandGpm": 4.17,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "15E_MAIN",
+    "fieldName": "15 E",
+    "irrigationName": "15E MAIN",
+    "acres": 75,
+    "crop": "BEETS",
+    "demandGpm": 4.17,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "19B",
+    "fieldName": "19 B",
+    "irrigationName": "19B",
+    "acres": 61,
+    "crop": "BEETS",
+    "demandGpm": 3.39,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "20D_MAIN",
+    "fieldName": "20 D",
+    "irrigationName": "20D MAIN",
+    "acres": 62,
+    "crop": "BEETS",
+    "demandGpm": 3.44,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "22A_MAIN",
+    "fieldName": "22 A",
+    "irrigationName": "22A MAIN",
+    "acres": 103,
+    "crop": "BEETS",
+    "demandGpm": 5.72,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "22A_MINI",
+    "fieldName": "22 A MINI",
+    "irrigationName": "22A MINI",
+    "acres": 14,
+    "crop": "BEETS",
+    "demandGpm": 0.78,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "23B_N",
+    "fieldName": "23 B",
+    "irrigationName": "23B N",
+    "acres": 34,
+    "crop": "BEETS",
+    "demandGpm": 1.89,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  },
+  {
+    "id": "25B",
+    "fieldName": "25 B",
+    "irrigationName": "25B",
+    "acres": 94,
+    "crop": "BEETS",
+    "demandGpm": 5.22,
+    "ditchRider": "ALDO/ALEJANDRO",
+    "diversionPoint": "GRINDSTONE"
+  }
+]

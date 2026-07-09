@@ -1,0 +1,12 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Open read/write to the schedule data only. No login screen for the
+    // crew — anyone with the app URL can toggle shifts. If this needs to be
+    // locked down later (e.g. only people on your network, or with a PIN),
+    // that's a small follow-up change here plus adding Firebase Auth.
+    match /weeks/{weekId}/toggles/{fieldId} {
+      allow read, write: if true;
+    }
+  }
+}
