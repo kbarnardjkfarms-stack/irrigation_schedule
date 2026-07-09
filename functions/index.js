@@ -48,10 +48,15 @@ async function agworldGet(path, params, token) {
 // attached comes back with those attributes as null. So this finds the
 // most recent season first, then requests fields against it.
 async function findCurrentSeasonId(token) {
-  const params = new URLSearchParams({ 'page[size]': '100', sort: '-season_start_date' });
+  const params = new URLSearchParams({ 'page[size]': '100' });
   const json = await agworldGet('/user_api/v1/seasons', params, token);
   if (!json.data.length) return null;
-  return json.data[0].id;
+  const sorted = [...json.data].sort((a, b) => {
+    const da = a.attributes.season_start_date || '';
+    const db = b.attributes.season_start_date || '';
+    return db.localeCompare(da);
+  });
+  return sorted[0].id;
 }
 
 async function fetchAllFields(token) {
