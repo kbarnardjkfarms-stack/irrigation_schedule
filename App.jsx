@@ -241,6 +241,65 @@ export default function App() {
         </div>
       )}
 
+      {selected && !mode && editorField && (
+        <div className="editor-panel">
+          <div className="editor-title">{editorField.fieldName} · {DAYS[selected.dayIdx].en} {BLOCKS[selected.shift].label}</div>
+          {!editingMode ? (
+            <div className="editor-row">
+              <button onClick={() => startEditOn(editorExisting)}>On at…</button>
+              <button onClick={() => startEditOff(editorExisting)}>Off at…</button>
+              {editorExisting && <button onClick={() => removeEvent(selected.fieldId, editorExisting)}>Remove</button>}
+            </div>
+          ) : (
+            <>
+              <div className="editor-label">Turned {editingMode} at:</div>
+              <div className="stepper">
+                <button onClick={() => setEditingHour((h) => Math.max(BLOCKS[selected.shift].start, h - 0.5))}>-</button>
+                <span>{fmtHour(editingHour)}</span>
+                <button onClick={() => setEditingHour((h) => Math.min(BLOCKS[selected.shift].end, h + 0.5))}>+</button>
+              </div>
+
+              {editingMode === 'on' && (
+                <>
+                  <div className="editor-label">Running with:</div>
+                  <div className="editor-row">
+                    {[[null, 'Just water'], ['fert', '+ Fert'], ['chem', '+ Chem']].map(([val, lbl]) => (
+                      <button key={lbl} className={editingAdditive === val ? 'active' : ''} onClick={() => setEditingAdditive(val)}>{lbl}</button>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {editingMode === 'off' && (
+                <>
+                  <div className="editor-label">Display:</div>
+                  <div className="editor-row">
+                    {[['time', 'Exact time'], ['stop', 'Off at stop'], ['sis', 'Off at SIS']].map(([val, lbl]) => (
+                      <button key={val} className={editingDisplay === val ? 'active' : ''} onClick={() => setEditingDisplay(val)}>{lbl}</button>
+                    ))}
+                  </div>
+                  {editingDisplay === 'sis' && (
+                    <>
+                      <div className="editor-label">Pivot degrees:</div>
+                      <div className="stepper">
+                        <button onClick={() => setEditingSisDegrees((d) => Math.max(0, d - 5))}>-</button>
+                        <span>{editingSisDegrees}°</span>
+                        <button onClick={() => setEditingSisDegrees((d) => Math.min(360, d + 5))}>+</button>
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+
+              <div className="editor-row">
+                <button className="save" onClick={saveEditor}>Save</button>
+                <button onClick={() => setEditingMode(null)}>Cancel</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="table-scroll">
         <table>
           <thead>
@@ -330,65 +389,6 @@ export default function App() {
         <span><i className="swatch" style={{ background: 'linear-gradient(135deg,#185FA5 50%,#EF9F27 50%)' }} />+ Fert</span>
         <span><i className="swatch" style={{ background: 'linear-gradient(135deg,#185FA5 50%,#D85A30 50%)' }} />+ Chem</span>
       </div>
-
-      {selected && !mode && editorField && (
-        <div className="editor-panel">
-          <div className="editor-title">{editorField.fieldName} · {DAYS[selected.dayIdx].en} {BLOCKS[selected.shift].label}</div>
-          {!editingMode ? (
-            <div className="editor-row">
-              <button onClick={() => startEditOn(editorExisting)}>On at…</button>
-              <button onClick={() => startEditOff(editorExisting)}>Off at…</button>
-              {editorExisting && <button onClick={() => removeEvent(selected.fieldId, editorExisting)}>Remove</button>}
-            </div>
-          ) : (
-            <>
-              <div className="editor-label">Turned {editingMode} at:</div>
-              <div className="stepper">
-                <button onClick={() => setEditingHour((h) => Math.max(BLOCKS[selected.shift].start, h - 0.5))}>-</button>
-                <span>{fmtHour(editingHour)}</span>
-                <button onClick={() => setEditingHour((h) => Math.min(BLOCKS[selected.shift].end, h + 0.5))}>+</button>
-              </div>
-
-              {editingMode === 'on' && (
-                <>
-                  <div className="editor-label">Running with:</div>
-                  <div className="editor-row">
-                    {[[null, 'Just water'], ['fert', '+ Fert'], ['chem', '+ Chem']].map(([val, lbl]) => (
-                      <button key={lbl} className={editingAdditive === val ? 'active' : ''} onClick={() => setEditingAdditive(val)}>{lbl}</button>
-                    ))}
-                  </div>
-                </>
-              )}
-
-              {editingMode === 'off' && (
-                <>
-                  <div className="editor-label">Display:</div>
-                  <div className="editor-row">
-                    {[['time', 'Exact time'], ['stop', 'Off at stop'], ['sis', 'Off at SIS']].map(([val, lbl]) => (
-                      <button key={val} className={editingDisplay === val ? 'active' : ''} onClick={() => setEditingDisplay(val)}>{lbl}</button>
-                    ))}
-                  </div>
-                  {editingDisplay === 'sis' && (
-                    <>
-                      <div className="editor-label">Pivot degrees:</div>
-                      <div className="stepper">
-                        <button onClick={() => setEditingSisDegrees((d) => Math.max(0, d - 5))}>-</button>
-                        <span>{editingSisDegrees}°</span>
-                        <button onClick={() => setEditingSisDegrees((d) => Math.min(360, d + 5))}>+</button>
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-
-              <div className="editor-row">
-                <button className="save" onClick={saveEditor}>Save</button>
-                <button onClick={() => setEditingMode(null)}>Cancel</button>
-              </div>
-            </>
-          )}
-        </div>
-      )}
     </div>
   )
 }
