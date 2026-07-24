@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { collection, doc, onSnapshot, setDoc } from 'firebase/firestore'
+import { collection, collectionGroup, doc, onSnapshot, query, setDoc, where } from 'firebase/firestore'
 import { db } from './firebase.js'
-import fields from './fields.json'
 
 const DAYS = [
   { k: 'mon', en: 'Mon' }, { k: 'tue', en: 'Tue' }, { k: 'wed', en: 'Wed' },
@@ -13,7 +12,8 @@ const CROP_COLOR = {
   'SWEET CORN': { bg: '#FAC775', fg: '#412402' }, POTATOES: { bg: '#F5C4B3', fg: '#4A1B0C' },
   ONIONS: { bg: '#CECBF6', fg: '#26215C' }, MINT: { bg: '#9FE1CB', fg: '#04342C' },
   HAY: { bg: '#C0DD97', fg: '#173404' }, CORN: { bg: '#FAC775', fg: '#412402' },
-  CARROTS: { bg: '#F5C4B3', fg: '#4A1B0C' }, BEETS: { bg: '#F4C0D1', fg: '#4B1528' }
+  CARROTS: { bg: '#F5C4B3', fg: '#4A1B0C' }, BEETS: { bg: '#F4C0D1', fg: '#4B1528' },
+  SQUASH: { bg: '#FAC775', fg: '#412402' }
 }
 
 function mondayOf(d) {
@@ -78,7 +78,7 @@ function cellState(events, dayIdx, shift) {
   return 'full'
 }
 function weeklyInches(events, gpm, acres) {
-  if (!gpm) return 0
+  if (!gpm || !acres) return 0
   const totalHours = overlapHours(onIntervals(events), 0, 168)
   return (gpm * totalHours * 60) / (GALLONS_PER_ACRE_INCH * acres)
 }
@@ -110,6 +110,14 @@ export default function App() {
   const [copyTargets, setCopyTargets] = useState(new Set())
   const [eraseTargets, setEraseTargets] = useState(new Set())
 
+  // --- Field / season / farm data from Firestore (replaces fields.json) ---
+  const [seasons, setSeasons] = useState([]) // [{ id, name, startDate, endDate }]
+  const [selectedSeasonId, setSelectedSeasonId] = useState(null)
+  const [farms, setFarms] = useState([]) // [{ id, name }]
+  const [selectedFarmId, setSelectedFarmId] = useState('all')
+  const [baseFieldsById, setBaseFieldsById] = useState({}) // id -> { name, farmId, farmName }
+  const [seasonDataByField, setSeasonDataByField] = useState({}) // fieldId -> { cropName, acres, varietyName }
+
   useEffect(() => localStorage.setItem('crewName', name), [name])
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
@@ -137,6 +145,76 @@ export default function App() {
     })
     return () => unsub()
   }, [])
+
+  // Season list — most recent first. Defaults selection to most recent once loaded.
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'seasons'), (snap) => {
+      const list = []
+      snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
+      list.sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''))
+      setSeasons(list)
+      setSelectedSeasonId((prev) => prev ?? (list[0] ? list[0].id : null))
+    })
+    return () => unsub()
+  }, [])
+
+  // Farm list for the farm filter dropdown.
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'farms'), (snap) => {
+      const list = []
+      snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
+      list.sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+      setFarms(list)
+    })
+    return () => unsub()
+  }, [])
+
+  // Season-independent field/farm info (name, farm) — same for every year.
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'fields'), (snap) => {
+      const next = {}
+      snap.forEach((d) => { next[d.id] = d.data() })
+      setBaseFieldsById(next)
+    })
+    return () => unsub()
+  }, [])
+
+  // Crop/acreage data for whichever season is selected — collectionGroup
+  // query across every field's "seasons" subcollection.
+  useEffect(() => {
+    if (!selectedSeasonId) return
+    const q = query(collectionGroup(db, 'seasons'), where('seasonId', '==', selectedSeasonId))
+    const unsub = onSnapshot(q, (snap) => {
+      const next = {}
+      snap.forEach((d) => {
+        const fieldId = d.ref.parent.parent.id
+        next[fieldId] = d.data()
+      })
+      setSeasonDataByField(next)
+    })
+    return () => unsub()
+  }, [selectedSeasonId])
+
+  // Merge season-independent + season-specific data, then apply the farm filter.
+  const fields = useMemo(() => {
+    return Object.entries(baseFieldsById)
+      .map(([id, base]) => {
+        const seasonData = seasonDataByField[id] || {}
+        return {
+          id,
+          fieldName: base.name,
+          farmId: base.farmId,
+          farmName: base.farmName,
+          crop: (seasonData.cropName || '').toUpperCase(),
+          acres: seasonData.acres || null
+        }
+      })
+      .filter((f) => selectedFarmId === 'all' || String(f.farmId) === String(selectedFarmId))
+      .sort((a, b) => {
+        const farmCmp = (a.farmName || '').localeCompare(b.farmName || '')
+        return farmCmp !== 0 ? farmCmp : (a.fieldName || '').localeCompare(b.fieldName || '')
+      })
+  }, [baseFieldsById, seasonDataByField, selectedFarmId])
 
   async function saveEvents(fieldId, events) {
     await setDoc(doc(db, 'weeks', weekId, 'events', fieldId), { events })
@@ -205,6 +283,31 @@ export default function App() {
         </div>
         <input className="name-input" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
       </header>
+
+      <div className="filter-bar">
+        {seasons.length > 0 && (
+          <select
+            className="season-select"
+            value={selectedSeasonId || ''}
+            onChange={(e) => setSelectedSeasonId(e.target.value)}
+          >
+            {seasons.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        )}
+
+        <select
+          className="farm-select"
+          value={selectedFarmId}
+          onChange={(e) => setSelectedFarmId(e.target.value)}
+        >
+          <option value="all">All farms</option>
+          {farms.map((f) => (
+            <option key={f.id} value={f.id}>{f.name}</option>
+          ))}
+        </select>
+      </div>
 
       <div className="week-nav">
         <button onClick={() => setWeekOffset((w) => w - 1)}>‹ Prev week</button>
@@ -344,7 +447,8 @@ export default function App() {
                     <strong>{field.fieldName}</strong>
                     {isSource && <span className="source-tag">SOURCE</span>}
                     <br />
-                    <span className="crop-badge" style={{ background: color.bg, color: color.fg }}>{field.crop}</span>
+                    {field.crop && <span className="crop-badge" style={{ background: color.bg, color: color.fg }}>{field.crop}</span>}
+                    {field.acres && <span className="acres-tag"> · {field.acres.toFixed(1)} ac</span>}
                     {!gpm && (
                       <span className="gpm-flag" onClick={(e) => { e.stopPropagation(); const v = prompt('Pivot GPM for ' + field.fieldName + ':'); if (v) saveGpm(field.id, Number(v)) }}>
                         SET GPM
