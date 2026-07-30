@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { collection, collectionGroup, doc, onSnapshot, query, setDoc, where } from 'firebase/firestore'
 import { db } from './firebase.js'
+import LiveData from './LiveData.jsx'
 
 const DAYS = [
   { k: 'mon', en: 'Mon' }, { k: 'tue', en: 'Tue' }, { k: 'wed', en: 'Wed' },
@@ -95,6 +96,7 @@ function styleForState(state, additive) {
 
 export default function App() {
   const [weekOffset, setWeekOffset] = useState(0)
+  const [view, setView] = useState('schedule')
   const [name, setName] = useState(() => localStorage.getItem('crewName') || '')
   const [online, setOnline] = useState(navigator.onLine)
   const [eventsByField, setEventsByField] = useState({})
@@ -110,13 +112,12 @@ export default function App() {
   const [copyTargets, setCopyTargets] = useState(new Set())
   const [eraseTargets, setEraseTargets] = useState(new Set())
 
-  // --- Field / season / farm data from Firestore (replaces fields.json) ---
-  const [seasons, setSeasons] = useState([]) // [{ id, name, startDate, endDate }]
+  const [seasons, setSeasons] = useState([])
   const [selectedSeasonId, setSelectedSeasonId] = useState(null)
-  const [farms, setFarms] = useState([]) // [{ id, name }]
+  const [farms, setFarms] = useState([])
   const [selectedFarmId, setSelectedFarmId] = useState('all')
-  const [baseFieldsById, setBaseFieldsById] = useState({}) // id -> { name, farmId, farmName }
-  const [seasonDataByField, setSeasonDataByField] = useState({}) // fieldId -> { cropName, acres, varietyName }
+  const [baseFieldsById, setBaseFieldsById] = useState({})
+  const [seasonDataByField, setSeasonDataByField] = useState({})
 
   useEffect(() => localStorage.setItem('crewName', name), [name])
   useEffect(() => {
@@ -146,7 +147,6 @@ export default function App() {
     return () => unsub()
   }, [])
 
-  // Season list — most recent first. Defaults selection to most recent once loaded.
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'seasons'), (snap) => {
       const list = []
@@ -158,7 +158,6 @@ export default function App() {
     return () => unsub()
   }, [])
 
-  // Farm list for the farm filter dropdown.
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'farms'), (snap) => {
       const list = []
@@ -169,7 +168,6 @@ export default function App() {
     return () => unsub()
   }, [])
 
-  // Season-independent field/farm info (name, farm) — same for every year.
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'fields'), (snap) => {
       const next = {}
@@ -179,8 +177,6 @@ export default function App() {
     return () => unsub()
   }, [])
 
-  // Crop/acreage data for whichever season is selected — collectionGroup
-  // query across every field's "seasons" subcollection.
   useEffect(() => {
     if (!selectedSeasonId) return
     const q = query(collectionGroup(db, 'seasons'), where('seasonId', '==', selectedSeasonId))
@@ -195,7 +191,6 @@ export default function App() {
     return () => unsub()
   }, [selectedSeasonId])
 
-  // Merge season-independent + season-specific data, then apply the farm filter.
   const fields = useMemo(() => {
     return Object.entries(baseFieldsById)
       .map(([id, base]) => {
@@ -281,10 +276,16 @@ export default function App() {
             {online ? 'Online' : 'Offline — changes will sync automatically'}
           </span>
         </div>
+        <div className="view-toggle">
+          <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
+          <button className={view === 'live-data' ? 'active' : ''} onClick={() => setView('live-data')}>Live Data</button>
+        </div>
         <input className="name-input" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
       </header>
 
-      <div className="filter-bar">
+      {view === 'live-data' && <LiveData />}
+
+      {view === 'schedule' && <div className="filter-bar">
         {seasons.length > 0 && (
           <select
             className="season-select"
@@ -307,21 +308,21 @@ export default function App() {
             <option key={f.id} value={f.id}>{f.name}</option>
           ))}
         </select>
-      </div>
+      </div>}
 
-      <div className="week-nav">
+      {view === 'schedule' && <div className="week-nav">
         <button onClick={() => setWeekOffset((w) => w - 1)}>‹ Prev week</button>
         <span className="week-label">{fmtShort(weekStart)} – {fmtShort(addDays(weekStart, 6))}</span>
         <button onClick={() => setWeekOffset((w) => w + 1)}>Next week ›</button>
-      </div>
+      </div>}
 
-      <div className="mode-buttons">
+      {view === 'schedule' && <div className="mode-buttons">
         <button onClick={() => { setMode('copy-source'); setSelected(null) }}>Copy schedule</button>
         <button onClick={() => { setMode('erase'); setEraseTargets(new Set()); setSelected(null) }}>Erase schedules</button>
-      </div>
+      </div>}
 
-      {mode === 'copy-source' && <div className="mode-bar">Tap the field whose schedule you want to copy</div>}
-      {mode === 'copy-targets' && (
+      {view === 'schedule' && mode === 'copy-source' && <div className="mode-bar">Tap the field whose schedule you want to copy</div>}
+      {view === 'schedule' && mode === 'copy-targets' && (
         <div className="mode-bar">
           <div>Copying {fields.find((f) => f.id === copySourceId)?.fieldName}'s schedule — tap fields to select</div>
           <div className="mode-bar-actions">
@@ -332,7 +333,7 @@ export default function App() {
           </div>
         </div>
       )}
-      {mode === 'erase' && (
+      {view === 'schedule' && mode === 'erase' && (
         <div className="mode-bar">
           <div>Tap fields to erase their whole week</div>
           <div className="mode-bar-actions">
@@ -344,7 +345,7 @@ export default function App() {
         </div>
       )}
 
-      {selected && !mode && editorField && (
+      {view === 'schedule' && selected && !mode && editorField && (
         <div className="editor-panel">
           <div className="editor-title">{editorField.fieldName} · {DAYS[selected.dayIdx].en} {BLOCKS[selected.shift].label}</div>
           {!editingMode ? (
@@ -403,7 +404,7 @@ export default function App() {
         </div>
       )}
 
-      <div className="table-scroll">
+      {view === 'schedule' && <div className="table-scroll">
         <table>
           <thead>
             <tr>
@@ -484,15 +485,15 @@ export default function App() {
             })}
           </tbody>
         </table>
-      </div>
+      </div>}
 
-      <div className="legend">
+      {view === 'schedule' && <div className="legend">
         <span><i className="swatch" style={{ background: '#3B6D11' }} />Coming on</span>
         <span><i className="swatch" style={{ background: '#185FA5' }} />On whole block</span>
         <span><i className="swatch" style={{ background: '#A32D2D' }} />Coming off</span>
         <span><i className="swatch" style={{ background: 'linear-gradient(135deg,#185FA5 50%,#EF9F27 50%)' }} />+ Fert</span>
         <span><i className="swatch" style={{ background: 'linear-gradient(135deg,#185FA5 50%,#D85A30 50%)' }} />+ Chem</span>
-      </div>
+      </div>}
     </div>
   )
 }
