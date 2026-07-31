@@ -297,6 +297,47 @@ exports.syncAgworldFields = onSchedule(
   }
 );
 
+// TEMPORARY diagnostic — not meant to stay long-term. Lets us see Agworld's
+// raw data for a specific field name within the 2026 season, so we can find
+// what actually distinguishes a field marked "in use this season" from one
+// that isn't, instead of guessing. Safe to delete once confirmed.
+// Visit: <this function's URL>?name=BASELINE (matches any name containing it)
+exports.debugAgworldField = onRequest(
+  { secrets: [AGWORLD_TOKEN] },
+  async (req, res) => {
+    try {
+      const token = AGWORLD_TOKEN.value();
+      const nameQuery = (req.query.name || '').toLowerCase();
+      if (!nameQuery) {
+        res.status(400).send('Add ?name=BASELINE to the URL (or part of a field name)');
+        return;
+      }
+      const matches = [];
+      let page = 1;
+      while (true) {
+        const params = new URLSearchParams({
+          'page[number]': String(page),
+          'page[size]': '100',
+          season_id: '259040', // 2026
+          include: 'farm'
+        });
+        const json = await agworldGet('/user_api/v1/fields', params, token);
+        json.data.forEach((f) => {
+          if ((f.attributes.name || '').toLowerCase().includes(nameQuery)) {
+            matches.push(f);
+          }
+        });
+        if (!json.data.length || json.data.length < 100) break;
+        page++;
+      }
+      res.status(200).json(matches);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send(err.message);
+    }
+  }
+);
+
 // A manual trigger, useful for testing right after deploy or forcing an
 // on-demand refresh. Visiting this URL in a browser (once deployed) runs
 // the same sync immediately.
