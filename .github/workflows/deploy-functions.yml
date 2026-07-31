@@ -1,0 +1,34 @@
+name: Deploy Cloud Functions
+
+# Runs automatically whenever something in functions/ changes on main —
+# no manual Cloud Console steps needed after this.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'functions/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Write service account key to file
+        run: echo '${{ secrets.GCP_SA_KEY }}' > "$HOME/gcp-key.json"
+
+      - name: Install function dependencies
+        working-directory: functions
+        run: npm install
+
+      - name: Deploy to Firebase
+        working-directory: functions
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /home/runner/gcp-key.json
+        run: npx firebase-tools deploy --only functions --project irrigation-schedule-f8b69 --non-interactive
