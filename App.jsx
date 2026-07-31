@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { collection, collectionGroup, doc, onSnapshot, query, setDoc, where } from 'firebase/firestore'
-import { db } from './firebase.js'
+import { onAuthStateChanged, signOut } from 'firebase/auth'
+import { auth, db } from './firebase.js'
 import LiveData from './LiveData.jsx'
+import Login from './Login.jsx'
 
 const DAYS = [
   { k: 'mon', en: 'Mon' }, { k: 'tue', en: 'Tue' }, { k: 'wed', en: 'Wed' },
@@ -95,6 +97,8 @@ function styleForState(state, additive) {
 }
 
 export default function App() {
+  const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
+  const [userRole, setUserRole] = useState(null)
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
   const [name, setName] = useState(() => localStorage.getItem('crewName') || '')
@@ -118,6 +122,19 @@ export default function App() {
   const [selectedFarmId, setSelectedFarmId] = useState('all')
   const [baseFieldsById, setBaseFieldsById] = useState({})
   const [seasonDataByField, setSeasonDataByField] = useState({})
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setUser(u))
+    return () => unsub()
+  }, [])
+
+  useEffect(() => {
+    if (!user) { setUserRole(null); return }
+    const unsub = onSnapshot(doc(db, 'users', user.uid), (snap) => {
+      setUserRole(snap.exists() ? snap.data().role : null)
+    })
+    return () => unsub()
+  }, [user])
 
   useEffect(() => localStorage.setItem('crewName', name), [name])
   useEffect(() => {
@@ -267,6 +284,17 @@ export default function App() {
   const editorField = selected ? fields.find((f) => f.id === selected.fieldId) : null
   const editorExisting = selected ? findEventInBlock(eventsByField[selected.fieldId] || [], selected.dayIdx, selected.shift) : null
 
+  async function handleSignOut() {
+    await signOut(auth)
+  }
+
+  if (user === undefined) {
+    return <div className="app"><p style={{ padding: '2rem' }}>Loading…</p></div>
+  }
+  if (!user) {
+    return <Login />
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -281,6 +309,10 @@ export default function App() {
           <button className={view === 'live-data' ? 'active' : ''} onClick={() => setView('live-data')}>Live Data</button>
         </div>
         <input className="name-input" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: '10px' }}>
+          <span style={{ fontSize: '13px', color: '#888' }}>{user.email}{userRole ? ` · ${userRole}` : ''}</span>
+          <button onClick={handleSignOut}>Sign out</button>
+        </div>
       </header>
 
       {view === 'live-data' && <LiveData />}
