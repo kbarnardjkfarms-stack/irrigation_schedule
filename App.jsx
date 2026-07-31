@@ -99,6 +99,7 @@ function styleForState(state, additive) {
 export default function App() {
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
+  const [page, setPage] = useState('home') // 'home' or 'irrigation' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
   const [name, setName] = useState(() => localStorage.getItem('crewName') || '')
@@ -298,23 +299,46 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">
-          <h1>Grindstone Irrigation</h1>
+        <div className="brand" onClick={() => setPage('home')} style={{ cursor: 'pointer' }}>
+          <h1>AIO</h1>
           <span className={`status ${online ? 'online' : 'offline'}`}>
             {online ? 'Online' : 'Offline — changes will sync automatically'}
           </span>
         </div>
-        <div className="view-toggle">
-          <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
-          <button className={view === 'live-data' ? 'active' : ''} onClick={() => setView('live-data')}>Live Data</button>
-        </div>
-        <input className="name-input" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
+        {page === 'irrigation' && (
+          <div className="view-toggle">
+            <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
+            <button className={view === 'live-data' ? 'active' : ''} onClick={() => setView('live-data')}>Live Data</button>
+          </div>
+        )}
+        {page === 'irrigation' && (
+          <input className="name-input" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: '10px' }}>
           <span style={{ fontSize: '13px', color: '#888' }}>{user.email}{userRole ? ` · ${userRole}` : ''}</span>
           <button onClick={handleSignOut}>Sign out</button>
         </div>
       </header>
 
+      {page === 'home' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', padding: '24px' }}>
+          <div
+            onClick={() => setPage('irrigation')}
+            style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: '10px', padding: '20px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+          >
+            <div style={{ width: '64px', height: '64px', borderRadius: '16px', background: '#E6F1FB', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#185FA5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 2C12 2 5 10 5 15a7 7 0 0 0 14 0c0-5-7-13-7-13z" />
+              </svg>
+            </div>
+            <div style={{ fontSize: '14px', fontWeight: 500 }}>Irrigation</div>
+            <div style={{ fontSize: '12px', color: '#888' }}>Weekly water schedule</div>
+          </div>
+        </div>
+      )}
+
+      {page === 'irrigation' && (
+        <>
       {view === 'live-data' && <LiveData />}
 
       {view === 'schedule' && <div className="filter-bar">
@@ -526,6 +550,8 @@ export default function App() {
         <span><i className="swatch" style={{ background: 'linear-gradient(135deg,#185FA5 50%,#EF9F27 50%)' }} />+ Fert</span>
         <span><i className="swatch" style={{ background: 'linear-gradient(135deg,#185FA5 50%,#D85A30 50%)' }} />+ Chem</span>
       </div>}
+        </>
+      )}
     </div>
   )
 }
