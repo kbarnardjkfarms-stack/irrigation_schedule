@@ -18,6 +18,17 @@ const AGWORLD_BASE_URL = 'https://us.agworld.co';
 // Agworld account covers more than just this operation.
 // const FARM_ID_FILTER = '123456';
 
+// These AgWorld "farms" aren't real JKF farms — they're housekeeping
+// buckets (archived/no-longer-farmed fields, subleased ground, and a
+// separate line of the operation) that shouldn't show up in the
+// irrigation program. Fields under these farm IDs are skipped on sync,
+// and any that were already synced in previously get cleaned up
+// automatically the next time this runs.
+const EXCLUDED_FARM_IDS = new Set(['175660', '211414', '219606']);
+// 175660 = SUBLEASED AND ROTATION LEASE FIELDS
+// 211414 = TETON TREES
+// 219606 = ZARCHIVE
+
 // Agworld returns measurements as strings with units attached, e.g.
 // "34 acre" or "50 ha" — not plain numbers. This normalizes to acres
 // regardless of which unit your Agworld instance/region uses.
@@ -44,19 +55,34 @@ async function agworldGet(path, params, token) {
   return res.json();
 }
 
-// Pulls every season on the account (not just the most recent one).
-// A diversified operation typically has several seasons active at once —
-// e.g. a row-crop rotation season and a separate pasture/lease season —
-// so we can't assume "most recent" covers every field.
+// Only sync seasons from this year onward — older seasons are historical
+// noise the irrigation program doesn't need. Raise this in a future year
+// only if you actually want to re-pull older history; otherwise leave it.
+const MIN_SEASON_YEAR = 2026;
+
+// Pulls every season on the account from MIN_SEASON_YEAR onward (not just
+// the most recent one). A diversified operation typically has several
+// seasons active at once — e.g. a row-crop rotation season and a separate
+// pasture/lease season — so we can't assume "most recent" covers every
+// field, but we also don't need seasons from before the program started.
 async function fetchAllSeasons(token) {
   const params = new URLSearchParams({ 'page[size]': '100' });
   const json = await agworldGet('/user_api/v1/seasons', params, token);
-  return json.data.map((s) => ({
-    id: s.id,
-    name: s.attributes.name || s.id,
-    startDate: s.attributes.season_start_date || null,
-    endDate: s.attributes.season_end_date || null
-  }));
+  return json.data
+    .map((s) => ({
+      id: s.id,
+      name: s.attributes.name || s.id,
+      startDate: s.attributes.season_start_date || null,
+      endDate: s.attributes.season_end_date || null
+    }))
+    .filter((s) => {
+      // Keep seasons with no date info rather than silently dropping them —
+      // better to sync something unexpected than to lose an active season.
+      const dateToCheck = s.startDate || s.endDate;
+      if (!dateToCheck) return true;
+      const year = parseInt(dateToCheck.slice(0, 4), 10);
+      return Number.isNaN(year) || year >= MIN_SEASON_YEAR;
+    });
 }
 
 // Fetches every field for a single season_id, paginated. Farm names are
@@ -119,6 +145,7 @@ async function syncFields() {
 
   const allFarmsById = {};
   const fieldNamesById = {}; // field id -> { name, farmId }
+  const skippedFieldIds = new Set(); // distinct fields skipped, across all seasons
   let totalFieldSeasonDocs = 0;
 
   // Fetch every season's fields one season at a time to keep each batch
@@ -140,6 +167,11 @@ async function syncFields() {
       const batch = db.batch();
 
       chunk.forEach((f) => {
+        if (EXCLUDED_FARM_IDS.has(String(f.attributes.farm_id))) {
+          skippedFieldIds.add(f.id);
+          return; // skip fields under junk farms
+        }
+
         fieldNamesById[f.id] = {
           name: f.attributes.name,
           farmId: f.attributes.farm_id
@@ -188,6 +220,7 @@ async function syncFields() {
   // untouched, since Agworld has no concept of those.
   const farmsBatch = db.batch();
   Object.entries(allFarmsById).forEach(([farmId, farmName]) => {
+    if (EXCLUDED_FARM_IDS.has(String(farmId))) return; // skip junk farms
     const ref = db.collection('farms').doc(String(farmId));
     farmsBatch.set(ref, { agworldId: farmId, name: farmName }, { merge: true });
   });
@@ -215,10 +248,34 @@ async function syncFields() {
     await batch.commit();
   }
 
+  // One-time (and ongoing, if anything slips through) cleanup: remove
+  // any fields/farms from the excluded list that were already sitting
+  // in Firestore from before this exclusion existed — including each
+  // field's per-season history subcollection, since deleting a parent
+  // doc in Firestore does NOT delete its subcollections automatically.
+  // Once cleaned up, this finds nothing on every future run.
+  const cleanupIds = [...EXCLUDED_FARM_IDS].map(Number);
+  const staleFieldsSnap = await db.collection('fields').where('farmId', 'in', cleanupIds).get();
+  if (!staleFieldsSnap.empty) {
+    for (const fieldDoc of staleFieldsSnap.docs) {
+      const seasonDocsSnap = await fieldDoc.ref.collection('seasons').get();
+      if (!seasonDocsSnap.empty) {
+        const seasonCleanupBatch = db.batch();
+        seasonDocsSnap.forEach((doc) => seasonCleanupBatch.delete(doc.ref));
+        await seasonCleanupBatch.commit();
+      }
+    }
+    const fieldsCleanupBatch = db.batch();
+    staleFieldsSnap.forEach((doc) => fieldsCleanupBatch.delete(doc.ref));
+    cleanupIds.forEach((id) => fieldsCleanupBatch.delete(db.collection('farms').doc(String(id))));
+    await fieldsCleanupBatch.commit();
+  }
+
   return {
     fieldCount: fieldIds.length,
     seasonCount: seasons.length,
-    fieldSeasonRecords: totalFieldSeasonDocs
+    fieldSeasonRecords: totalFieldSeasonDocs,
+    skippedFieldCount: skippedFieldIds.size
   };
 }
 
@@ -235,7 +292,7 @@ exports.syncAgworldFields = onSchedule(
   async () => {
     const result = await syncFields();
     console.log(
-      `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records).`
+      `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms).`
     );
   }
 );
@@ -249,7 +306,7 @@ exports.syncAgworldFieldsNow = onRequest(
     try {
       const result = await syncFields();
       res.status(200).send(
-        `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records).`
+        `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms).`
       );
     } catch (err) {
       console.error(err);
