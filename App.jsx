@@ -211,6 +211,7 @@ export default function App() {
 
   const fields = useMemo(() => {
     return Object.entries(baseFieldsById)
+      .filter(([id]) => seasonDataByField[id])
       .map(([id, base]) => {
         const seasonData = seasonDataByField[id] || {}
         return {
