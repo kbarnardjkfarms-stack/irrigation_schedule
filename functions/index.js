@@ -314,3 +314,62 @@ exports.syncAgworldFieldsNow = onRequest(
     }
   }
 );
+
+// ChirpStack -> Firestore webhook
+//
+// Receives uplink events from ChirpStack's HTTP integration and writes
+// sensor readings into Firestore. No secret required — this is a one-way
+// inbound webhook, not calling out to any third-party API.
+//
+// Once deployed, paste this service's URL into: ChirpStack -> Applications
+// -> (the app, e.g. "JKF Pulse Counters") -> Integrations -> HTTP ->
+// "Event endpoint URL(s)".
+exports.chirpstackWebhook = onRequest(async (req, res) => {
+  try {
+    const eventType = req.query.event;
+
+    if (eventType !== 'up') {
+      res.status(200).send(`Ignored event type: ${eventType}`);
+      return;
+    }
+
+    const body = req.body || {};
+    const deviceInfo = body.deviceInfo || {};
+    const deviceName = deviceInfo.deviceName || deviceInfo.devEui || 'unknown-device';
+    const devEui = deviceInfo.devEui || null;
+
+    const rx = (body.rxInfo && body.rxInfo[0]) || {};
+    const rssi = rx.rssi ?? null;
+    const snr = rx.snr ?? rx.loRaSnr ?? null;
+
+    const reading = {
+      time: body.time || new Date().toISOString(),
+      devEui,
+      deviceName,
+      fCnt: body.fCnt ?? null,
+      fPort: body.fPort ?? null,
+      decoded: body.object || {},
+      rssi,
+      snr
+    };
+
+    const db = admin.firestore();
+    const deviceRef = db.collection('devices').doc(deviceName);
+
+    await deviceRef.set(
+      {
+        devEui,
+        lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+        latest: reading
+      },
+      { merge: true }
+    );
+
+    await deviceRef.collection('readings').add(reading);
+
+    res.status(200).send('OK');
+  } catch (err) {
+    console.error('chirpstackWebhook error:', err);
+    res.status(500).send('Error processing webhook');
+  }
+});
