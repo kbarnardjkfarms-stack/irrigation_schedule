@@ -321,18 +321,17 @@ export default function App() {
       </header>
 
       {page === 'home' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', padding: '24px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, 160px)', gap: '16px', padding: '24px' }}>
           <div
             onClick={() => setPage('irrigation')}
-            style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: '10px', padding: '20px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            style={{ cursor: 'pointer', width: '160px', aspectRatio: '1 / 1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
           >
             <div style={{ width: '64px', height: '64px', borderRadius: '16px', background: '#E6F1FB', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#185FA5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 2C12 2 5 10 5 15a7 7 0 0 0 14 0c0-5-7-13-7-13z" />
               </svg>
             </div>
-            <div style={{ fontSize: '14px', fontWeight: 500 }}>Irrigation</div>
-            <div style={{ fontSize: '12px', color: '#888' }}>Weekly water schedule</div>
+            <div style={{ fontSize: '14px', fontWeight: 500 }}>Irrigation Schedule</div>
           </div>
         </div>
       )}
