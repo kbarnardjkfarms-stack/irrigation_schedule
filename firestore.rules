@@ -1,7 +1,6 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
     // Each person can read their own user record. Only an existing Admin
     // can create or edit a user record — this is what stops someone from
     // writing their own document and handing themselves a different role.
@@ -10,7 +9,6 @@ service cloud.firestore {
       allow write: if request.auth != null &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
-
     // Reference data synced from Agworld. Any signed-in person can view it;
     // only the sync Cloud Functions write it, and those use an Admin key
     // that bypasses these rules entirely — so this doesn't affect them.
@@ -30,7 +28,17 @@ service cloud.firestore {
         allow write: if false;
       }
     }
-
+    // Collection-group rule: needed specifically because App.jsx queries
+    // across every field's "seasons" subcollection at once (a
+    // collectionGroup query) to build the season-filtered field list.
+    // A rule scoped to one exact nested path (like fields/{fieldId}/seasons/{seasonId}
+    // above) does NOT satisfy a collectionGroup query — Firestore requires
+    // a rule using the {path=**} wildcard for that. This rule only adds
+    // read permission; it doesn't loosen anything else.
+    match /{path=**}/seasons/{seasonId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
     // Sensor data from ChirpStack. Same pattern — the webhook Cloud
     // Function writes this with an Admin key; the app only ever reads it
     // (Live Data tab).
@@ -42,7 +50,6 @@ service cloud.firestore {
         allow write: if false;
       }
     }
-
     // The actual irrigation schedule. Everyone signed in can view it;
     // Irrigators specifically are read-only — editing is limited to the
     // other four roles (admin, owner, farm_manager, irrigation_manager).
@@ -51,7 +58,6 @@ service cloud.firestore {
       allow write: if request.auth != null &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role != 'irrigator';
     }
-
     match /fieldSettings/{fieldId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null &&
