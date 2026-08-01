@@ -1,25 +1,26 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
-
 export default defineConfig({
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg'],
       manifest: {
-        name: 'Grindstone Irrigation Schedule',
-        short_name: 'Irrigation',
-        description: 'Field irrigation & crew schedule for Kurl Farms',
-        theme_color: '#2f5233',
-        background_color: '#f7f5f0',
+        name: 'AIO',
+        short_name: 'AIO',
+        description: 'Irrigation, fertilizer, chemical, and field work tracking for Jentzsch-Kearl Farms',
+        theme_color: '#185FA5',
+        background_color: '#f4f2ec',
         display: 'standalone',
-        start_url: '/',
-        icons: [
-          { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'icon-512.png', sizes: '512x512', type: 'image/png' }
-        ]
+        start_url: '/'
+        // No icons listed yet — icon-192.png / icon-512.png were referenced
+        // here previously but don't exist in the repo. Add real AIO icons
+        // here later, then list them the same way:
+        // icons: [
+        //   { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
+        //   { src: 'icon-512.png', sizes: '512x512', type: 'image/png' }
+        // ]
       },
       workbox: {
         // Cache the app shell aggressively so it loads with zero signal.
