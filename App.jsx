@@ -102,7 +102,6 @@ export default function App() {
   const [page, setPage] = useState('home') // 'home' or 'irrigation' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
-  const [name, setName] = useState(() => localStorage.getItem('crewName') || '')
   const [online, setOnline] = useState(navigator.onLine)
   const [eventsByField, setEventsByField] = useState({})
   const [gpmByField, setGpmByField] = useState({})
@@ -137,7 +136,6 @@ export default function App() {
     return () => unsub()
   }, [user])
 
-  useEffect(() => localStorage.setItem('crewName', name), [name])
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
     window.addEventListener('online', on); window.addEventListener('offline', off)
@@ -311,9 +309,6 @@ export default function App() {
             <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
             <button className={view === 'live-data' ? 'active' : ''} onClick={() => setView('live-data')}>Live Data</button>
           </div>
-        )}
-        {page === 'irrigation' && (
-          <input className="name-input" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: '10px' }}>
           <span style={{ fontSize: '13px', color: '#888' }}>{user.email}{userRole ? ` · ${userRole}` : ''}</span>
