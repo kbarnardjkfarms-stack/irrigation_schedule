@@ -66,7 +66,7 @@ button.active, button.save {
 .mode-bar-actions .apply:disabled { opacity: 0.5; }
 .mode-bar-actions .cancel { background: none; color: #fff; border: 1px solid rgba(255,255,255,0.5); }
 
-.table-scroll { overflow-x: auto; border: 0.5px solid #ddd8cc; border-radius: 10px; background: #fff; }
+.table-scroll { overflow-x: auto; overflow-y: auto; max-height: 70vh; border: 0.5px solid #ddd8cc; border-radius: 10px; background: #fff; }
 table { border-collapse: collapse; width: 100%; min-width: 1180px; font-size: 11px; }
 th, td { padding: 6px; }
 .sticky-col { position: sticky; left: 0; background: #f4f2ec; text-align: left; z-index: 2; width: 230px; min-width: 230px; max-width: 230px; }
