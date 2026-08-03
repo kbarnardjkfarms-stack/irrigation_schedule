@@ -70,8 +70,11 @@ button.active, button.save {
 table { border-collapse: collapse; width: 100%; min-width: 1180px; font-size: 11px; }
 th, td { padding: 6px; }
 .sticky-col { position: sticky; left: 0; background: #f4f2ec; text-align: left; z-index: 2; width: 230px; min-width: 230px; max-width: 230px; }
-.day-head, .shift-head { text-align: center; color: #888; font-weight: 500; border-bottom: 0.5px solid #eee; }
-.inches-head { color: #3c5a3f; font-weight: 600; border-left: 1px solid #eee; min-width: 90px; }
+thead th.sticky-col { top: 0; z-index: 4; }
+.day-head, .shift-head { text-align: center; color: #555; font-weight: 500; border-bottom: 0.5px solid #ccc; position: sticky; z-index: 3; }
+.day-head { top: 0; height: 26px; }
+.shift-head { top: 26px; }
+.inches-head { color: #3c5a3f; font-weight: 600; border-left: 1px solid #eee; min-width: 90px; position: sticky; top: 0; z-index: 3; background: #fff; }
 
 .field-cell { cursor: pointer; white-space: normal; }
 .crop-badge { font-size: 9px; font-weight: 500; padding: 1px 5px; border-radius: 4px; }
