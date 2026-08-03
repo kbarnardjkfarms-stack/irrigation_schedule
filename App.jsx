@@ -153,6 +153,7 @@ export default function App() {
   const [selectedSeasonId, setSelectedSeasonId] = useState(null)
   const [farms, setFarms] = useState([])
   const [selectedFarmId, setSelectedFarmId] = useState('all')
+  const [sortBy, setSortBy] = useState('field')
   const [baseFieldsById, setBaseFieldsById] = useState({})
   const [seasonDataByField, setSeasonDataByField] = useState({})
   const [pivotGuidByFieldId, setPivotGuidByFieldId] = useState({})
@@ -314,21 +315,34 @@ export default function App() {
       .filter(([id]) => seasonDataByField[id])
       .map(([id, base]) => {
         const seasonData = seasonDataByField[id] || {}
+        const pivotGuid = pivotGuidByFieldId[id]
+        const pivot = pivotGuid ? pivotsByGuid[pivotGuid] : null
+        // 0 = running, 1 = stopped, 2 = no pivot mapped — so running pivots
+        // sort to the top when sorting by pivot status.
+        const pivotRank = !pivot ? 2 : (pivot.systemStatus === 'Running' ? 0 : 1)
         return {
           id,
           fieldName: base.name,
           farmId: base.farmId,
           farmName: base.farmName,
           crop: (seasonData.cropName || '').toUpperCase(),
-          acres: seasonData.acres || null
+          acres: seasonData.acres || null,
+          pivotRank
         }
       })
       .filter((f) => selectedFarmId === 'all' || String(f.farmId) === String(selectedFarmId))
       .sort((a, b) => {
+        if (sortBy === 'crop') {
+          const cropCmp = (a.crop || '').localeCompare(b.crop || '')
+          return cropCmp !== 0 ? cropCmp : (a.fieldName || '').localeCompare(b.fieldName || '')
+        }
+        if (sortBy === 'pivot') {
+          return a.pivotRank !== b.pivotRank ? a.pivotRank - b.pivotRank : (a.fieldName || '').localeCompare(b.fieldName || '')
+        }
         const farmCmp = (a.farmName || '').localeCompare(b.farmName || '')
         return farmCmp !== 0 ? farmCmp : (a.fieldName || '').localeCompare(b.fieldName || '')
       })
-  }, [baseFieldsById, seasonDataByField, selectedFarmId])
+  }, [baseFieldsById, seasonDataByField, selectedFarmId, sortBy, pivotGuidByFieldId, pivotsByGuid])
 
   async function saveEvents(fieldId, events) {
     await setDoc(doc(db, 'weeks', weekId, 'events', fieldId), { events })
@@ -462,6 +476,15 @@ export default function App() {
               {farms.map((f) => (
                 <option key={f.id} value={f.id}>{f.name}</option>
               ))}
+            </select>
+            <select
+              className="sort-select"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+            >
+              <option value="field">Sort: Field</option>
+              <option value="crop">Sort: Crop</option>
+              <option value="pivot">Sort: Pivot status</option>
             </select>
           </div>}
           {view === 'schedule' && <div className="week-nav">
