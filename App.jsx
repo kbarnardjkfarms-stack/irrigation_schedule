@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
 
+import { createPortal } from 'react-dom'
+
 import { collection, collectionGroup, doc, onSnapshot, query, setDoc, where } from 'firebase/firestore'
 
 import { onAuthStateChanged, signOut } from 'firebase/auth'
@@ -147,6 +149,7 @@ export default function App() {
   const [pivotGuidByFieldId, setPivotGuidByFieldId] = useState({})
   const [pivotsByGuid, setPivotsByGuid] = useState({})
   const [expandedPivotFieldId, setExpandedPivotFieldId] = useState(null)
+  const [pivotPanelPos, setPivotPanelPos] = useState({ top: 0, left: 0 })
   const pivotDetailRef = useRef(null)
 
   useEffect(() => {
@@ -164,8 +167,18 @@ export default function App() {
         setExpandedPivotFieldId(null)
       }
     }
+    // The panel is positioned at a fixed screen coordinate captured at click
+    // time. If the page scrolls afterward, that coordinate no longer lines up
+    // with the icon, so just close it rather than let it drift out of place.
+    function handleScroll() {
+      setExpandedPivotFieldId(null)
+    }
     document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    window.addEventListener('scroll', handleScroll, true)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      window.removeEventListener('scroll', handleScroll, true)
+    }
   }, [expandedPivotFieldId])
 
   useEffect(() => {
@@ -580,7 +593,16 @@ export default function App() {
                             <PivotIcon
                               pivot={pivot}
                               size={55}
-                              onClick={(e) => { e.stopPropagation(); setExpandedPivotFieldId(isPivotExpanded ? null : field.id) }}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (isPivotExpanded) {
+                                  setExpandedPivotFieldId(null)
+                                } else {
+                                  const rect = e.currentTarget.getBoundingClientRect()
+                                  setPivotPanelPos({ top: rect.bottom + 4, left: rect.left })
+                                  setExpandedPivotFieldId(field.id)
+                                }
+                              }}
                             />
                             <div>
                               <div>
@@ -593,15 +615,6 @@ export default function App() {
                               </div>
                             </div>
                           </div>
-                          {isPivotExpanded && (
-                            <div
-                              ref={pivotDetailRef}
-                              onClick={(e) => e.stopPropagation()}
-                              style={{ position: 'absolute', top: '100%', left: 0, zIndex: 20, boxShadow: '0 6px 16px rgba(0,0,0,0.12)', whiteSpace: 'normal' }}
-                            >
-                              <PivotDetailPanel pivot={pivot} />
-                            </div>
-                          )}
                         </td>
                         {DAYS.map((d, dayIdx) => (
                           ['am', 'pm'].map((shift) => {
@@ -642,6 +655,16 @@ export default function App() {
             <span><i className="swatch" style={{ background: 'linear-gradient(135deg,#185FA5 50%,#D85A30 50%)' }} />+ Chem</span>
           </div>}
         </>
+      )}
+      {expandedPivotFieldId && createPortal(
+        <div
+          ref={pivotDetailRef}
+          onClick={(e) => e.stopPropagation()}
+          style={{ position: 'fixed', top: pivotPanelPos.top, left: pivotPanelPos.left, zIndex: 1000, boxShadow: '0 6px 16px rgba(0,0,0,0.12)' }}
+        >
+          <PivotDetailPanel pivot={pivotsByGuid[pivotGuidByFieldId[expandedPivotFieldId]]} />
+        </div>,
+        document.body
       )}
     </div>
   )
