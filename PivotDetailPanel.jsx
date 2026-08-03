@@ -27,7 +27,7 @@ export default function PivotDetailPanel({ pivot }) {
         borderTop: 'none',
       }}
     >
-      <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+      <table style={{ width: '100%', minWidth: 0, fontSize: 13, borderCollapse: 'collapse' }}>
         <tbody>
           {rows.map(([label, value], i) => (
             <tr key={label}>
