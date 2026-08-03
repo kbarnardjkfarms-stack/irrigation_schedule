@@ -170,36 +170,55 @@ export default function App() {
   const weekStart = useMemo(() => addDays(mondayOf(new Date()), weekOffset * 7), [weekOffset])
   const weekId = isoDate(weekStart)
 
+  // NOTE: every Firestore listener below is now gated on `user` being resolved.
+  // Previously these attached on mount regardless of auth state, which could race
+  // ahead of Firebase Auth restoring the persisted session (especially on a cold
+  // browser start). A listener that hits permission-denied because auth wasn't
+  // ready yet does NOT auto-retry once auth resolves — it just sits dead until
+  // something recreates it. Gating on `user` means the listener is only ever
+  // created once auth is confirmed, so there's nothing stale to get stuck on.
   useEffect(() => {
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'weeks', weekId, 'events'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data().events || [] })
       setEventsByField(next)
     })
     return () => unsub()
-  }, [weekId])
+  }, [user, weekId])
 
   useEffect(() => {
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'fieldSettings'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data().gpm ?? null })
       setGpmByField(next)
     })
     return () => unsub()
-  }, [])
+  }, [user])
 
   useEffect(() => {
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'seasons'), (snap) => {
       const list = []
       snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
       list.sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''))
       setSeasons(list)
-      setSelectedSeasonId((prev) => prev ?? (list[0] ? list[0].id : null))
+      setSelectedSeasonId((prev) => {
+        if (prev) return prev
+        // Default to the season matching the current calendar year, not just
+        // whichever season has the latest startDate — a future-dated test
+        // season (e.g. 2030) would otherwise always win that sort.
+        const currentYear = String(new Date().getFullYear())
+        const currentSeason = list.find((s) => String(s.name) === currentYear)
+        return currentSeason ? currentSeason.id : (list[0] ? list[0].id : null)
+      })
     })
     return () => unsub()
-  }, [])
+  }, [user])
 
   useEffect(() => {
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'farms'), (snap) => {
       const list = []
       snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
@@ -207,37 +226,40 @@ export default function App() {
       setFarms(list)
     })
     return () => unsub()
-  }, [])
+  }, [user])
 
   useEffect(() => {
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'fields'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data() })
       setBaseFieldsById(next)
     })
     return () => unsub()
-  }, [])
+  }, [user])
 
   useEffect(() => {
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'pivotFieldMapping'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.data().fieldId] = d.data().pivotGuid })
       setPivotGuidByFieldId(next)
     })
     return () => unsub()
-  }, [])
+  }, [user])
 
   useEffect(() => {
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'pivots'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data() })
       setPivotsByGuid(next)
     })
     return () => unsub()
-  }, [])
+  }, [user])
 
   useEffect(() => {
-    if (!selectedSeasonId) return
+    if (!user || !selectedSeasonId) return
     const q = query(collectionGroup(db, 'seasons'), where('seasonId', '==', selectedSeasonId))
     const unsub = onSnapshot(q, (snap) => {
       const next = {}
@@ -248,7 +270,7 @@ export default function App() {
       setSeasonDataByField(next)
     })
     return () => unsub()
-  }, [selectedSeasonId])
+  }, [user, selectedSeasonId])
 
   const fields = useMemo(() => {
     return Object.entries(baseFieldsById)
