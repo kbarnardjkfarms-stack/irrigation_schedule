@@ -154,6 +154,9 @@ export default function App() {
   const [farms, setFarms] = useState([])
   const [selectedFarmId, setSelectedFarmId] = useState('all')
   const [sortBy, setSortBy] = useState('field')
+  const [sortDir, setSortDir] = useState('asc')
+  const [sortMenuOpen, setSortMenuOpen] = useState(false)
+  const sortMenuRef = useRef(null)
   const [baseFieldsById, setBaseFieldsById] = useState({})
   const [seasonDataByField, setSeasonDataByField] = useState({})
   const [pivotGuidByFieldId, setPivotGuidByFieldId] = useState({})
@@ -190,6 +193,17 @@ export default function App() {
       window.removeEventListener('scroll', handleScroll, true)
     }
   }, [expandedPivotFieldId])
+
+  useEffect(() => {
+    if (!sortMenuOpen) return
+    function handleClickOutside(e) {
+      if (sortMenuRef.current && !sortMenuRef.current.contains(e.target)) {
+        setSortMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [sortMenuOpen])
 
   useEffect(() => {
     if (!user) { setUserRole(null); return }
@@ -332,17 +346,17 @@ export default function App() {
       })
       .filter((f) => selectedFarmId === 'all' || String(f.farmId) === String(selectedFarmId))
       .sort((a, b) => {
+        let cmp
         if (sortBy === 'crop') {
-          const cropCmp = (a.crop || '').localeCompare(b.crop || '')
-          return cropCmp !== 0 ? cropCmp : (a.fieldName || '').localeCompare(b.fieldName || '')
+          cmp = (a.crop || '').localeCompare(b.crop || '') || (a.fieldName || '').localeCompare(b.fieldName || '')
+        } else if (sortBy === 'pivot') {
+          cmp = a.pivotRank !== b.pivotRank ? a.pivotRank - b.pivotRank : (a.fieldName || '').localeCompare(b.fieldName || '')
+        } else {
+          cmp = (a.fieldName || '').localeCompare(b.fieldName || '')
         }
-        if (sortBy === 'pivot') {
-          return a.pivotRank !== b.pivotRank ? a.pivotRank - b.pivotRank : (a.fieldName || '').localeCompare(b.fieldName || '')
-        }
-        const farmCmp = (a.farmName || '').localeCompare(b.farmName || '')
-        return farmCmp !== 0 ? farmCmp : (a.fieldName || '').localeCompare(b.fieldName || '')
+        return sortDir === 'desc' ? -cmp : cmp
       })
-  }, [baseFieldsById, seasonDataByField, selectedFarmId, sortBy, pivotGuidByFieldId, pivotsByGuid])
+  }, [baseFieldsById, seasonDataByField, selectedFarmId, sortBy, sortDir, pivotGuidByFieldId, pivotsByGuid])
 
   async function saveEvents(fieldId, events) {
     await setDoc(doc(db, 'weeks', weekId, 'events', fieldId), { events })
@@ -477,15 +491,6 @@ export default function App() {
                 <option key={f.id} value={f.id}>{f.name}</option>
               ))}
             </select>
-            <select
-              className="sort-select"
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-            >
-              <option value="field">Sort: Field</option>
-              <option value="crop">Sort: Crop</option>
-              <option value="pivot">Sort: Pivot status</option>
-            </select>
           </div>}
           {view === 'schedule' && <div className="week-nav">
             <button onClick={() => setWeekOffset((w) => w - 1)}>‹ Prev week</button>
@@ -594,7 +599,38 @@ export default function App() {
             <table>
               <thead>
                 <tr>
-                  <th className="sticky-col" rowSpan={2}>Field / crop</th>
+                  <th className="sticky-col" rowSpan={2}>
+                    <div className="field-header">
+                      <span>Field / crop</span>
+                      <button
+                        className="sort-chevron"
+                        aria-label="Sort options"
+                        onClick={(e) => { e.stopPropagation(); setSortMenuOpen((o) => !o) }}
+                      >▾</button>
+                      {!(sortBy === 'field' && sortDir === 'asc') && (
+                        <button
+                          className="clear-sort-btn"
+                          onClick={(e) => { e.stopPropagation(); setSortBy('field'); setSortDir('asc') }}
+                        >Clear sort</button>
+                      )}
+                      {sortMenuOpen && (
+                        <div className="sort-menu" ref={sortMenuRef} onClick={(e) => e.stopPropagation()}>
+                          <div className="sort-menu-label">Sort by</div>
+                          <div className="sort-menu-group">
+                            {[['field', 'Field'], ['crop', 'Crop'], ['pivot', 'Pivot status']].map(([val, lbl]) => (
+                              <button key={val} className={sortBy === val ? 'active' : ''} onClick={() => setSortBy(val)}>{lbl}</button>
+                            ))}
+                          </div>
+                          <div className="sort-menu-label">Order</div>
+                          <div className="sort-menu-group row">
+                            {[['asc', 'A → Z'], ['desc', 'Z → A']].map(([val, lbl]) => (
+                              <button key={val} className={sortDir === val ? 'active' : ''} onClick={() => setSortDir(val)}>{lbl}</button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </th>
                   {DAYS.map((d, i) => <th key={d.k} colSpan={2} className="day-head" style={{ background: dayTint(i) }}>{d.en}</th>)}
                   <th rowSpan={2} className="inches-head">Scheduled inches</th>
                 </tr>
