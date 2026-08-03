@@ -33,11 +33,13 @@ const DEFAULT_HOUR = { am: 8, pm: 17 }
 const GALLONS_PER_ACRE_INCH = 27154
 
 const CROP_COLOR = {
-  'SWEET CORN': { bg: '#FAC775', fg: '#412402' }, POTATOES: { bg: '#F5C4B3', fg: '#4A1B0C' },
-  ONIONS: { bg: '#CECBF6', fg: '#26215C' }, MINT: { bg: '#9FE1CB', fg: '#04342C' },
-  HAY: { bg: '#C0DD97', fg: '#173404' }, CORN: { bg: '#FAC775', fg: '#412402' },
-  CARROTS: { bg: '#F5C4B3', fg: '#4A1B0C' }, BEETS: { bg: '#F4C0D1', fg: '#4B1528' },
-  SQUASH: { bg: '#FAC775', fg: '#412402' }
+  POTATO: { bg: '#D6B48C', fg: '#4A2E12' }, POTATOES: { bg: '#D6B48C', fg: '#4A2E12' },
+  CORN: { bg: '#FCE9A8', fg: '#7A5C02' }, 'SWEET CORN': { bg: '#FCE9A8', fg: '#7A5C02' },
+  ALFALFA: { bg: '#C0DD97', fg: '#173404' }, HAY: { bg: '#C0DD97', fg: '#173404' },
+  'SUGAR BEET': { bg: '#E0D6F5', fg: '#3D2B6B' }, BEETS: { bg: '#E0D6F5', fg: '#3D2B6B' },
+  FALLOW: { bg: '#E4E1D8', fg: '#5A574C' }, ONIONS: { bg: '#F4C0D1', fg: '#4B1528' },
+  MINT: { bg: '#9FE1CB', fg: '#04342C' }, CARROTS: { bg: '#FAD9BB', fg: '#7A3E0A' },
+  SQUASH: { bg: '#F5C98A', fg: '#6B3D02' }
 }
 
 function mondayOf(d) {
