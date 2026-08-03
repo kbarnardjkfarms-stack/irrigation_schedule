@@ -539,10 +539,10 @@ export default function App() {
                         <td className="sticky-col field-cell" style={{ background: isSource ? '#eef3ec' : isCopyTarget ? '#f5faf3' : isEraseTarget ? '#fbeaea' : undefined }} onClick={onNameClick}>
                           {(mode === 'copy-targets' && !isSource) && <span className={`checkbox ${isCopyTarget ? 'checked' : ''}`} />}
                           {mode === 'erase' && <span className={`checkbox erase ${isEraseTarget ? 'checked' : ''}`} />}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
                             <PivotIcon
                               pivot={pivot}
-                              size={26}
+                              size={55}
                               onClick={(e) => { e.stopPropagation(); setExpandedPivotFieldId(isPivotExpanded ? null : field.id) }}
                             />
                             <strong>{field.fieldName}</strong>
