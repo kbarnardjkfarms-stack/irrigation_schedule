@@ -23,7 +23,7 @@ const DAYS = [
 
 // Alternating column shading so it's easier to track a day while scanning
 // across the week: even index (Mon, Wed, Fri, Sun) vs odd index (Tue, Thu, Sat).
-const DAY_TINTS = ['#ACB3B9', '#95B3D0']
+const DAY_TINTS = ['#C8CCD0', '#B9CCDF']
 function dayTint(dayIdx) { return DAY_TINTS[dayIdx % 2] }
 
 const BLOCKS = { am: { start: 0, end: 12, len: 12, label: 'Morning' }, pm: { start: 12, end: 24, len: 12, label: 'Evening' } }
