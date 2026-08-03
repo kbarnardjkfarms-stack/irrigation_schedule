@@ -593,6 +593,15 @@ export default function App() {
                               </div>
                             </div>
                           </div>
+                          {isPivotExpanded && (
+                            <div
+                              ref={pivotDetailRef}
+                              onClick={(e) => e.stopPropagation()}
+                              style={{ position: 'absolute', top: '100%', left: 0, zIndex: 20, boxShadow: '0 6px 16px rgba(0,0,0,0.12)', whiteSpace: 'normal' }}
+                            >
+                              <PivotDetailPanel pivot={pivot} />
+                            </div>
+                          )}
                         </td>
                         {DAYS.map((d, dayIdx) => (
                           ['am', 'pm'].map((shift) => {
@@ -619,13 +628,6 @@ export default function App() {
                         ))}
                         <td className="inches-cell">{weeklyInches(events, gpm, field.acres).toFixed(2)}</td>
                       </tr>
-                      {isPivotExpanded && (
-                        <tr>
-                          <td colSpan={16} ref={pivotDetailRef} style={{ background: '#f4f2ec' }}>
-                            <PivotDetailPanel pivot={pivot} />
-                          </td>
-                        </tr>
-                      )}
                     </Fragment>
                   )
                 })}
