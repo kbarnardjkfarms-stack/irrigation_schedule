@@ -1,6 +1,5 @@
 export default function PivotDetailPanel({ pivot }) {
   if (!pivot) return null;
-
   const isRunning = pivot.systemStatus === 'Running';
   const statusLabel = isRunning
     ? pivot.waterMode === 'Dry'
@@ -8,9 +7,19 @@ export default function PivotDetailPanel({ pivot }) {
       : 'Running, wet'
     : 'Stopped';
 
+  const rows = [
+    ['Status', statusLabel],
+    ['Direction', pivot.direction],
+    ['Current position', `${pivot.currentPosition}\u00b0`],
+    ['Percent timer', `${pivot.percentTimer}%`],
+    ['Pressure', `${pivot.pressure} PSI`],
+    ['Last updated', pivot.statusDate],
+  ];
+
   return (
     <div
       style={{
+        maxWidth: 320,
         padding: '12px 16px',
         background: '#F7F8FA',
         borderRadius: '0 0 8px 8px',
@@ -18,32 +27,31 @@ export default function PivotDetailPanel({ pivot }) {
         borderTop: 'none',
       }}
     >
-      <table style={{ width: '100%', fontSize: 13 }}>
+      <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
         <tbody>
-          <tr>
-            <td>Status</td>
-            <td style={{ textAlign: 'right' }}>{statusLabel}</td>
-          </tr>
-          <tr>
-            <td>Direction</td>
-            <td style={{ textAlign: 'right' }}>{pivot.direction}</td>
-          </tr>
-          <tr>
-            <td>Current position</td>
-            <td style={{ textAlign: 'right' }}>{pivot.currentPosition}&deg;</td>
-          </tr>
-          <tr>
-            <td>Percent timer</td>
-            <td style={{ textAlign: 'right' }}>{pivot.percentTimer}%</td>
-          </tr>
-          <tr>
-            <td>Pressure</td>
-            <td style={{ textAlign: 'right' }}>{pivot.pressure} PSI</td>
-          </tr>
-          <tr>
-            <td>Last updated</td>
-            <td style={{ textAlign: 'right' }}>{pivot.statusDate}</td>
-          </tr>
+          {rows.map(([label, value], i) => (
+            <tr key={label}>
+              <td
+                style={{
+                  padding: '5px 0',
+                  borderBottom: i < rows.length - 1 ? '1px solid #E2E4E8' : 'none',
+                  color: '#666',
+                }}
+              >
+                {label}
+              </td>
+              <td
+                style={{
+                  padding: '5px 0',
+                  borderBottom: i < rows.length - 1 ? '1px solid #E2E4E8' : 'none',
+                  textAlign: 'right',
+                  fontWeight: 500,
+                }}
+              >
+                {value}
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
