@@ -55,7 +55,7 @@ function fmtShort(d) { return d.toLocaleDateString(undefined, { month: 'short', 
 function fmtHour(h) {
   const hr24 = ((h % 24) + 24) % 24
   const period = hr24 >= 12 ? 'pm' : 'am'
-  let hr12 = hr24 % 12; if (hr12 === 0) hr12 = 12
+  let hr12 = Math.floor(hr24) % 12; if (hr12 === 0) hr12 = 12
   const mins = Math.round((hr24 % 1) * 60)
   return hr12 + (mins ? ':' + String(mins).padStart(2, '0') : '') + period
 }
@@ -496,7 +496,15 @@ export default function App() {
           )}
           {view === 'schedule' && selected && !mode && editorField && (
             <div className="editor-panel">
-              <div className="editor-title">{editorField.fieldName} · {DAYS[selected.dayIdx].en} {BLOCKS[selected.shift].label}</div>
+              <div className="editor-header">
+                <span className="editor-dot" style={{ background: dayTint(selected.dayIdx) }} />
+                <div>
+                  <div className="editor-field-name">{editorField.fieldName}</div>
+                  <div className="editor-context">
+                    {DAYS[selected.dayIdx].en} · {BLOCKS[selected.shift].label.toLowerCase()}{editingMode ? ` · turned ${editingMode}` : ''}
+                  </div>
+                </div>
+              </div>
               {!editingMode ? (
                 <div className="editor-row">
                   <button onClick={() => startEditOn(editorExisting)}>On at…</button>
@@ -505,7 +513,7 @@ export default function App() {
                 </div>
               ) : (
                 <>
-                  <div className="editor-label">Turned {editingMode} at:</div>
+                  <div className="editor-label center">Turned {editingMode} at</div>
                   <div className="stepper">
                     <button onClick={() => setEditingHour((h) => Math.max(BLOCKS[selected.shift].start, h - 0.5))}>-</button>
                     <span>{fmtHour(editingHour)}</span>
@@ -513,17 +521,21 @@ export default function App() {
                   </div>
                   {editingMode === 'on' && (
                     <>
-                      <div className="editor-label">Running with:</div>
+                      <div className="editor-label">Running with</div>
                       <div className="editor-row">
-                        {[[null, 'Just water'], ['fert', '+ Fert'], ['chem', '+ Chem']].map(([val, lbl]) => (
-                          <button key={lbl} className={editingAdditive === val ? 'active' : ''} onClick={() => setEditingAdditive(val)}>{lbl}</button>
+                        {[[null, 'Just water', '#185FA5'], ['fert', '+ Fert', '#BA7517'], ['chem', '+ Chem', '#993C1D']].map(([val, lbl, clr]) => (
+                          <button
+                            key={lbl}
+                            style={editingAdditive === val ? { borderColor: clr, color: clr, fontWeight: 600 } : undefined}
+                            onClick={() => setEditingAdditive(val)}
+                          >{lbl}</button>
                         ))}
                       </div>
                     </>
                   )}
                   {editingMode === 'off' && (
                     <>
-                      <div className="editor-label">Display:</div>
+                      <div className="editor-label">Display</div>
                       <div className="editor-row">
                         {[['time', 'Exact time'], ['stop', 'Off at stop'], ['sis', 'Off at SIS']].map(([val, lbl]) => (
                           <button key={val} className={editingDisplay === val ? 'active' : ''} onClick={() => setEditingDisplay(val)}>{lbl}</button>
@@ -531,7 +543,7 @@ export default function App() {
                       </div>
                       {editingDisplay === 'sis' && (
                         <>
-                          <div className="editor-label">Pivot degrees:</div>
+                          <div className="editor-label center">Pivot degrees</div>
                           <div className="stepper">
                             <button onClick={() => setEditingSisDegrees((d) => Math.max(0, d - 5))}>-</button>
                             <span>{editingSisDegrees}°</span>
