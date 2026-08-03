@@ -21,6 +21,11 @@ const DAYS = [
   { k: 'thu', en: 'Thu' }, { k: 'fri', en: 'Fri' }, { k: 'sat', en: 'Sat' }, { k: 'sun', en: 'Sun' }
 ]
 
+// Alternating column shading so it's easier to track a day while scanning
+// across the week: even index (Mon, Wed, Fri, Sun) vs odd index (Tue, Thu, Sat).
+const DAY_TINTS = ['#ACB3B9', '#95B3D0']
+function dayTint(dayIdx) { return DAY_TINTS[dayIdx % 2] }
+
 const BLOCKS = { am: { start: 0, end: 12, len: 12, label: 'Morning' }, pm: { start: 12, end: 24, len: 12, label: 'Evening' } }
 
 const GALLONS_PER_ACRE_INCH = 27154
@@ -549,13 +554,13 @@ export default function App() {
               <thead>
                 <tr>
                   <th className="sticky-col" rowSpan={2}>Field / crop</th>
-                  {DAYS.map((d) => <th key={d.k} colSpan={2} className="day-head">{d.en}</th>)}
+                  {DAYS.map((d, i) => <th key={d.k} colSpan={2} className="day-head" style={{ background: dayTint(i) }}>{d.en}</th>)}
                   <th rowSpan={2} className="inches-head">Scheduled inches</th>
                 </tr>
                 <tr>
-                  {DAYS.map((d) => ([
-                    <th key={d.k + '-am'} className="shift-head">AM</th>,
-                    <th key={d.k + '-pm'} className="shift-head">PM</th>
+                  {DAYS.map((d, i) => ([
+                    <th key={d.k + '-am'} className="shift-head" style={{ background: dayTint(i) }}>AM</th>,
+                    <th key={d.k + '-pm'} className="shift-head" style={{ background: dayTint(i) }}>PM</th>
                   ]))}
                 </tr>
               </thead>
@@ -631,7 +636,7 @@ export default function App() {
                             } else if (state === 'coming-on') { label = fmtHour(ev.ts % 24) }
                             else if (state === 'full') { label = '' }
                             return (
-                              <td key={d.k + shift} className="cell-td">
+                              <td key={d.k + shift} className="cell-td" style={{ background: dayTint(dayIdx) }}>
                                 <button disabled={!!mode} className={`cell-btn ${isSel ? 'selected' : ''}`} style={styleForState(state, additive)} onClick={() => openCell(field.id, dayIdx, shift)}>
                                   {label}
                                 </button>
