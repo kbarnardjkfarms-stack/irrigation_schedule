@@ -28,6 +28,8 @@ function dayTint(dayIdx) { return DAY_TINTS[dayIdx % 2] }
 
 const BLOCKS = { am: { start: 0, end: 12, len: 12, label: 'Morning' }, pm: { start: 12, end: 24, len: 12, label: 'Evening' } }
 
+const DEFAULT_HOUR = { am: 8, pm: 17 }
+
 const GALLONS_PER_ACRE_INCH = 27154
 
 const CROP_COLOR = {
@@ -340,16 +342,14 @@ export default function App() {
   }
 
   function startEditOn(existing) {
-    const b = BLOCKS[selected.shift]
     setEditingMode('on')
-    setEditingHour(existing && existing.type === 'on' ? existing.ts % 24 : b.start + 2)
+    setEditingHour(existing && existing.type === 'on' ? existing.ts % 24 : DEFAULT_HOUR[selected.shift])
     setEditingAdditive(existing && existing.type === 'on' ? existing.additive : null)
   }
 
   function startEditOff(existing) {
-    const b = BLOCKS[selected.shift]
     setEditingMode('off')
-    setEditingHour(existing && existing.type === 'off' ? existing.ts % 24 : b.end - 2)
+    setEditingHour(existing && existing.type === 'off' ? existing.ts % 24 : DEFAULT_HOUR[selected.shift])
     setEditingDisplay(existing && existing.type === 'off' ? existing.display || 'time' : 'time')
     setEditingSisDegrees(existing && existing.sisDegrees != null ? existing.sisDegrees : 180)
   }
@@ -507,8 +507,8 @@ export default function App() {
               </div>
               {!editingMode ? (
                 <div className="editor-row">
-                  <button onClick={() => startEditOn(editorExisting)}>On at…</button>
-                  <button onClick={() => startEditOff(editorExisting)}>Off at…</button>
+                  <button style={{ background: '#3B6D11', borderColor: '#3B6D11', color: '#fff', fontWeight: 600 }} onClick={() => startEditOn(editorExisting)}>On at…</button>
+                  <button style={{ background: '#A32D2D', borderColor: '#A32D2D', color: '#fff', fontWeight: 600 }} onClick={() => startEditOff(editorExisting)}>Off at…</button>
                   {editorExisting && <button onClick={() => removeEvent(selected.fieldId, editorExisting)}>Remove</button>}
                 </div>
               ) : (
@@ -523,10 +523,14 @@ export default function App() {
                     <>
                       <div className="editor-label">Running with</div>
                       <div className="editor-row">
-                        {[[null, 'Just water', '#185FA5'], ['fert', '+ Fert', '#BA7517'], ['chem', '+ Chem', '#993C1D']].map(([val, lbl, clr]) => (
+                        {[
+                          [null, 'Just water', '#185FA5'],
+                          ['fert', '+ Fert', 'linear-gradient(135deg, #185FA5 50%, #EF9F27 50%)'],
+                          ['chem', '+ Chem', 'linear-gradient(135deg, #185FA5 50%, #D85A30 50%)']
+                        ].map(([val, lbl, bg]) => (
                           <button
                             key={lbl}
-                            style={editingAdditive === val ? { borderColor: clr, color: clr, fontWeight: 600 } : undefined}
+                            style={editingAdditive === val ? { background: bg, borderColor: 'transparent', color: '#fff', fontWeight: 600 } : undefined}
                             onClick={() => setEditingAdditive(val)}
                           >{lbl}</button>
                         ))}
