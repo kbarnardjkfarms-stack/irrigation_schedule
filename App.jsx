@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, Fragment } from 'react'
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
 
 import { collection, collectionGroup, doc, onSnapshot, query, setDoc, where } from 'firebase/firestore'
 
@@ -147,11 +147,26 @@ export default function App() {
   const [pivotGuidByFieldId, setPivotGuidByFieldId] = useState({})
   const [pivotsByGuid, setPivotsByGuid] = useState({})
   const [expandedPivotFieldId, setExpandedPivotFieldId] = useState(null)
+  const pivotDetailRef = useRef(null)
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUser(u))
     return () => unsub()
   }, [])
+
+  // Close the expanded pivot detail panel when clicking anywhere outside it.
+  // Clicking a pivot icon itself already stops propagation and toggles the
+  // panel directly, so this only fires for clicks elsewhere on the page.
+  useEffect(() => {
+    if (!expandedPivotFieldId) return
+    function handleClickOutside(e) {
+      if (pivotDetailRef.current && !pivotDetailRef.current.contains(e.target)) {
+        setExpandedPivotFieldId(null)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [expandedPivotFieldId])
 
   useEffect(() => {
     if (!user) { setUserRole(null); return }
@@ -606,7 +621,7 @@ export default function App() {
                       </tr>
                       {isPivotExpanded && (
                         <tr>
-                          <td colSpan={16}>
+                          <td colSpan={16} ref={pivotDetailRef}>
                             <PivotDetailPanel pivot={pivot} />
                           </td>
                         </tr>
