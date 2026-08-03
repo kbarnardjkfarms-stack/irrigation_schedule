@@ -621,7 +621,7 @@ export default function App() {
                       </tr>
                       {isPivotExpanded && (
                         <tr>
-                          <td colSpan={16} ref={pivotDetailRef}>
+                          <td colSpan={16} ref={pivotDetailRef} style={{ background: '#f4f2ec' }}>
                             <PivotDetailPanel pivot={pivot} />
                           </td>
                         </tr>
