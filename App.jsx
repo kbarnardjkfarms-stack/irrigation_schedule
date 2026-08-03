@@ -567,17 +567,17 @@ export default function App() {
                               size={55}
                               onClick={(e) => { e.stopPropagation(); setExpandedPivotFieldId(isPivotExpanded ? null : field.id) }}
                             />
-                            <strong>{field.fieldName}</strong>
-                            {isSource && <span className="source-tag">SOURCE</span>}
+                            <div>
+                              <div>
+                                <strong>{field.fieldName}</strong>
+                                {isSource && <span className="source-tag">SOURCE</span>}
+                              </div>
+                              <div style={{ marginTop: '4px' }}>
+                                {field.crop && <span className="crop-badge" style={{ background: color.bg, color: color.fg }}>{field.crop}</span>}
+                                {field.acres && <span className="acres-tag"> · {field.acres.toFixed(1)} ac</span>}
+                              </div>
+                            </div>
                           </div>
-                          <br />
-                          {field.crop && <span className="crop-badge" style={{ background: color.bg, color: color.fg }}>{field.crop}</span>}
-                          {field.acres && <span className="acres-tag"> · {field.acres.toFixed(1)} ac</span>}
-                          {!gpm && (
-                            <span className="gpm-flag" onClick={(e) => { e.stopPropagation(); const v = prompt('Pivot GPM for ' + field.fieldName + ':'); if (v) saveGpm(field.id, Number(v)) }}>
-                              SET GPM
-                            </span>
-                          )}
                         </td>
                         {DAYS.map((d, dayIdx) => (
                           ['am', 'pm'].map((shift) => {
