@@ -458,11 +458,21 @@ export default function App() {
             style={{ cursor: 'pointer', width: '160px', aspectRatio: '1 / 1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
           >
             <div style={{ width: '64px', height: '64px', borderRadius: '16px', background: '#E6F1FB', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#185FA5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2C12 2 5 10 5 15a7 7 0 0 0 14 0c0-5-7-13-7-13z" />
+              <svg width="40" height="40" viewBox="0 0 48 48">
+                <defs>
+                  <linearGradient id="irrigationDropGradient" x1="10%" y1="0%" x2="90%" y2="100%">
+                    <stop offset="0%" stopColor="#8FD8F0" />
+                    <stop offset="55%" stopColor="#1F8FD4" />
+                    <stop offset="100%" stopColor="#0B4E85" />
+                  </linearGradient>
+                </defs>
+                <path d="M24 3c0 0-13 17-13 26a13 13 0 0 0 26 0c0-9-13-26-13-26z" fill="url(#irrigationDropGradient)" />
+                <path d="M17 15c-2 4-3.5 8-3.5 11" fill="none" stroke="#CFF0FA" strokeWidth="2.2" strokeLinecap="round" opacity="0.65" />
+                <circle cx="30" cy="34" r="2.6" fill="#1F8FD4" opacity="0.85" />
+                <circle cx="33.5" cy="29" r="1.6" fill="#1F8FD4" opacity="0.7" />
               </svg>
             </div>
-            <div style={{ fontSize: '14px', fontWeight: 500 }}>Irrigation Schedule</div>
+            <div style={{ fontSize: '12px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Irrigation</div>
           </div>
         </div>
       )}
