@@ -2,7 +2,6 @@ const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onRequest } = require('firebase-functions/v2/https');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
-
 admin.initializeApp();
 
 // The token lives here, as a Firebase secret — never in client code.
@@ -23,7 +22,9 @@ const AGWORLD_BASE_URL = 'https://us.agworld.co';
 // separate line of the operation) that shouldn't show up in the
 // irrigation program. Fields under these farm IDs are skipped on sync,
 // and any that were already synced in previously get cleaned up
-// automatically the next time this runs.
+// automatically the next time this runs (as a natural side effect of the
+// general stale-field cleanup below, since excluded-farm fields never
+// appear in the current valid set either).
 const EXCLUDED_FARM_IDS = new Set(['175660', '211414', '219606']);
 // 175660 = SUBLEASED AND ROTATION LEASE FIELDS
 // 211414 = TETON TREES
@@ -93,7 +94,6 @@ async function fetchFieldsForSeason(seasonId, token) {
   const farmsById = {};
   let page = 1;
   const pageSize = 100;
-
   while (true) {
     const params = new URLSearchParams({
       'page[number]': String(page),
@@ -102,27 +102,22 @@ async function fetchFieldsForSeason(seasonId, token) {
       include: 'farm'
     });
     // if (typeof FARM_ID_FILTER !== 'undefined') params.set('filter[farm_id]', FARM_ID_FILTER);
-
     const json = await agworldGet('/user_api/v1/fields', params, token);
     fields.push(...json.data);
-
     (json.included || []).forEach((rec) => {
       if (rec.type === 'farms') {
         farmsById[rec.id] = rec.attributes.name;
       }
     });
-
     if (!json.data.length || json.data.length < pageSize) break;
     page++;
   }
-
   return { fields, farmsById };
 }
 
 async function syncFields() {
   const token = AGWORLD_TOKEN.value();
   const db = admin.firestore();
-
   const seasons = await fetchAllSeasons(token);
 
   // Write the season list first so the app's year/season dropdown always
@@ -158,31 +153,26 @@ async function syncFields() {
       console.error(`Skipping season ${season.id} (${season.name}): ${err.message}`);
       continue;
     }
-
     Object.assign(allFarmsById, farmsById);
 
     // Firestore batches cap at 500 writes; chunk defensively.
     for (let i = 0; i < fields.length; i += 400) {
       const chunk = fields.slice(i, i + 400);
       const batch = db.batch();
-
       chunk.forEach((f) => {
         if (EXCLUDED_FARM_IDS.has(String(f.attributes.farm_id))) {
           skippedFieldIds.add(f.id);
           return; // skip fields under junk farms
         }
-
         fieldNamesById[f.id] = {
           name: f.attributes.name,
           farmId: f.attributes.farm_id
         };
-
         // crops comes back as an array (a field can carry more than one
         // crop or blend for a given season) — take the primary entry
         // rather than assuming there's only one.
         const crops = f.attributes.crops || [];
         const primaryCrop = crops.find((c) => c.crop_blend === 'primary') || crops[0] || null;
-
         // Per-season crop/acreage data lives in a subcollection keyed by
         // season id, so the app can switch years without losing history.
         const seasonRef = db
@@ -190,7 +180,6 @@ async function syncFields() {
           .doc(String(f.id))
           .collection('seasons')
           .doc(String(season.id));
-
         batch.set(
           seasonRef,
           {
@@ -206,10 +195,8 @@ async function syncFields() {
           },
           { merge: true }
         );
-
         totalFieldSeasonDocs++;
       });
-
       await batch.commit();
     }
   }
@@ -248,16 +235,24 @@ async function syncFields() {
     await batch.commit();
   }
 
-  // One-time (and ongoing, if anything slips through) cleanup: remove
-  // any fields/farms from the excluded list that were already sitting
-  // in Firestore from before this exclusion existed — including each
-  // field's per-season history subcollection, since deleting a parent
-  // doc in Firestore does NOT delete its subcollections automatically.
-  // Once cleaned up, this finds nothing on every future run.
-  const cleanupIds = [...EXCLUDED_FARM_IDS].map(Number);
-  const staleFieldsSnap = await db.collection('fields').where('farmId', 'in', cleanupIds).get();
-  if (!staleFieldsSnap.empty) {
-    for (const fieldDoc of staleFieldsSnap.docs) {
+  // General staleness cleanup: remove any field from Firestore that Agworld
+  // did NOT return anywhere in this sync — across every currently-synced
+  // season, for any reason. This covers a field being deleted outright,
+  // but also the case that actually bit us: a field getting split into new
+  // per-pivot fields in Agworld (e.g. "CELLAR" -> "CELLAR BIG" +
+  // "CELLAR MINI"). The old field simply stops appearing in Agworld's
+  // results — it's never explicitly "deleted" from Agworld's point of
+  // view — so without this check it would sit in Firestore forever. This
+  // also covers the excluded-farm cleanup as a subset, since fields under
+  // EXCLUDED_FARM_IDS never make it into fieldNamesById either. Once
+  // cleaned up, this finds nothing on every future run until the next
+  // real change in Agworld.
+  const currentFieldIds = new Set(fieldIds);
+  const allFieldDocsSnap = await db.collection('fields').get();
+  const staleFieldDocs = allFieldDocsSnap.docs.filter((doc) => !currentFieldIds.has(doc.id));
+
+  if (staleFieldDocs.length) {
+    for (const fieldDoc of staleFieldDocs) {
       const seasonDocsSnap = await fieldDoc.ref.collection('seasons').get();
       if (!seasonDocsSnap.empty) {
         const seasonCleanupBatch = db.batch();
@@ -265,17 +260,28 @@ async function syncFields() {
         await seasonCleanupBatch.commit();
       }
     }
-    const fieldsCleanupBatch = db.batch();
-    staleFieldsSnap.forEach((doc) => fieldsCleanupBatch.delete(doc.ref));
-    cleanupIds.forEach((id) => fieldsCleanupBatch.delete(db.collection('farms').doc(String(id))));
-    await fieldsCleanupBatch.commit();
+    for (let i = 0; i < staleFieldDocs.length; i += 400) {
+      const chunk = staleFieldDocs.slice(i, i + 400);
+      const batch = db.batch();
+      chunk.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+    }
   }
+
+  // Separately clean up farm docs for the excluded farm IDs, in case any
+  // were sitting in Firestore from before this exclusion existed. Farms
+  // aren't part of the field-diffing logic above since a farm can validly
+  // have zero currently-synced fields without being stale itself.
+  const excludedFarmCleanupBatch = db.batch();
+  EXCLUDED_FARM_IDS.forEach((id) => excludedFarmCleanupBatch.delete(db.collection('farms').doc(id)));
+  await excludedFarmCleanupBatch.commit();
 
   return {
     fieldCount: fieldIds.length,
     seasonCount: seasons.length,
     fieldSeasonRecords: totalFieldSeasonDocs,
-    skippedFieldCount: skippedFieldIds.size
+    skippedFieldCount: skippedFieldIds.size,
+    staleFieldsRemoved: staleFieldDocs.length
   };
 }
 
@@ -292,7 +298,7 @@ exports.syncAgworldFields = onSchedule(
   async () => {
     const result = await syncFields();
     console.log(
-      `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms).`
+      `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields).`
     );
   }
 );
@@ -306,7 +312,7 @@ exports.syncAgworldFieldsNow = onRequest(
     try {
       const result = await syncFields();
       res.status(200).send(
-        `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms).`
+        `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields).`
       );
     } catch (err) {
       console.error(err);
@@ -327,21 +333,17 @@ exports.syncAgworldFieldsNow = onRequest(
 exports.chirpstackWebhook = onRequest(async (req, res) => {
   try {
     const eventType = req.query.event;
-
     if (eventType !== 'up') {
       res.status(200).send(`Ignored event type: ${eventType}`);
       return;
     }
-
     const body = req.body || {};
     const deviceInfo = body.deviceInfo || {};
     const deviceName = deviceInfo.deviceName || deviceInfo.devEui || 'unknown-device';
     const devEui = deviceInfo.devEui || null;
-
     const rx = (body.rxInfo && body.rxInfo[0]) || {};
     const rssi = rx.rssi ?? null;
     const snr = rx.snr ?? rx.loRaSnr ?? null;
-
     const reading = {
       time: body.time || new Date().toISOString(),
       devEui,
@@ -352,10 +354,8 @@ exports.chirpstackWebhook = onRequest(async (req, res) => {
       rssi,
       snr
     };
-
     const db = admin.firestore();
     const deviceRef = db.collection('devices').doc(deviceName);
-
     await deviceRef.set(
       {
         devEui,
@@ -364,9 +364,7 @@ exports.chirpstackWebhook = onRequest(async (req, res) => {
       },
       { merge: true }
     );
-
     await deviceRef.collection('readings').add(reading);
-
     res.status(200).send('OK');
   } catch (err) {
     console.error('chirpstackWebhook error:', err);
