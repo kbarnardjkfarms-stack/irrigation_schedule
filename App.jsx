@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
 
 import { createPortal } from 'react-dom'
 
+import { useRegisterSW } from 'virtual:pwa-register/react'
+
 import { collection, collectionGroup, doc, onSnapshot, query, setDoc, where } from 'firebase/firestore'
 
 import { onAuthStateChanged, signOut } from 'firebase/auth'
@@ -131,6 +133,10 @@ function styleForState(state, additive) {
 }
 
 export default function App() {
+  const {
+    needRefresh: [needRefresh],
+    updateServiceWorker
+  } = useRegisterSW()
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
   const [page, setPage] = useState('home') // 'home' or 'irrigation' — more modules join this list later
@@ -433,6 +439,12 @@ export default function App() {
 
   return (
     <div className="app">
+      {needRefresh && (
+        <div className="update-banner">
+          <span>A new version of AIO is available.</span>
+          <button onClick={() => updateServiceWorker(true)}>Reload</button>
+        </div>
+      )}
       <header className="topbar">
         <div className="brand" onClick={() => setPage('home')} style={{ cursor: 'pointer' }}>
           <h1>AIO</h1>
