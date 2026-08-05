@@ -732,7 +732,7 @@ export default function App() {
                               label = disp === 'stop' ? (<><div className="tiny">OFF AT</div><div>STOP</div></>) :
                                 disp === 'sis' ? (<><div className="tiny">OFF AT SIS</div><div>{ev.sisDegrees != null ? ev.sisDegrees + '°' : ''}</div></>) :
                                   (<><div className="tiny">OFF AT</div><div>{fmtHour(ev.ts % 24)}</div></>)
-                            } else if (state === 'coming-on') { label = fmtHour(ev.ts % 24) }
+                            } else if (state === 'coming-on') { label = (<><div className="tiny">ON</div><div>{fmtHour(ev.ts % 24)}</div></>) }
                             else if (state === 'full') { label = '' }
                             return (
                               <td key={d.k + shift} className="cell-td" style={{ background: dayTint(dayIdx) }}>
