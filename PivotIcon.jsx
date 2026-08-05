@@ -21,7 +21,7 @@ function sectorPath(cx, cy, r, s, e) {
 /**
  * Renders the pivot coverage/status icon.
  * pivot: the Firestore document from the `pivots` collection, or null/undefined
- *        if this field has no pivot mapped yet (renders a neutral placeholder).
+ * if this field has no pivot mapped yet (renders a neutral placeholder).
  */
 export default function PivotIcon({ pivot, size = 40, onClick }) {
   if (!pivot) {
@@ -47,17 +47,23 @@ export default function PivotIcon({ pivot, size = 40, onClick }) {
   }
 
   const { systemStatus, waterMode, direction, currentPosition, reverseAngle, forwardAngle } = pivot;
-
   const isRunning = systemStatus === 'Running';
   const state = isRunning ? (waterMode === 'Dry' ? 'dry' : 'wet') : 'stopped';
   const fill = COLORS[state];
-
   const cx = 20;
   const cy = 20;
   const r = 16;
   const pos = Number(currentPosition) || 0;
+
+  // A full-circle pivot (no arc restriction) reports the same reverse and
+  // forward angle from BaseStation3 — commonly 0/0, meaning "goes all the
+  // way around," not "no data." Detect that BEFORE applying any fallback,
+  // since 0 is a real, meaningful value here and shouldn't be treated as
+  // missing. Sector math on equal start/end angles produces a degenerate,
+  // zero-area path, which is why this used to render as just a bare line.
   const rev = Number(reverseAngle) || 0;
-  const fwd = Number(forwardAngle) || 360;
+  const fwd = Number(forwardAngle) || 0;
+  const isFullCircle = rev === fwd;
 
   const edgePt = polar(cx, cy, r, pos);
   const offset = 10;
@@ -75,7 +81,11 @@ export default function PivotIcon({ pivot, size = 40, onClick }) {
       onClick={onClick}
       style={{ cursor: onClick ? 'pointer' : 'default' }}
     >
-      <path d={sectorPath(cx, cy, r, rev, fwd)} fill={fill} />
+      {isFullCircle ? (
+        <circle cx={cx} cy={cy} r={r} fill={fill} />
+      ) : (
+        <path d={sectorPath(cx, cy, r, rev, fwd)} fill={fill} />
+      )}
       <line
         x1={cx}
         y1={cy}
