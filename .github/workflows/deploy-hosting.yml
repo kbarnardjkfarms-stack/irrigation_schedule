@@ -1,0 +1,31 @@
+name: Deploy Hosting
+# Runs automatically whenever the AIO frontend changes on main — no manual
+# Cloud Shell steps needed after this. Skips functions/ and firestore.rules
+# since deploy-functions.yml already owns those.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'functions/**'
+      - 'firestore.rules'
+      - '.github/workflows/**'
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Write service account key to file
+        run: echo '${{ secrets.GCP_SA_KEY }}' > "$HOME/gcp-key.json"
+      - name: Install dependencies
+        run: npm install
+      - name: Build
+        run: npm run build
+      - name: Deploy to Firebase Hosting
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /home/runner/gcp-key.json
+        run: npx firebase-tools deploy --only hosting --project irrigation-schedule-f8b69 --non-interactive --force
