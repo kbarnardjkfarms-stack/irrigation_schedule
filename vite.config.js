@@ -5,7 +5,8 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
+      injectRegister: false,
       manifest: {
         name: 'AIO',
         short_name: 'AIO',
