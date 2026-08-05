@@ -457,8 +457,8 @@ export default function App() {
             onClick={() => setPage('irrigation')}
             style={{ cursor: 'pointer', width: '160px', aspectRatio: '1 / 1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
           >
-            <div style={{ width: '64px', height: '64px', borderRadius: '16px', background: '#E6F1FB', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <svg width="40" height="40" viewBox="0 0 48 48">
+            <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#E6F1FB', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="56" height="56" viewBox="0 0 48 48">
                 <defs>
                   <linearGradient id="irrigationDropGradient" x1="10%" y1="0%" x2="90%" y2="100%">
                     <stop offset="0%" stopColor="#8FD8F0" />
@@ -472,7 +472,7 @@ export default function App() {
                 <circle cx="33.5" cy="29" r="1.6" fill="#1F8FD4" opacity="0.7" />
               </svg>
             </div>
-            <div style={{ fontSize: '12px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Irrigation</div>
+            <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Irrigation</div>
           </div>
         </div>
       )}
