@@ -14,14 +14,11 @@ export default defineConfig({
         theme_color: '#185FA5',
         background_color: '#f4f2ec',
         display: 'standalone',
-        start_url: '/'
-        // No icons listed yet — icon-192.png / icon-512.png were referenced
-        // here previously but don't exist in the repo. Add real AIO icons
-        // here later, then list them the same way:
-        // icons: [
-        //   { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
-        //   { src: 'icon-512.png', sizes: '512x512', type: 'image/png' }
-        // ]
+        start_url: '/',
+        icons: [
+          { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'icon-512.png', sizes: '512x512', type: 'image/png' }
+        ]
       },
       workbox: {
         // Cache the app shell aggressively so it loads with zero signal.
