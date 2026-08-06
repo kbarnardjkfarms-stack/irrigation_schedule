@@ -18,6 +18,10 @@ import PivotIcon from './PivotIcon.jsx'
 
 import PivotDetailPanel from './PivotDetailPanel.jsx'
 
+import PotatoStorage from './PotatoStorage.jsx'
+
+import PotatoStorageIcon from './PotatoStorageIcon.jsx'
+
 const DAYS = [
   { k: 'mon', en: 'Mon' }, { k: 'tue', en: 'Tue' }, { k: 'wed', en: 'Wed' },
   { k: 'thu', en: 'Thu' }, { k: 'fri', en: 'Fri' }, { k: 'sat', en: 'Sat' }, { k: 'sun', en: 'Sun' }
@@ -139,7 +143,7 @@ export default function App() {
   } = useRegisterSW()
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
-  const [page, setPage] = useState('home') // 'home' or 'irrigation' — more modules join this list later
+  const [page, setPage] = useState('home') // 'home' | 'irrigation' | 'potato-storage' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
   const [online, setOnline] = useState(navigator.onLine)
@@ -486,8 +490,18 @@ export default function App() {
             </div>
             <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Irrigation</div>
           </div>
+          <div
+            onClick={() => setPage('potato-storage')}
+            style={{ cursor: 'pointer', width: '160px', aspectRatio: '1 / 1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+          >
+            <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#FAEEDA', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <PotatoStorageIcon />
+            </div>
+            <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato storage</div>
+          </div>
         </div>
       )}
+      {page === 'potato-storage' && <PotatoStorage />}
       {page === 'irrigation' && (
         <>
           {view === 'live-data' && <LiveData />}
