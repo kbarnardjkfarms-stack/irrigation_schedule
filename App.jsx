@@ -232,7 +232,8 @@ export default function App() {
         setSortMenuOpen(false)
       }
     }
-    function handleScroll() {
+    function handleScroll(e) {
+      if (sortMenuRef.current && sortMenuRef.current.contains(e.target)) return
       setSortMenuOpen(false)
     }
     document.addEventListener('mousedown', handleClickOutside)
