@@ -20,7 +20,7 @@ import PivotDetailPanel from './PivotDetailPanel.jsx'
 
 import PotatoStorage from './PotatoStorage.jsx'
 
-import PotatoStorageIcon from './PotatoStorageIcon.jsx'
+import potatoStorageLogo from './potato-storage-logo.jpg'
 
 const DAYS = [
   { k: 'mon', en: 'Mon' }, { k: 'tue', en: 'Tue' }, { k: 'wed', en: 'Wed' },
@@ -494,9 +494,7 @@ export default function App() {
             onClick={() => setPage('potato-storage')}
             style={{ cursor: 'pointer', width: '160px', aspectRatio: '1 / 1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
           >
-            <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#FAEEDA', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <PotatoStorageIcon />
-            </div>
+            <img src={potatoStorageLogo} alt="Potato Storage" style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover' }} />
             <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato storage</div>
           </div>
         </div>
