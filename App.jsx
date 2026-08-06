@@ -18,7 +18,9 @@ import PotatoStorage from './PotatoStorage.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
 
-import aioLogo from './aio-logo.png'
+import aioLogoFull from './aio-logo-full.png'
+
+import aioLogoIcon from './aio-logo-icon.png'
 
 import PivotIcon from './PivotIcon.jsx'
 
@@ -496,7 +498,11 @@ export default function App() {
       )}
       <header className="topbar">
         <div className="brand" onClick={() => setPage('home')} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <img src={aioLogo} alt="AIO — All In One" style={{ height: '52px' }} />
+          <img
+            src={page === 'home' ? aioLogoFull : aioLogoIcon}
+            alt="AIO — All In One"
+            style={{ height: page === 'home' ? '52px' : '40px' }}
+          />
           <span className={`status ${online ? 'online' : 'offline'}`}>
             {online ? 'Online' : 'Offline — changes will sync automatically'}
           </span>
