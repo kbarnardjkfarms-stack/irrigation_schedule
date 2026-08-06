@@ -14,13 +14,13 @@ import LiveData from './LiveData.jsx'
 
 import Login from './Login.jsx'
 
-import PivotIcon from './PivotIcon.jsx'
-
-import PivotDetailPanel from './PivotDetailPanel.jsx'
-
 import PotatoStorage from './PotatoStorage.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
+
+import PivotIcon from './PivotIcon.jsx'
+
+import PivotDetailPanel from './PivotDetailPanel.jsx'
 
 const DAYS = [
   { k: 'mon', en: 'Mon' }, { k: 'tue', en: 'Tue' }, { k: 'wed', en: 'Wed' },
@@ -143,7 +143,7 @@ export default function App() {
   } = useRegisterSW()
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
-  const [page, setPage] = useState('home') // 'home' | 'irrigation' | 'potato-storage' — more modules join this list later
+  const [page, setPage] = useState('home') // 'home', 'irrigation', or 'potato-storage' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
   const [online, setOnline] = useState(navigator.onLine)
@@ -471,7 +471,7 @@ export default function App() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, 160px)', gap: '16px', padding: '24px' }}>
           <div
             onClick={() => setPage('irrigation')}
-            style={{ cursor: 'pointer', width: '160px', aspectRatio: '1 / 1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
           >
             <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#E6F1FB', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <svg width="56" height="56" viewBox="0 0 48 48">
@@ -492,7 +492,7 @@ export default function App() {
           </div>
           <div
             onClick={() => setPage('potato-storage')}
-            style={{ cursor: 'pointer', width: '160px', aspectRatio: '1 / 1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
           >
             <img src={potatoStorageLogo} alt="Potato Storage" style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover' }} />
             <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato storage</div>
