@@ -166,6 +166,7 @@ export default function App() {
   const [sortBy, setSortBy] = useState('field')
   const [sortDir, setSortDir] = useState('asc')
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
+  const [sortMenuPos, setSortMenuPos] = useState({ top: 0, left: 0 })
   const sortMenuRef = useRef(null)
   const [cropFilter, setCropFilter] = useState(new Set())
   const [statusFilter, setStatusFilter] = useState(new Set())
@@ -231,8 +232,15 @@ export default function App() {
         setSortMenuOpen(false)
       }
     }
+    function handleScroll() {
+      setSortMenuOpen(false)
+    }
     document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    window.addEventListener('scroll', handleScroll, true)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      window.removeEventListener('scroll', handleScroll, true)
+    }
   }, [sortMenuOpen])
 
   useEffect(() => {
@@ -673,48 +681,22 @@ export default function App() {
                       <button
                         className="sort-chevron"
                         aria-label="Sort and filter options"
-                        onClick={(e) => { e.stopPropagation(); setSortMenuOpen((o) => !o) }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (sortMenuOpen) {
+                            setSortMenuOpen(false)
+                          } else {
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            setSortMenuPos({ top: rect.bottom + 4, left: rect.left })
+                            setSortMenuOpen(true)
+                          }
+                        }}
                       >▾</button>
                       {!(sortBy === 'field' && sortDir === 'asc' && cropFilter.size === 0 && statusFilter.size === 0) && (
                         <button
                           className="clear-sort-btn"
                           onClick={(e) => { e.stopPropagation(); setSortBy('field'); setSortDir('asc'); setCropFilter(new Set()); setStatusFilter(new Set()) }}
                         >Clear all</button>
-                      )}
-                      {sortMenuOpen && (
-                        <div className="sort-menu" ref={sortMenuRef} onClick={(e) => e.stopPropagation()}>
-                          <div className="sort-menu-label">Sort by</div>
-                          <div className="sort-menu-group">
-                            {[['field', 'Field'], ['crop', 'Crop'], ['pivot', 'Pivot status']].map(([val, lbl]) => (
-                              <button key={val} className={sortBy === val ? 'active' : ''} onClick={() => setSortBy(val)}>{lbl}</button>
-                            ))}
-                          </div>
-                          <div className="sort-menu-label">Order</div>
-                          <div className="sort-menu-group row">
-                            {[['asc', 'A → Z'], ['desc', 'Z → A']].map(([val, lbl]) => (
-                              <button key={val} className={sortDir === val ? 'active' : ''} onClick={() => setSortDir(val)}>{lbl}</button>
-                            ))}
-                          </div>
-                          <div className="sort-menu-divider" />
-                          <div className="sort-menu-label">Filter by crop</div>
-                          <div className="sort-menu-checklist">
-                            {cropOptions.map((crop) => (
-                              <label key={crop}>
-                                <input type="checkbox" checked={cropFilter.has(crop)} onChange={() => toggleCropFilter(crop)} />
-                                {crop}
-                              </label>
-                            ))}
-                          </div>
-                          <div className="sort-menu-label">Filter by pivot status</div>
-                          <div className="sort-menu-checklist">
-                            {[[0, 'Running'], [1, 'Stopped'], [2, 'No pivot']].map(([val, lbl]) => (
-                              <label key={val}>
-                                <input type="checkbox" checked={statusFilter.has(val)} onChange={() => toggleStatusFilter(val)} />
-                                {lbl}
-                              </label>
-                            ))}
-                          </div>
-                        </div>
                       )}
                     </div>
                   </th>
@@ -832,6 +814,47 @@ export default function App() {
           style={{ position: 'fixed', top: pivotPanelPos.top, left: pivotPanelPos.left, zIndex: 1000, boxShadow: '0 6px 16px rgba(0,0,0,0.12)' }}
         >
           <PivotDetailPanel pivot={pivotsByGuid[pivotGuidByFieldId[expandedPivotFieldId]]} />
+        </div>,
+        document.body
+      )}
+      {sortMenuOpen && createPortal(
+        <div
+          className="sort-menu"
+          ref={sortMenuRef}
+          onClick={(e) => e.stopPropagation()}
+          style={{ position: 'fixed', top: sortMenuPos.top, left: sortMenuPos.left, zIndex: 1000 }}
+        >
+          <div className="sort-menu-label">Sort by</div>
+          <div className="sort-menu-group">
+            {[['field', 'Field'], ['crop', 'Crop'], ['pivot', 'Pivot status']].map(([val, lbl]) => (
+              <button key={val} className={sortBy === val ? 'active' : ''} onClick={() => setSortBy(val)}>{lbl}</button>
+            ))}
+          </div>
+          <div className="sort-menu-label">Order</div>
+          <div className="sort-menu-group row">
+            {[['asc', 'A → Z'], ['desc', 'Z → A']].map(([val, lbl]) => (
+              <button key={val} className={sortDir === val ? 'active' : ''} onClick={() => setSortDir(val)}>{lbl}</button>
+            ))}
+          </div>
+          <div className="sort-menu-divider" />
+          <div className="sort-menu-label">Filter by crop</div>
+          <div className="sort-menu-checklist">
+            {cropOptions.map((crop) => (
+              <label key={crop}>
+                <input type="checkbox" checked={cropFilter.has(crop)} onChange={() => toggleCropFilter(crop)} />
+                {crop}
+              </label>
+            ))}
+          </div>
+          <div className="sort-menu-label">Filter by pivot status</div>
+          <div className="sort-menu-checklist">
+            {[[0, 'Running'], [1, 'Stopped'], [2, 'No pivot']].map(([val, lbl]) => (
+              <label key={val}>
+                <input type="checkbox" checked={statusFilter.has(val)} onChange={() => toggleStatusFilter(val)} />
+                {lbl}
+              </label>
+            ))}
+          </div>
         </div>,
         document.body
       )}
