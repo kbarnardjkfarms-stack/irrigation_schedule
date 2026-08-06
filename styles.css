@@ -96,7 +96,7 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .sort-chevron { width: 20px; height: 20px; padding: 0; border-radius: 4px; font-size: 10px; display: flex; align-items: center; justify-content: center; }
 .clear-sort-btn { font-size: 10px; padding: 2px 6px; border-radius: 4px; }
 .sort-menu {
-  position: absolute; top: 26px; left: 0; z-index: 6; background: #fff;
+  z-index: 6; background: #fff;
   border: 0.5px solid #ddd8cc; border-radius: 10px; padding: 10px; width: 190px;
   max-height: 320px; overflow-y: auto;
   box-shadow: 0 4px 12px rgba(0,0,0,0.12);
