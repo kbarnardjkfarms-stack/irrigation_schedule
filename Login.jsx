@@ -1,13 +1,12 @@
 import { useState } from 'react'
 import { signInWithEmailAndPassword } from 'firebase/auth'
 import { auth } from './firebase.js'
-
+import aioLogoFull from './aio-logo-full.png'
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
-
   async function handleSubmit(e) {
     e.preventDefault()
     setError(null)
@@ -24,7 +23,6 @@ export default function Login() {
       setLoading(false)
     }
   }
-
   return (
     <div style={{
       display: 'flex',
@@ -47,8 +45,11 @@ export default function Login() {
           boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
         }}
       >
-        <h1 style={{ margin: '0 0 8px', fontSize: '20px' }}>AIO</h1>
-
+        <img
+          src={aioLogoFull}
+          alt="AIO — All In One"
+          style={{ width: '100%', maxWidth: '220px', margin: '0 auto 8px', display: 'block' }}
+        />
         <input
           type="email"
           placeholder="Email"
@@ -67,9 +68,7 @@ export default function Login() {
           required
           style={{ padding: '10px', fontSize: '15px', borderRadius: '8px', border: '1px solid #ccc' }}
         />
-
         {error && <p style={{ color: '#A32D2D', fontSize: '13px', margin: 0 }}>{error}</p>}
-
         <button
           type="submit"
           disabled={loading}
