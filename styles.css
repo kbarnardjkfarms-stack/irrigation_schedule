@@ -97,7 +97,8 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .clear-sort-btn { font-size: 10px; padding: 2px 6px; border-radius: 4px; }
 .sort-menu {
   position: absolute; top: 26px; left: 0; z-index: 6; background: #fff;
-  border: 0.5px solid #ddd8cc; border-radius: 10px; padding: 10px; width: 180px;
+  border: 0.5px solid #ddd8cc; border-radius: 10px; padding: 10px; width: 190px;
+  max-height: 320px; overflow-y: auto;
   box-shadow: 0 4px 12px rgba(0,0,0,0.12);
 }
 .sort-menu-label { font-size: 10px; color: #888; margin-bottom: 4px; }
@@ -105,6 +106,10 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .sort-menu-group button { text-align: left; }
 .sort-menu-group.row { flex-direction: row; margin-bottom: 0; }
 .sort-menu-group.row button { flex: 1; text-align: center; }
+.sort-menu-divider { border-top: 0.5px solid #ddd8cc; margin: 10px 0; }
+.sort-menu-checklist { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.sort-menu-checklist label { display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; }
+.sort-menu-checklist input { margin: 0; }
 .crop-badge { font-size: 9px; font-weight: 500; padding: 1px 5px; border-radius: 4px; }
 .gpm-flag {
   display: inline-block; margin-left: 6px; font-size: 9px; font-weight: 700;
