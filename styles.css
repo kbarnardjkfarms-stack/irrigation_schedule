@@ -41,8 +41,8 @@ button.save {
 }
 
 .topbar {
-  background: #2f5233;
-  color: white;
+  background: #DEEAD2;
+  color: #3c5a3f;
   padding: 12px 16px;
   border-radius: 10px;
   margin-bottom: 10px;
@@ -52,9 +52,8 @@ button.save {
   flex-wrap: wrap;
   gap: 8px;
 }
-.brand h1 { font-size: 1.1rem; margin: 0; }
-.status { font-size: 0.75rem; opacity: 0.9; display: block; }
-.status.offline { color: #ffd9a0; font-weight: 600; }
+.status { font-size: 0.75rem; color: #5c7a5f; display: block; }
+.status.offline { color: #854F0B; font-weight: 600; }
 .name-input { padding: 6px 10px; border-radius: 6px; border: none; font-size: 0.85rem; }
 
 .week-nav {
