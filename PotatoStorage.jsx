@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import {
   Warehouse, Thermometer, ClipboardCheck, Package, TrendingDown, Map as MapIcon,
-  Plus, ChevronRight, MapPin, Gauge, BarChart3, AlertTriangle, Check, Layers, Users, Sprout, Building2,
+  Plus, ChevronRight, MapPin, Gauge, BarChart3, AlertTriangle, Check, Layers, Users, Sprout, Building2, FlaskConical,
 } from "lucide-react";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db } from "./firebase.js"; // AIO's existing Firebase project — same login, no second sign-in
@@ -163,8 +163,14 @@ const DEFAULT_VARIETIES = [
   "Burbank", "Ranger", "Dakota", "Clearwater", "Teton", "Norkotah", "Reveille",
   "G3 Burbank", "G3 Reveille", "Ciklamen", "Nordaana", "907-15", "9426", "Gala",
 ];
+const PRODUCTS_KEY = "norland-products-v1";
+const DEFAULT_PRODUCTS = [{ id: "prod-sproutnip", name: "Sprout Nip", restrictedCustomers: [] }];
+const APPLICATORS_KEY = "norland-applicators-v1";
+const DEFAULT_APPLICATORS = [];
 
-const emptyZoneData = (zoneId) => ({ tubeChecks: [], cwtRuns: SEED_RUNS[zoneId] ? [...SEED_RUNS[zoneId]] : [] });
+const emptyZoneData = (zoneId) => ({
+  tubeChecks: [], cwtRuns: SEED_RUNS[zoneId] ? [...SEED_RUNS[zoneId]] : [], sproutApplications: [],
+});
 const emptyBayData = (bay) => ({
   zones: Object.fromEntries(bay.zones.map((z) => [z.id, emptyZoneData(z.id)])),
   tempLogs: [],
@@ -868,6 +874,12 @@ function varietyOptions(varieties, currentValue) {
   return opts;
 }
 
+function applicatorOptions(applicators, currentValue) {
+  const opts = ["Unassigned", ...applicators];
+  if (currentValue && !opts.includes(currentValue)) opts.push(currentValue);
+  return opts;
+}
+
 function NewSeasonPrompt({ activeSeasonLabel, onCancel, onConfirm }) {
   const [label, setLabel] = useState("");
   return (
@@ -1381,6 +1393,205 @@ function InspectionsTab({ bays, inspections, onAdd, readOnly }) {
               </div>
             );
           })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------
+   Sprout Nip tab — product library (with per-customer restriction
+   rules), applicator roster, application logging per field, and
+   history. Applications are season-scoped like everything else in
+   bayData, so they archive and reset with the season.
+----------------------------------------------------------------*/
+function SproutNipTab({ bays, dataById, customers, products, applicators, readOnly, onAddSproutApplication, onAddProduct, onUpdateProductRestrictions, onAddApplicator }) {
+  const [bayId, setBayId] = useState(bays[0]?.id);
+  const bay = bays.find((b) => b.id === bayId);
+  const [zoneId, setZoneId] = useState(bay?.zones[0]?.id);
+  useEffect(() => { setZoneId(bays.find((b) => b.id === bayId)?.zones[0]?.id); }, [bayId, bays]);
+  const zone = bay?.zones.find((z) => z.id === zoneId);
+  const zoneData = dataById[bayId]?.zones?.[zoneId] || { sproutApplications: [] };
+
+  const [productId, setProductId] = useState(products[0]?.id || "");
+  useEffect(() => { if (!products.find((p) => p.id === productId)) setProductId(products[0]?.id || ""); }, [products, productId]);
+  const [date, setDate] = useState(todayStr());
+  const [rate, setRate] = useState("");
+  const [rateUnit, setRateUnit] = useState("fl oz/cwt");
+  const [cwtApplied, setCwtApplied] = useState("");
+  const [applicator, setApplicator] = useState("Unassigned");
+  const [appError, setAppError] = useState("");
+
+  const selectedProduct = products.find((p) => p.id === productId);
+  const blocked = !!(selectedProduct && zone && selectedProduct.restrictedCustomers.includes(zone.customer));
+
+  const submitApplication = () => {
+    if (readOnly) return;
+    if (blocked) { setAppError(`${selectedProduct.name} is restricted for ${zone.customer} — pick a different product or field.`); return; }
+    if (!productId || !rate || !cwtApplied) { setAppError("Product, rate, and cwt applied are all required."); return; }
+    onAddSproutApplication(bayId, zoneId, {
+      id: uid("app"), date, productId, productName: selectedProduct?.name || "Unknown product",
+      rate: Number(rate), rateUnit, cwtApplied: Number(cwtApplied), applicator,
+    });
+    setRate(""); setCwtApplied(""); setAppError("");
+  };
+
+  const [newProductName, setNewProductName] = useState("");
+  const [productError, setProductError] = useState("");
+  const addProduct = () => {
+    const trimmed = newProductName.trim();
+    if (!trimmed) return;
+    if (products.some((p) => p.name.toLowerCase() === trimmed.toLowerCase())) { setProductError(`"${trimmed}" is already on the list.`); return; }
+    onAddProduct({ id: uid("prod"), name: trimmed, restrictedCustomers: [] });
+    setNewProductName(""); setProductError("");
+  };
+
+  const [newApplicatorName, setNewApplicatorName] = useState("");
+  const addApplicator = () => {
+    const trimmed = newApplicatorName.trim();
+    if (!trimmed) return;
+    onAddApplicator(trimmed);
+    setNewApplicatorName("");
+  };
+
+  const toggleRestriction = (product, customerName) => {
+    const next = product.restrictedCustomers.includes(customerName)
+      ? product.restrictedCustomers.filter((c) => c !== customerName)
+      : [...product.restrictedCustomers, customerName];
+    onUpdateProductRestrictions(product.id, next);
+  };
+
+  const history = [...(zoneData.sproutApplications || [])].reverse();
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      {/* Product library */}
+      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
+          <FlaskConical size={16} color="#f2c14e" /> Product library
+        </div>
+        <div style={{ fontSize: 12, color: "#8790a3", marginBottom: 12 }}>
+          Check a customer to block that product from ever being logged against their potatoes.
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {products.map((p) => (
+            <div key={p.id} style={{ background: "#0e1420", border: "1px solid #232d40", borderRadius: 8, padding: 12 }}>
+              <div style={{ fontWeight: 700, color: "#eef1f6", marginBottom: 8 }}>{p.name}</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {customers.map((c) => {
+                  const isRestricted = p.restrictedCustomers.includes(c);
+                  return (
+                    <button key={c} onClick={() => toggleRestriction(p, c)} style={{
+                      border: `1px solid ${isRestricted ? "#e08787" : "#2b3549"}`,
+                      background: isRestricted ? "rgba(224,135,135,0.14)" : "transparent",
+                      color: isRestricted ? "#e08787" : "#8790a3",
+                      borderRadius: 20, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600,
+                      display: "flex", alignItems: "center", gap: 4,
+                    }}>
+                      {isRestricted && <AlertTriangle size={11} />} {c}
+                    </button>
+                  );
+                })}
+                {customers.length === 0 && <span style={{ fontSize: 12, color: "#5b6478" }}>Add customers first to set restrictions.</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <input value={newProductName} onChange={(e) => { setNewProductName(e.target.value); setProductError(""); }}
+            onKeyDown={(e) => e.key === "Enter" && addProduct()} style={{ ...inputStyle, flex: 1 }} placeholder="Add a product, e.g. 1,4 SIGHT" />
+          <Button onClick={addProduct}><Plus size={14} /> Add</Button>
+        </div>
+        {productError && <div style={{ fontSize: 12, color: "#e08787", marginTop: 6 }}>{productError}</div>}
+      </div>
+
+      {/* Applicator companies */}
+      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Applicator companies</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          {applicators.map((a) => <span key={a} style={{ fontSize: 12.5, color: "#c7cede", background: "#0e1420", border: "1px solid #232d40", borderRadius: 20, padding: "5px 12px" }}>{a}</span>)}
+          {applicators.length === 0 && <span style={{ fontSize: 12, color: "#5b6478" }}>No applicator companies added yet.</span>}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={newApplicatorName} onChange={(e) => setNewApplicatorName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addApplicator()} style={{ ...inputStyle, flex: 1 }} placeholder="Add a company, e.g. Western Ag Applicators" />
+          <Button onClick={addApplicator}><Plus size={14} /> Add</Button>
+        </div>
+      </div>
+
+      {/* Log application */}
+      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Log an application</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Field label="Bay">
+            <select value={bayId} onChange={(e) => setBayId(e.target.value)} style={inputStyle}>
+              {bays.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Field">
+            <select value={zoneId} onChange={(e) => setZoneId(e.target.value)} style={inputStyle}>
+              {(bay?.zones || []).map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Product">
+            <select value={productId} onChange={(e) => { setProductId(e.target.value); setAppError(""); }} style={inputStyle}>
+              {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Date"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} /></Field>
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Field label="Rate"><input type="number" min="0" value={rate} onChange={(e) => setRate(e.target.value)} style={{ ...inputStyle, width: 110 }} /></Field>
+          <Field label="Rate unit"><input value={rateUnit} onChange={(e) => setRateUnit(e.target.value)} style={{ ...inputStyle, width: 130 }} /></Field>
+          <Field label="Cwt applied to"><input type="number" min="0" value={cwtApplied} onChange={(e) => setCwtApplied(e.target.value)} style={{ ...inputStyle, width: 140 }} /></Field>
+          <Field label="Applicator company">
+            <select value={applicator} onChange={(e) => setApplicator(e.target.value)} style={inputStyle}>
+              {applicatorOptions(applicators, applicator).map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </Field>
+        </div>
+
+        {zone && (
+          <div style={{ fontSize: 12.5, color: "#8790a3", margin: "4px 0 10px" }}>
+            {zone.name} is <ColorDot color={getCustomerColor(zone.customer)} size={7} /> <b style={{ color: "#c7cede" }}>{zone.customer}</b>'s potatoes.
+          </div>
+        )}
+        {blocked && (
+          <div style={{ fontSize: 12.5, color: "#e08787", display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+            <AlertTriangle size={14} /> {selectedProduct.name} is restricted for {zone.customer} — this can't be logged until you change the product or the field.
+          </div>
+        )}
+        {appError && !blocked && <div style={{ fontSize: 12.5, color: "#e08787", marginBottom: 10 }}>{appError}</div>}
+        <Button onClick={submitApplication} disabled={readOnly || blocked}><Plus size={14} /> Log application</Button>
+      </div>
+
+      {/* History */}
+      <div>
+        <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>{bay?.name} — {zone?.name} application history</div>
+        <div style={{ overflowX: "auto", border: "1px solid #232d40", borderRadius: 10 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: "#141b28", textAlign: "left" }}>
+                <th style={thStyle}>Date</th>
+                <th style={thStyle}>Product</th>
+                <th style={thStyle}>Rate</th>
+                <th style={thStyle}>Cwt applied</th>
+                <th style={thStyle}>Applicator</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.length === 0 && <tr><td colSpan={5} style={{ ...tdStyle, color: "#5b6478" }}>No applications logged for this field yet.</td></tr>}
+              {history.map((a) => (
+                <tr key={a.id} style={{ borderTop: "1px solid #232d40" }}>
+                  <td style={tdStyle}><b style={{ color: "#eef1f6" }}>{a.date}</b></td>
+                  <td style={tdStyle}>{a.productName}</td>
+                  <td style={tdStyle}>{a.rate} {a.rateUnit}</td>
+                  <td style={tdStyle}>{fmt(a.cwtApplied)} cwt</td>
+                  <td style={tdStyle}>{a.applicator}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -1948,6 +2159,8 @@ export default function PotatoStorage() {
   const [inspections, setInspections] = useState([]);
   const [customers, setCustomers] = useState(DEFAULT_CUSTOMERS);
   const [varieties, setVarieties] = useState(DEFAULT_VARIETIES);
+  const [products, setProducts] = useState(DEFAULT_PRODUCTS);
+  const [applicators, setApplicators] = useState(DEFAULT_APPLICATORS);
   const [seasons, setSeasons] = useState(DEFAULT_SEASONS);
   const [selectedSeasonId, setSelectedSeasonId] = useState(DEFAULT_SEASONS[0].id);
   const [loaded, setLoaded] = useState(false);
@@ -1991,6 +2204,16 @@ export default function PotatoStorage() {
       const varList = varList0 && Array.isArray(varList0) && varList0.length ? varList0 : DEFAULT_VARIETIES;
       if (!varList0) await saveJSON(VARIETIES_KEY, DEFAULT_VARIETIES);
       setVarieties(varList);
+
+      const prods0 = await loadJSON(PRODUCTS_KEY, null);
+      const prodList = prods0 && Array.isArray(prods0) && prods0.length ? prods0 : DEFAULT_PRODUCTS;
+      if (!prods0) await saveJSON(PRODUCTS_KEY, DEFAULT_PRODUCTS);
+      setProducts(prodList);
+
+      const apps0 = await loadJSON(APPLICATORS_KEY, null);
+      const appList = apps0 && Array.isArray(apps0) ? apps0 : DEFAULT_APPLICATORS;
+      if (!apps0) await saveJSON(APPLICATORS_KEY, DEFAULT_APPLICATORS);
+      setApplicators(appList);
 
       const seasons0 = await loadJSON(SEASONS_KEY, null);
       const seasonList = seasons0 && Array.isArray(seasons0) && seasons0.length ? seasons0 : DEFAULT_SEASONS;
@@ -2114,6 +2337,35 @@ export default function PotatoStorage() {
     });
   }, [isReadOnly]);
 
+  const onAddProduct = useCallback((product) => {
+    setProducts((prev) => {
+      const next = [...prev, product];
+      saveJSON(PRODUCTS_KEY, next);
+      return next;
+    });
+  }, []);
+
+  const onUpdateProductRestrictions = useCallback((productId, restrictedCustomers) => {
+    setProducts((prev) => {
+      const next = prev.map((p) => p.id === productId ? { ...p, restrictedCustomers } : p);
+      saveJSON(PRODUCTS_KEY, next);
+      return next;
+    });
+  }, []);
+
+  const onAddApplicator = useCallback((name) => {
+    setApplicators((prev) => {
+      if (prev.some((a) => a.toLowerCase() === name.toLowerCase())) return prev;
+      const next = [...prev, name];
+      saveJSON(APPLICATORS_KEY, next);
+      return next;
+    });
+  }, []);
+
+  const onAddSproutApplication = useCallback((bayId, zoneId, entry) => {
+    updateZoneData(bayId, zoneId, (zd) => ({ ...zd, sproutApplications: [...(zd.sproutApplications || []), entry] }));
+  }, [updateZoneData]);
+
   const onAddLocation = useCallback((location) => {
     setLocations((prev) => {
       const next = [...prev, location];
@@ -2212,7 +2464,7 @@ export default function PotatoStorage() {
     { id: "customers", label: "Customers", icon: Users },
     { id: "varieties", label: "Varieties", icon: Sprout },
     { id: "temp", label: "Temperature", icon: Thermometer },
-    { id: "checks", label: "Inspections", icon: ClipboardCheck },
+    { id: "sproutnip", label: "Sprout Nip", icon: FlaskConical },
   ];
 
   if (!loaded) {
@@ -2374,10 +2626,12 @@ export default function PotatoStorage() {
           </div>
         )}
 
-        {tab === "checks" && (
+        {tab === "sproutnip" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
-              <InspectionsTab bays={locationBays} inspections={displayInspections} onAdd={onAddInspection} readOnly={isReadOnly} />
+              <SproutNipTab bays={locationBays} dataById={displayDataById} customers={customers} products={products} applicators={applicators}
+                readOnly={isReadOnly} onAddSproutApplication={onAddSproutApplication} onAddProduct={onAddProduct}
+                onUpdateProductRestrictions={onUpdateProductRestrictions} onAddApplicator={onAddApplicator} />
             )}
           </div>
         )}
