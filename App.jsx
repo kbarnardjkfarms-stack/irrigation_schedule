@@ -167,6 +167,26 @@ export default function App() {
   const [sortDir, setSortDir] = useState('asc')
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const sortMenuRef = useRef(null)
+  const [cropFilter, setCropFilter] = useState(new Set())
+  const [statusFilter, setStatusFilter] = useState(new Set())
+
+  function toggleCropFilter(crop) {
+    setCropFilter((prev) => {
+      const next = new Set(prev)
+      if (next.has(crop)) next.delete(crop)
+      else next.add(crop)
+      return next
+    })
+  }
+
+  function toggleStatusFilter(status) {
+    setStatusFilter((prev) => {
+      const next = new Set(prev)
+      if (next.has(status)) next.delete(status)
+      else next.add(status)
+      return next
+    })
+  }
   const [baseFieldsById, setBaseFieldsById] = useState({})
   const [seasonDataByField, setSeasonDataByField] = useState({})
   const [pivotGuidByFieldId, setPivotGuidByFieldId] = useState({})
@@ -355,6 +375,8 @@ export default function App() {
         }
       })
       .filter((f) => selectedFarmId === 'all' || String(f.farmId) === String(selectedFarmId))
+      .filter((f) => cropFilter.size === 0 || cropFilter.has(f.crop))
+      .filter((f) => statusFilter.size === 0 || statusFilter.has(f.pivotRank))
       .sort((a, b) => {
         let cmp
         if (sortBy === 'crop') {
@@ -366,7 +388,19 @@ export default function App() {
         }
         return sortDir === 'desc' ? -cmp : cmp
       })
-  }, [baseFieldsById, seasonDataByField, selectedFarmId, sortBy, sortDir, pivotGuidByFieldId, pivotsByGuid])
+  }, [baseFieldsById, seasonDataByField, selectedFarmId, sortBy, sortDir, pivotGuidByFieldId, pivotsByGuid, cropFilter, statusFilter])
+
+  // Every distinct crop currently in season data, for the "Filter by crop"
+  // checkbox list. Deliberately independent of cropFilter/statusFilter
+  // itself, so the checkbox options don't shrink as you check things —
+  // same behavior as Excel's own column filter dropdown.
+  const cropOptions = useMemo(() => {
+    const set = new Set()
+    Object.values(seasonDataByField).forEach((sd) => {
+      if (sd && sd.cropName) set.add(sd.cropName.toUpperCase())
+    })
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [seasonDataByField])
 
   async function saveEvents(fieldId, events) {
     await setDoc(doc(db, 'weeks', weekId, 'events', fieldId), { events })
@@ -638,14 +672,14 @@ export default function App() {
                       <span>Field / crop</span>
                       <button
                         className="sort-chevron"
-                        aria-label="Sort options"
+                        aria-label="Sort and filter options"
                         onClick={(e) => { e.stopPropagation(); setSortMenuOpen((o) => !o) }}
                       >▾</button>
-                      {!(sortBy === 'field' && sortDir === 'asc') && (
+                      {!(sortBy === 'field' && sortDir === 'asc' && cropFilter.size === 0 && statusFilter.size === 0) && (
                         <button
                           className="clear-sort-btn"
-                          onClick={(e) => { e.stopPropagation(); setSortBy('field'); setSortDir('asc') }}
-                        >Clear sort</button>
+                          onClick={(e) => { e.stopPropagation(); setSortBy('field'); setSortDir('asc'); setCropFilter(new Set()); setStatusFilter(new Set()) }}
+                        >Clear all</button>
                       )}
                       {sortMenuOpen && (
                         <div className="sort-menu" ref={sortMenuRef} onClick={(e) => e.stopPropagation()}>
@@ -659,6 +693,25 @@ export default function App() {
                           <div className="sort-menu-group row">
                             {[['asc', 'A → Z'], ['desc', 'Z → A']].map(([val, lbl]) => (
                               <button key={val} className={sortDir === val ? 'active' : ''} onClick={() => setSortDir(val)}>{lbl}</button>
+                            ))}
+                          </div>
+                          <div className="sort-menu-divider" />
+                          <div className="sort-menu-label">Filter by crop</div>
+                          <div className="sort-menu-checklist">
+                            {cropOptions.map((crop) => (
+                              <label key={crop}>
+                                <input type="checkbox" checked={cropFilter.has(crop)} onChange={() => toggleCropFilter(crop)} />
+                                {crop}
+                              </label>
+                            ))}
+                          </div>
+                          <div className="sort-menu-label">Filter by pivot status</div>
+                          <div className="sort-menu-checklist">
+                            {[[0, 'Running'], [1, 'Stopped'], [2, 'No pivot']].map(([val, lbl]) => (
+                              <label key={val}>
+                                <input type="checkbox" checked={statusFilter.has(val)} onChange={() => toggleStatusFilter(val)} />
+                                {lbl}
+                              </label>
                             ))}
                           </div>
                         </div>
