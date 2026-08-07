@@ -438,7 +438,39 @@ exports.createUser = onCall(async (request) => {
     throw new HttpsError('internal', 'Could not save the profile — account creation rolled back.');
   }
 
-  return { uid: userRecord.uid };
+  // Hand back a one-time setup link alongside the account. Firebase's own
+  // auto-email to corporate inboxes (M365/Workspace) often lands in junk
+  // since it comes from Firebase's shared sending domain, not jkfarms.com —
+  // this link is the fallback: paste it into a text or an email from your
+  // own address instead of relying on the automated one.
+  let link = null;
+  try {
+    link = await admin.auth().generatePasswordResetLink(email);
+  } catch (err) {
+    console.error('generatePasswordResetLink error:', err);
+  }
+
+  return { uid: userRecord.uid, link };
+});
+
+// Generates a fresh one-time setup/password-reset link for an existing
+// team member, without sending anything — for when the automated email
+// got junked and you'd rather hand them the link directly (text, WhatsApp,
+// or an email from your own address). Links expire in about an hour, so
+// this is meant to be generated right before you actually send it, not
+// stockpiled.
+exports.generateSetupLink = onCall(async (request) => {
+  await requireAdminOrOwner(request.auth);
+  const { email } = request.data || {};
+  if (!email) {
+    throw new HttpsError('invalid-argument', 'email is required.');
+  }
+  try {
+    const link = await admin.auth().generatePasswordResetLink(email);
+    return { link };
+  } catch (err) {
+    throw new HttpsError('internal', err.message);
+  }
 });
 
 // Disables (or re-enables) a team member's login without deleting their
