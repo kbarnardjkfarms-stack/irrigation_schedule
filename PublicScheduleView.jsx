@@ -339,6 +339,13 @@ export default function PublicScheduleView({ slug }) {
 
       <div className="table-scroll">
         <table className="watch-table">
+          <colgroup>
+            <col className="watch-col-sticky" />
+            <col className="watch-col-shift" />
+            <col className="watch-col-shift" />
+            <col className="watch-col-shift" />
+            <col className="watch-col-shift" />
+          </colgroup>
           <thead>
             <tr>
               <th className="sticky-col" rowSpan={2}>{t.fieldCrop}</th>
