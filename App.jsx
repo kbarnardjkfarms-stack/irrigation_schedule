@@ -57,6 +57,14 @@ function slugifyFarmName(name) {
   return (name || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 }
 
+const ROLE_LABELS = {
+  admin: 'Admin',
+  owner: 'Owner',
+  farm_manager: 'Farm manager',
+  irrigation_manager: 'Irrigation manager',
+  irrigator: 'Irrigator'
+}
+
 function mondayOf(d) {
   const date = new Date(d)
   const day = date.getDay()
@@ -195,6 +203,21 @@ export default function App() {
     }
     return farms
   }, [farms, userRole, userProfile])
+
+  const myFarmSummary = useMemo(() => {
+    if (userRole === 'admin' || userRole === 'owner') return 'All farms'
+    if (!userProfile || !Array.isArray(userProfile.farmIds) || userProfile.farmIds.length === 0) return '\u2014'
+    return userProfile.farmIds
+      .map((id) => farms.find((f) => String(f.id) === String(id))?.name || id)
+      .join(', ')
+  }, [userRole, userProfile, farms])
+
+  const myInitials = useMemo(() => {
+    const source = (userProfile && userProfile.name) || (user && user.email) || ''
+    const parts = source.trim().split(/\s+/)
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+    return source.slice(0, 2).toUpperCase()
+  }, [userProfile, user])
   const [linkCopied, setLinkCopied] = useState(false)
   const [sortBy, setSortBy] = useState('field')
   const [sortDir, setSortDir] = useState('asc')
@@ -228,6 +251,10 @@ export default function App() {
   const [expandedPivotFieldId, setExpandedPivotFieldId] = useState(null)
   const [pivotPanelPos, setPivotPanelPos] = useState({ top: 0, left: 0 })
   const pivotDetailRef = useRef(null)
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
+  const settingsMenuRef = useRef(null)
+  const profileMenuRef = useRef(null)
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUser(u))
@@ -276,6 +303,15 @@ export default function App() {
       window.removeEventListener('scroll', handleScroll, true)
     }
   }, [sortMenuOpen])
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (settingsMenuRef.current && !settingsMenuRef.current.contains(e.target)) setSettingsMenuOpen(false)
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target)) setProfileMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   useEffect(() => {
     if (!user) { setUserRole(null); setUserProfile(null); return }
@@ -572,8 +608,44 @@ export default function App() {
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: '10px' }}>
-          <span style={{ fontSize: '13px', color: '#888' }}>{user.email}{userRole ? ` · ${userRole}` : ''}</span>
-          <button onClick={handleSignOut}>Sign out</button>
+          {(userRole === 'admin' || userRole === 'owner') && (
+            <div ref={settingsMenuRef} style={{ position: 'relative' }}>
+              <button
+                onClick={() => { setSettingsMenuOpen((o) => !o); setProfileMenuOpen(false) }}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 13.5c.1-.5.1-1 0-1.5l1.9-1.5-2-3.4-2.2.9c-.4-.3-.9-.6-1.4-.8L15.3 5h-3.9l-.4 2.2c-.5.2-1 .5-1.4.8l-2.2-.9-2 3.4 1.9 1.5c-.1.5-.1 1 0 1.5l-1.9 1.5 2 3.4 2.2-.9c.4.3.9.6 1.4.8l.4 2.2h3.9l.4-2.2c.5-.2 1-.5 1.4-.8l2.2.9 2-3.4-1.9-1.5z" />
+                </svg>
+                Settings ▾
+              </button>
+              {settingsMenuOpen && (
+                <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '6px', background: '#fff', border: '0.5px solid #ddd8cc', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.12)', minWidth: '200px', zIndex: 10, overflow: 'hidden' }}>
+                  <button
+                    onClick={() => { setPage('users'); setSettingsMenuOpen(false) }}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
+                  >Users &amp; Permissions</button>
+                </div>
+              )}
+            </div>
+          )}
+          <div ref={profileMenuRef} style={{ position: 'relative' }}>
+            <button
+              onClick={() => { setProfileMenuOpen((o) => !o); setSettingsMenuOpen(false) }}
+              aria-label="Your account"
+              style={{ width: '34px', height: '34px', borderRadius: '50%', background: '#185FA5', color: '#fff', border: 'none', fontWeight: 600, fontSize: '13px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >{myInitials}</button>
+            {profileMenuOpen && (
+              <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '6px', background: '#fff', border: '0.5px solid #ddd8cc', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.12)', minWidth: '220px', zIndex: 10, padding: '14px 16px' }}>
+                <div style={{ fontWeight: 600, fontSize: '14px' }}>{(userProfile && userProfile.name) || user.email}</div>
+                <div style={{ fontSize: '12px', color: '#888', marginBottom: '10px' }}>{user.email}</div>
+                <div style={{ fontSize: '12px', color: '#555', marginBottom: '3px' }}><strong>Role:</strong> {ROLE_LABELS[userRole] || '\u2014'}</div>
+                <div style={{ fontSize: '12px', color: '#555', marginBottom: '12px' }}><strong>Farm:</strong> {myFarmSummary}</div>
+                <button onClick={handleSignOut} style={{ width: '100%' }}>Sign out</button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
       {page === 'home' && (
@@ -606,22 +678,6 @@ export default function App() {
             <img src={potatoStorageLogo} alt="Potato Storage" style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover' }} />
             <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato storage</div>
           </div>
-          {(userRole === 'admin' || userRole === 'owner') && (
-            <div
-              onClick={() => setPage('users')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
-            >
-              <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#EEEDFE', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="#534AB7" strokeWidth="1.8">
-                  <circle cx="9" cy="8" r="3.2" />
-                  <path d="M3.5 20c0-3.3 2.5-5.5 5.5-5.5s5.5 2.2 5.5 5.5" strokeLinecap="round" />
-                  <circle cx="17" cy="8.5" r="2.4" />
-                  <path d="M15.2 14.8c2.4 0.3 4.3 2.3 4.3 5.2" strokeLinecap="round" />
-                </svg>
-              </div>
-              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Team</div>
-            </div>
-          )}
         </div>
       )}
       {page === 'potato-storage' && <PotatoStorage />}
