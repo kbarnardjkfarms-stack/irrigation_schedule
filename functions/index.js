@@ -1,5 +1,5 @@
 const { onSchedule } = require('firebase-functions/v2/scheduler');
-const { onRequest } = require('firebase-functions/v2/https');
+const { onRequest, onCall, HttpsError } = require('firebase-functions/v2/https');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
 admin.initializeApp();
@@ -370,4 +370,92 @@ exports.chirpstackWebhook = onRequest(async (req, res) => {
     console.error('chirpstackWebhook error:', err);
     res.status(500).send('Error processing webhook');
   }
+});
+
+const VALID_ROLES = ['admin', 'owner', 'farm_manager', 'irrigation_manager', 'irrigator'];
+const FARM_SCOPED_ROLES = ['farm_manager', 'irrigation_manager', 'irrigator'];
+
+// Confirms the calling user's own Firestore profile says admin or owner.
+// Used by both functions below instead of trusting anything the client
+// sends about its own permissions.
+async function requireAdminOrOwner(auth) {
+  if (!auth) {
+    throw new HttpsError('unauthenticated', 'Sign in required.');
+  }
+  const snap = await admin.firestore().doc(`users/${auth.uid}`).get();
+  const role = snap.exists ? snap.data().role : null;
+  if (role !== 'admin' && role !== 'owner') {
+    throw new HttpsError('permission-denied', 'Only an Admin or Owner can manage team members.');
+  }
+}
+
+// Creates a team member's login and their permissions profile together.
+// Done server-side (Admin SDK) on purpose: the client SDK's own
+// "create account" call automatically signs the browser into the new
+// account, which would otherwise kick the admin out of their own session
+// mid-task. After this returns, the app sends a normal Firebase
+// "reset password" email from the client — that doubles as this person's
+// first-time "set your password" link, no separate email service needed.
+exports.createUser = onCall(async (request) => {
+  await requireAdminOrOwner(request.auth);
+
+  const { name, email, role, farmIds, canEditSchedule } = request.data || {};
+  if (!name || !email || !role) {
+    throw new HttpsError('invalid-argument', 'Name, email, and role are required.');
+  }
+  if (!VALID_ROLES.includes(role)) {
+    throw new HttpsError('invalid-argument', 'Unrecognized role.');
+  }
+  if (FARM_SCOPED_ROLES.includes(role) && (!Array.isArray(farmIds) || farmIds.length === 0)) {
+    throw new HttpsError('invalid-argument', 'At least one assigned farm is required for this role.');
+  }
+
+  let userRecord;
+  try {
+    userRecord = await admin.auth().createUser({ email, displayName: name });
+  } catch (err) {
+    if (err.code === 'auth/email-already-exists') {
+      throw new HttpsError('already-exists', 'Someone with this email already has an account.');
+    }
+    throw new HttpsError('internal', err.message);
+  }
+
+  const profile = { name, email, role };
+  if (FARM_SCOPED_ROLES.includes(role)) {
+    profile.farmIds = farmIds.map(String);
+  }
+  if (role === 'irrigator') {
+    profile.canEditSchedule = !!canEditSchedule;
+  }
+
+  try {
+    await admin.firestore().doc(`users/${userRecord.uid}`).set(profile);
+  } catch (err) {
+    // Don't leave an orphaned Auth account with no matching profile doc —
+    // that's exactly the silent-revert failure mode already seen once
+    // with a manually-created account (see project notes on Kent's login).
+    await admin.auth().deleteUser(userRecord.uid);
+    throw new HttpsError('internal', 'Could not save the profile — account creation rolled back.');
+  }
+
+  return { uid: userRecord.uid };
+});
+
+// Disables (or re-enables) a team member's login without deleting their
+// history or profile — offboarding someone shouldn't erase who scheduled
+// what. Admin/owner only, same as createUser.
+exports.setUserDisabled = onCall(async (request) => {
+  await requireAdminOrOwner(request.auth);
+
+  const { uid, disabled } = request.data || {};
+  if (!uid || typeof disabled !== 'boolean') {
+    throw new HttpsError('invalid-argument', 'uid and disabled (true/false) are required.');
+  }
+  if (uid === request.auth.uid) {
+    throw new HttpsError('invalid-argument', "You can't disable your own account.");
+  }
+
+  await admin.auth().updateUser(uid, { disabled });
+  await admin.firestore().doc(`users/${uid}`).set({ disabled }, { merge: true });
+  return { ok: true };
 });
