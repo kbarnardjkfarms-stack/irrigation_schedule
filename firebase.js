@@ -5,6 +5,7 @@ import {
   persistentMultipleTabManager
 } from 'firebase/firestore'
 import { getAuth } from 'firebase/auth'
+import { getFunctions } from 'firebase/functions'
 const firebaseConfig = {
   apiKey: 'AIzaSyBOdc9DPdn2YqW3zG87Qzaj50TmteW4iBY',
   authDomain: 'irrigation-schedule-f8b69.firebaseapp.com',
@@ -20,3 +21,4 @@ export const db = initializeFirestore(app, {
   })
 })
 export const auth = getAuth(app)
+export const functions = getFunctions(app)
