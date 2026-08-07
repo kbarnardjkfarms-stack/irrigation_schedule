@@ -1,18 +1,23 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { signInAnonymously } from 'firebase/auth'
 import { collection, collectionGroup, onSnapshot, query, where } from 'firebase/firestore'
 import { auth, db } from './firebase.js'
 import PivotIcon from './PivotIcon.jsx'
+import PivotDetailPanel from './PivotDetailPanel.jsx'
 import aioLogoIcon from './aio-logo-icon.png'
 
-// This page is intentionally self-contained. It duplicates a handful of small
-// pure helpers from App.jsx (BLOCKS, CROP_COLOR, cellState, etc.) rather than
-// importing them, so that editing the main schedule editor can never
-// accidentally break this read-only page or vice versa. If that duplication
-// ever becomes annoying, the fix is to pull these into a shared
-// scheduleHelpers.js that both files import from.
+// This page reuses the real table markup and the real styles.css classes
+// (sticky-col, day-head, shift-head, cell-btn, legend, etc.) so it looks
+// identical to the logged-in schedule — just frozen to 2 days and read-only.
+// It duplicates a handful of small pure helpers from App.jsx (BLOCKS,
+// CROP_COLOR, cellState, etc.) rather than importing them, so editing the
+// main schedule editor can never accidentally break this page or vice versa.
+// If that duplication ever becomes annoying, the fix is pulling these into a
+// shared scheduleHelpers.js that both files import from.
 
 const BLOCKS = { am: { start: 0, end: 12, len: 12 }, pm: { start: 12, end: 24, len: 12 } }
+const DAY_TINTS = ['#C8CCD0', '#B9CCDF']
+function dayTint(dayIdx) { return DAY_TINTS[dayIdx % 2] }
 
 const CROP_COLOR = {
   POTATO: { bg: '#D6B48C', fg: '#4A2E12' }, POTATOES: { bg: '#D6B48C', fg: '#4A2E12' },
@@ -48,7 +53,7 @@ function fmtHour(h) {
   return hr12 + (mins ? ':' + String(mins).padStart(2, '0') : '') + period
 }
 
-function fmtDate(d) { return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) }
+function fmtShort(d) { return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }
 
 function onIntervals(events) {
   const evs = [...events].sort((a, b) => a.ts - b.ts)
@@ -104,7 +109,7 @@ function styleForState(state, additive) {
   if (state === 'coming-on') base = '#3B6D11'
   else if (state === 'full') base = '#185FA5'
   else if (state === 'coming-off') base = '#A32D2D'
-  else return { background: '#efefef', color: '#999' }
+  else return { background: '#f4f2ec', color: '#888' }
   if (additive === 'fert') return { background: `linear-gradient(135deg, ${base} 50%, #EF9F27 50%)`, color: '#fff' }
   if (additive === 'chem') return { background: `linear-gradient(135deg, ${base} 50%, #D85A30 50%)`, color: '#fff' }
   return { background: base, color: '#fff' }
@@ -113,44 +118,22 @@ function styleForState(state, additive) {
 const STRINGS = {
   en: {
     waterOrder: 'Water order', viewOnly: 'View only', today: 'Today', tomorrow: 'Tomorrow',
-    timer: 'Timer', noPivot: 'No pivot', on: 'ON', running: '', off: 'OFF AT', stop: 'STOP',
-    sis: 'OFF AT SIS', none: '\u2014', loading: 'Loading\u2026',
+    fieldCrop: 'Field / crop', comingOn: 'Coming on', onWhole: 'On whole block', comingOff: 'Coming off',
+    fert: '+ Fert', chem: '+ Chem', stop: 'STOP', off: 'OFF AT', on: 'ON',
+    none: '\u2013', loading: 'Loading\u2026',
     notFound: 'Farm not found. Check the link with your farm manager.',
     authError: "This page isn't working right now \u2014 ask your farm manager to check the setup.",
     connecting: 'Connecting\u2026'
   },
   es: {
     waterOrder: 'Horario de agua', viewOnly: 'Solo lectura', today: 'Hoy', tomorrow: 'Ma\u00f1ana',
-    timer: 'Temporizador', noPivot: 'Sin pivote', on: 'ENCIENDE', running: '', off: 'APAGA A LAS', stop: 'PARAR',
-    sis: 'APAGA EN SIS', none: '\u2014', loading: 'Cargando\u2026',
+    fieldCrop: 'Campo / cultivo', comingOn: 'Encendiendo', onWhole: 'Corriendo todo', comingOff: 'Apagando',
+    fert: '+ Fert', chem: '+ Qu\u00edm', stop: 'PARAR', off: 'APAGA A LAS', on: 'ENCIENDE',
+    none: '\u2013', loading: 'Cargando\u2026',
     notFound: 'Granja no encontrada. Consulte el enlace con su gerente.',
     authError: 'Esta p\u00e1gina no funciona en este momento. Avise a su gerente.',
     connecting: 'Conectando\u2026'
   }
-}
-
-function Cell({ state, additive, ev, t }) {
-  const style = styleForState(state, additive)
-  let content = t.none
-  if (state === 'coming-off') {
-    const disp = ev?.display || 'time'
-    content = disp === 'stop' ? t.stop
-      : disp === 'sis' ? (ev.sisDegrees != null ? ev.sisDegrees + '\u00b0' : t.sis)
-      : fmtHour(ev.ts % 24)
-  } else if (state === 'coming-on') {
-    content = fmtHour(ev.ts % 24)
-  } else if (state === 'full') {
-    content = ''
-  }
-  const showLabel = state === 'coming-off' ? t.off : state === 'coming-on' ? t.on : ''
-  return (
-    <div style={{ flex: 1, textAlign: 'center' }}>
-      <div style={{ ...style, borderRadius: '5px', padding: '6px 2px', fontSize: '10px', fontWeight: 600, lineHeight: 1.25 }}>
-        {showLabel && <div style={{ fontSize: '8px', opacity: 0.9 }}>{showLabel}</div>}
-        <div>{content}</div>
-      </div>
-    </div>
-  )
 }
 
 export default function PublicScheduleView({ slug }) {
@@ -173,11 +156,8 @@ export default function PublicScheduleView({ slug }) {
   const [seasons, setSeasons] = useState([])
   const [eventsToday, setEventsToday] = useState({})
   const [eventsTomorrow, setEventsTomorrow] = useState({})
+  const [expandedFieldId, setExpandedFieldId] = useState(null)
 
-  // Anonymous sign-in — invisible to the person, no login UI. This is what
-  // satisfies "request.auth != null" in firestore.rules without a real
-  // account. Requires Anonymous sign-in to be turned on in the Firebase
-  // Console (Authentication > Sign-in method) — it's off by default.
   useEffect(() => {
     if (auth.currentUser) { setAuthReady(true); return }
     signInAnonymously(auth)
@@ -185,8 +165,6 @@ export default function PublicScheduleView({ slug }) {
       .catch((err) => setAuthError(err.code || 'unknown-error'))
   }, [])
 
-  // Recheck the date every few minutes in case this tab is left open
-  // overnight — otherwise "today"/"tomorrow" would silently go stale.
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 5 * 60 * 1000)
     return () => clearInterval(id)
@@ -300,6 +278,7 @@ export default function PublicScheduleView({ slug }) {
           id,
           fieldName: base.name,
           crop: (seasonData.cropName || '').toUpperCase(),
+          acres: seasonData.acres || null,
           pivot
         }
       })
@@ -330,69 +309,115 @@ export default function PublicScheduleView({ slug }) {
     )
   }
 
+  function label(state, ev) {
+    if (state === 'coming-off') {
+      const disp = ev?.display || 'time'
+      return disp === 'stop' ? (<><div className="tiny">{t.off}</div><div>{t.stop}</div></>)
+        : disp === 'sis' ? (<><div className="tiny">{t.off} SIS</div><div>{ev.sisDegrees != null ? ev.sisDegrees + '\u00b0' : ''}</div></>)
+        : (<><div className="tiny">{t.off}</div><div>{fmtHour(ev.ts % 24)}</div></>)
+    }
+    if (state === 'coming-on') return (<><div className="tiny">{t.on}</div><div>{fmtHour(ev.ts % 24)}</div></>)
+    if (state === 'full') return ''
+    return t.none
+  }
+
   return (
-    <div style={{ minHeight: '100vh', background: '#f4f2ec', paddingBottom: '2rem' }}>
-      <div style={{ background: '#DEEAD2', color: '#3c5a3f', padding: '14px 16px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <img src={aioLogoIcon} alt="AIO" style={{ height: '32px' }} />
-            <div>
-              <div style={{ fontSize: '15px', fontWeight: 600 }}>{farm.name} \u00b7 {t.waterOrder}</div>
-              <div style={{ fontSize: '11px', color: '#5c7a5f', marginTop: '2px' }}>
-                {t.today} {fmtDate(now)} \u00b7 {t.tomorrow} {fmtDate(tomorrowDate)} \u00b7 {t.viewOnly}
-              </div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '4px' }}>
-            <button
-              onClick={() => setLang('en')}
-              style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '6px', border: '1px solid #3c5a3f', background: lang === 'en' ? '#3c5a3f' : 'transparent', color: lang === 'en' ? '#fff' : '#3c5a3f' }}
-            >EN</button>
-            <button
-              onClick={() => setLang('es')}
-              style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '6px', border: '1px solid #3c5a3f', background: lang === 'es' ? '#3c5a3f' : 'transparent', color: lang === 'es' ? '#fff' : '#3c5a3f' }}
-            >ES</button>
+    <div className="app">
+      <header className="topbar">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <img src={aioLogoIcon} alt="AIO" style={{ height: '40px' }} />
+          <div>
+            <div style={{ fontWeight: 600 }}>{farm.name} &middot; {t.waterOrder}</div>
+            <span className="status">{t.viewOnly}</span>
           </div>
         </div>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <button className={lang === 'en' ? 'active' : ''} onClick={() => setLang('en')}>EN</button>
+          <button className={lang === 'es' ? 'active' : ''} onClick={() => setLang('es')}>ES</button>
+        </div>
+      </header>
+
+      <div className="table-scroll">
+        <table className="watch-table">
+          <thead>
+            <tr>
+              <th className="sticky-col" rowSpan={2}>{t.fieldCrop}</th>
+              <th colSpan={2} className="day-head" style={{ background: dayTint(dayIdxToday) }}>{t.today}<br /><span className="tiny">{fmtShort(now)}</span></th>
+              <th colSpan={2} className="day-head" style={{ background: dayTint(dayIdxTomorrow) }}>{t.tomorrow}<br /><span className="tiny">{fmtShort(tomorrowDate)}</span></th>
+            </tr>
+            <tr>
+              <th className="shift-head" style={{ background: dayTint(dayIdxToday) }}>AM</th>
+              <th className="shift-head" style={{ background: dayTint(dayIdxToday) }}>PM</th>
+              <th className="shift-head" style={{ background: dayTint(dayIdxTomorrow) }}>AM</th>
+              <th className="shift-head" style={{ background: dayTint(dayIdxTomorrow) }}>PM</th>
+            </tr>
+          </thead>
+          <tbody>
+            {fields.map((field) => {
+              const todayEvents = eventsToday[field.id] || []
+              const tomorrowEvents = eventsTomorrow[field.id] || []
+              const color = CROP_COLOR[field.crop] || { bg: '#D3D1C7', fg: '#2C2C2A' }
+              const isExpanded = expandedFieldId === field.id
+              const cells = [
+                { events: todayEvents, dayIdx: dayIdxToday, shift: 'am' },
+                { events: todayEvents, dayIdx: dayIdxToday, shift: 'pm' },
+                { events: tomorrowEvents, dayIdx: dayIdxTomorrow, shift: 'am' },
+                { events: tomorrowEvents, dayIdx: dayIdxTomorrow, shift: 'pm' }
+              ]
+              return (
+                <Fragment key={field.id}>
+                  <tr>
+                    <td
+                      className="sticky-col field-cell"
+                      onClick={() => field.pivot && setExpandedFieldId(isExpanded ? null : field.id)}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <PivotIcon pivot={field.pivot} size={55} />
+                        <div>
+                          <div><strong>{field.fieldName}</strong></div>
+                          <div style={{ marginTop: '4px' }}>
+                            {field.crop && <span className="crop-badge" style={{ background: color.bg, color: color.fg }}>{field.crop}</span>}
+                            {field.acres && <span className="acres-tag"> &middot; {field.acres.toFixed(1)} ac</span>}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    {cells.map((c, i) => {
+                      const state = cellState(c.events, c.dayIdx, c.shift)
+                      const additive = cellAdditive(c.events, c.dayIdx, c.shift)
+                      const ev = findEventInBlock(c.events, c.dayIdx, c.shift)
+                      return (
+                        <td key={i} className="cell-td" style={{ background: dayTint(c.dayIdx) }}>
+                          <button className="cell-btn" disabled style={styleForState(state, additive)}>
+                            {label(state, ev)}
+                          </button>
+                        </td>
+                      )
+                    })}
+                  </tr>
+                  {isExpanded && (
+                    <tr>
+                      <td colSpan={5} style={{ padding: 0 }}>
+                        <PivotDetailPanel pivot={field.pivot} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )
+            })}
+            {fields.length === 0 && (
+              <tr><td colSpan={5} style={{ textAlign: 'center', color: '#888', padding: '2rem' }}>{t.loading}</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
 
-      <div style={{ maxWidth: '480px', margin: '0 auto' }}>
-        {fields.map((field) => {
-          const todayEvents = eventsToday[field.id] || []
-          const tomorrowEvents = eventsTomorrow[field.id] || []
-          const color = CROP_COLOR[field.crop] || { bg: '#D3D1C7', fg: '#2C2C2A' }
-          const cells = [
-            { events: todayEvents, dayIdx: dayIdxToday, shift: 'am' },
-            { events: todayEvents, dayIdx: dayIdxToday, shift: 'pm' },
-            { events: tomorrowEvents, dayIdx: dayIdxTomorrow, shift: 'am' },
-            { events: tomorrowEvents, dayIdx: dayIdxTomorrow, shift: 'pm' }
-          ]
-          return (
-            <div key={field.id} style={{ background: '#fff', borderBottom: '1px solid #eee', padding: '10px 14px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <PivotIcon pivot={field.pivot} size={36} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '13px', fontWeight: 600 }}>{field.fieldName}</div>
-                  <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>
-                    {field.crop && <span style={{ background: color.bg, color: color.fg, padding: '1px 5px', borderRadius: '4px', fontWeight: 500 }}>{field.crop}</span>}
-                    {' \u00b7 '}{t.timer}{': '}{field.pivot ? `${field.pivot.percentTimer}%` : t.noPivot}
-                  </div>
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: '4px', marginTop: '8px', marginLeft: '46px' }}>
-                {cells.map((c, i) => {
-                  const state = cellState(c.events, c.dayIdx, c.shift)
-                  const additive = cellAdditive(c.events, c.dayIdx, c.shift)
-                  const ev = findEventInBlock(c.events, c.dayIdx, c.shift)
-                  return <Cell key={i} state={state} additive={additive} ev={ev} t={t} />
-                })}
-              </div>
-            </div>
-          )
-        })}
-        {fields.length === 0 && (
-          <div style={{ padding: '2rem', textAlign: 'center', color: '#888' }}>{t.loading}</div>
-        )}
+      <div className="legend">
+        <span><i className="swatch" style={{ background: '#3B6D11' }} />{t.comingOn}</span>
+        <span><i className="swatch" style={{ background: '#185FA5' }} />{t.onWhole}</span>
+        <span><i className="swatch" style={{ background: '#A32D2D' }} />{t.comingOff}</span>
+        <span><i className="swatch" style={{ background: 'linear-gradient(135deg,#185FA5 50%,#EF9F27 50%)' }} />{t.fert}</span>
+        <span><i className="swatch" style={{ background: 'linear-gradient(135deg,#185FA5 50%,#D85A30 50%)' }} />{t.chem}</span>
       </div>
     </div>
   )
