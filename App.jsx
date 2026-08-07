@@ -15,6 +15,7 @@ import LiveData from './LiveData.jsx'
 import Login from './Login.jsx'
 
 import PotatoStorage from './PotatoStorage.jsx'
+import Users from './Users.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
 
@@ -151,6 +152,7 @@ export default function App() {
   } = useRegisterSW()
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
+  const [userProfile, setUserProfile] = useState(null)
   const [page, setPage] = useState('home') // 'home', 'irrigation', or 'potato-storage' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
@@ -171,6 +173,28 @@ export default function App() {
   const [selectedSeasonId, setSelectedSeasonId] = useState(null)
   const [farms, setFarms] = useState([])
   const [selectedFarmId, setSelectedFarmId] = useState('all')
+  const [farmDefaultApplied, setFarmDefaultApplied] = useState(false)
+
+  useEffect(() => {
+    if (farmDefaultApplied || !userProfile) return
+    const scoped = ['farm_manager', 'irrigation_manager', 'irrigator'].includes(userRole)
+    if (scoped && Array.isArray(userProfile.farmIds) && userProfile.farmIds.length > 0) {
+      setSelectedFarmId(userProfile.farmIds[0])
+    }
+    setFarmDefaultApplied(true)
+  }, [userProfile, userRole, farmDefaultApplied])
+
+  // Irrigators only ever see their own assigned farm(s) in the picker —
+  // no "All farms," no browsing others. Farm/irrigation managers keep the
+  // full list since they're explicitly allowed to view other farms, just
+  // not edit them.
+  const farmOptions = useMemo(() => {
+    if (userRole === 'irrigator' && userProfile && Array.isArray(userProfile.farmIds)) {
+      const allowed = new Set(userProfile.farmIds.map(String))
+      return farms.filter((f) => allowed.has(String(f.id)))
+    }
+    return farms
+  }, [farms, userRole, userProfile])
   const [linkCopied, setLinkCopied] = useState(false)
   const [sortBy, setSortBy] = useState('field')
   const [sortDir, setSortDir] = useState('asc')
@@ -254,12 +278,28 @@ export default function App() {
   }, [sortMenuOpen])
 
   useEffect(() => {
-    if (!user) { setUserRole(null); return }
+    if (!user) { setUserRole(null); setUserProfile(null); return }
     const unsub = onSnapshot(doc(db, 'users', user.uid), (snap) => {
-      setUserRole(snap.exists() ? snap.data().role : null)
+      const data = snap.exists() ? snap.data() : null
+      setUserRole(data ? data.role : null)
+      setUserProfile(data)
     })
     return () => unsub()
   }, [user])
+
+  // Mirrors firestore.rules' canEditSchedule() logic — kept client-side too
+  // so the UI reflects reality (disabled buttons, skipped selections)
+  // instead of letting someone interact freely and only find out they
+  // can't save when Firestore rejects the write.
+  function canEditField(field) {
+    if (!field) return false
+    if (userRole === 'admin' || userRole === 'owner') return true
+    const myFarmIds = ((userProfile && userProfile.farmIds) || []).map(String)
+    const farmMatch = myFarmIds.includes(String(field.farmId))
+    if (userRole === 'farm_manager' || userRole === 'irrigation_manager') return farmMatch
+    if (userRole === 'irrigator') return !!(userProfile && userProfile.canEditSchedule) && farmMatch
+    return false
+  }
 
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
@@ -566,9 +606,26 @@ export default function App() {
             <img src={potatoStorageLogo} alt="Potato Storage" style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover' }} />
             <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato storage</div>
           </div>
+          {(userRole === 'admin' || userRole === 'owner') && (
+            <div
+              onClick={() => setPage('users')}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            >
+              <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#EEEDFE', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="#534AB7" strokeWidth="1.8">
+                  <circle cx="9" cy="8" r="3.2" />
+                  <path d="M3.5 20c0-3.3 2.5-5.5 5.5-5.5s5.5 2.2 5.5 5.5" strokeLinecap="round" />
+                  <circle cx="17" cy="8.5" r="2.4" />
+                  <path d="M15.2 14.8c2.4 0.3 4.3 2.3 4.3 5.2" strokeLinecap="round" />
+                </svg>
+              </div>
+              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Team</div>
+            </div>
+          )}
         </div>
       )}
       {page === 'potato-storage' && <PotatoStorage />}
+      {page === 'users' && <Users />}
       {page === 'irrigation' && (
         <>
           {view === 'live-data' && <LiveData />}
@@ -589,8 +646,8 @@ export default function App() {
               value={selectedFarmId}
               onChange={(e) => setSelectedFarmId(e.target.value)}
             >
-              <option value="all">All farms</option>
-              {farms.map((f) => (
+              {userRole !== 'irrigator' && <option value="all">All farms</option>}
+              {farmOptions.map((f) => (
                 <option key={f.id} value={f.id}>{f.name}</option>
               ))}
             </select>
@@ -603,7 +660,7 @@ export default function App() {
             <span className="week-label">{fmtShort(weekStart)} – {fmtShort(addDays(weekStart, 6))}</span>
             <button onClick={() => setWeekOffset((w) => w + 1)}>Next week ›</button>
           </div>}
-          {view === 'schedule' && <div className="mode-buttons">
+          {view === 'schedule' && fields.some(canEditField) && <div className="mode-buttons">
             <button onClick={() => { setMode('copy-source'); setSelected(null) }}>Copy schedule</button>
             <button onClick={() => { setMode('erase'); setEraseTargets(new Set()); setSelected(null) }}>Erase schedules</button>
           </div>}
@@ -766,11 +823,12 @@ export default function App() {
                   function onNameClick() {
                     if (mode === 'copy-source') { setCopySourceId(field.id); setMode('copy-targets'); setCopyTargets(new Set()); return }
                     if (mode === 'copy-targets') {
-                      if (field.id === copySourceId) return
+                      if (field.id === copySourceId || !canEditField(field)) return
                       setCopyTargets((prev) => { const next = new Set(prev); next.has(field.id) ? next.delete(field.id) : next.add(field.id); return next })
                       return
                     }
                     if (mode === 'erase') {
+                      if (!canEditField(field)) return
                       setEraseTargets((prev) => { const next = new Set(prev); next.has(field.id) ? next.delete(field.id) : next.add(field.id); return next })
                     }
                   }
@@ -824,7 +882,7 @@ export default function App() {
                             else if (state === 'full') { label = '' }
                             return (
                               <td key={d.k + shift} className="cell-td" style={{ background: dayTint(dayIdx) }}>
-                                <button disabled={!!mode} className={`cell-btn ${isSel ? 'selected' : ''}`} style={styleForState(state, additive)} onClick={() => openCell(field.id, dayIdx, shift)}>
+                                <button disabled={!!mode || !canEditField(field)} className={`cell-btn ${isSel ? 'selected' : ''}`} style={styleForState(state, additive)} onClick={() => openCell(field.id, dayIdx, shift)}>
                                   {label}
                                 </button>
                               </td>
