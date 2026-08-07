@@ -119,6 +119,8 @@ export default function Users() {
   const [adding, setAdding] = useState(false)
   const [editingUid, setEditingUid] = useState(null)
   const [notice, setNotice] = useState(null)
+  const [lastLink, setLastLink] = useState(null)
+  const [copiedKey, setCopiedKey] = useState(null)
   const [busyUid, setBusyUid] = useState(null)
 
   useEffect(() => {
@@ -149,16 +151,21 @@ export default function Users() {
 
   async function handleCreate(form) {
     const createUser = httpsCallable(functions, 'createUser')
-    await createUser({
+    const result = await createUser({
       name: form.name,
       email: form.email.trim(),
       role: form.role,
       farmIds: form.farmIds,
       canEditSchedule: form.canEditSchedule
     })
-    await sendPasswordResetEmail(auth, form.email.trim())
+    let emailSent = true
+    try {
+      await sendPasswordResetEmail(auth, form.email.trim())
+    } catch {
+      emailSent = false
+    }
     setAdding(false)
-    setNotice(`${form.name} can now set their password \u2014 an email was sent to ${form.email.trim()}.`)
+    setLastLink({ name: form.name, email: form.email.trim(), link: result.data && result.data.link, emailSent })
   }
 
   async function handleSaveEdit(uid, form) {
@@ -175,6 +182,29 @@ export default function Users() {
     }
     await updateDoc(doc(db, 'users', uid), update)
     setEditingUid(null)
+  }
+
+  async function copyToClipboard(text, key) {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      window.prompt('Copy this link:', text)
+    }
+    setCopiedKey(key)
+    setTimeout(() => setCopiedKey(null), 2000)
+  }
+
+  async function handleGetLink(user) {
+    setBusyUid(user.uid)
+    try {
+      const generateSetupLink = httpsCallable(functions, 'generateSetupLink')
+      const result = await generateSetupLink({ email: user.email })
+      await copyToClipboard(result.data.link, user.uid)
+    } catch (err) {
+      setNotice(err.message || 'Could not generate a link for that account.')
+    } finally {
+      setBusyUid(null)
+    }
   }
 
   async function handleToggleDisabled(user) {
@@ -227,6 +257,26 @@ export default function Users() {
         </div>
       )}
 
+      {lastLink && (
+        <div className="mode-bar" style={{ background: '#3c5a3f' }}>
+          <div>
+            {lastLink.name}'s account is ready.{' '}
+            {lastLink.emailSent
+              ? `An email was sent to ${lastLink.email} \u2014 if it doesn't show up, it may have landed in junk.`
+              : "The automatic email didn't go out."}
+            {' '}Safer bet: copy the link below and send it yourself (text, WhatsApp, or an email from your own address).
+          </div>
+          <div className="mode-bar-actions">
+            {lastLink.link && (
+              <button className="apply" onClick={() => copyToClipboard(lastLink.link, 'last')}>
+                {copiedKey === 'last' ? 'Copied!' : 'Copy setup link'}
+              </button>
+            )}
+            <button className="cancel" onClick={() => setLastLink(null)}>Dismiss</button>
+          </div>
+        </div>
+      )}
+
       {adding && (
         <div style={{ marginBottom: '20px' }}>
           <ProfileForm
@@ -266,6 +316,9 @@ export default function Users() {
                     {editingUid === user.uid ? 'Close' : 'Edit'}
                   </button>
                   <button onClick={() => handleResend(user)} disabled={busyUid === user.uid} style={{ marginRight: '6px' }}>Resend setup email</button>
+                  <button onClick={() => handleGetLink(user)} disabled={busyUid === user.uid} style={{ marginRight: '6px' }}>
+                    {copiedKey === user.uid ? 'Copied!' : 'Copy setup link'}
+                  </button>
                   <button onClick={() => handleToggleDisabled(user)} disabled={busyUid === user.uid}>
                     {user.disabled ? 'Enable' : 'Disable'}
                   </button>
