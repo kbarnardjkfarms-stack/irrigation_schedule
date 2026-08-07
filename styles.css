@@ -131,6 +131,22 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .cell-btn .tiny { font-size: 6.5px; opacity: 0.9; }
 
 .inches-cell { text-align: center; font-weight: 600; color: #3c5a3f; border-left: 1px solid #eee; }
+.inches-label-short { display: none; }
+
+@media (max-width: 700px) {
+  table { table-layout: fixed; min-width: 0; width: max-content; }
+  .col-shift { width: calc((100vw - 262px) / 4); }
+  .inches-head, .inches-cell { width: 44px; min-width: 44px; max-width: 44px; padding-left: 3px; padding-right: 3px; }
+  .inches-label-full { display: none; }
+  .inches-label-short { display: inline; }
+  .cell-btn { min-width: 30px; }
+}
+
+@media (max-width: 380px) {
+  .sticky-col { width: 160px; min-width: 160px; max-width: 160px; }
+  .col-shift { width: calc((100vw - 228px) / 4); }
+  .inches-head, .inches-cell { width: 40px; min-width: 40px; max-width: 40px; }
+}
 
 .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; font-size: 11px; color: #555; }
 .legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
