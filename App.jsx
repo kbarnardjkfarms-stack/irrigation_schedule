@@ -682,6 +682,14 @@ export default function App() {
           )}
           {view === 'schedule' && <div className="table-scroll">
             <table>
+              <colgroup>
+                <col className="col-sticky" />
+                {DAYS.map((d) => ([
+                  <col key={d.k + '-am-col'} className="col-shift" />,
+                  <col key={d.k + '-pm-col'} className="col-shift" />
+                ]))}
+                <col className="col-inches" />
+              </colgroup>
               <thead>
                 <tr>
                   <th className="sticky-col" rowSpan={2}>
@@ -710,7 +718,10 @@ export default function App() {
                     </div>
                   </th>
                   {DAYS.map((d, i) => <th key={d.k} colSpan={2} className="day-head" style={{ background: dayTint(i) }}>{d.en}</th>)}
-                  <th rowSpan={2} className="inches-head">Scheduled inches</th>
+                  <th rowSpan={2} className="inches-head">
+                    <span className="inches-label-full">Scheduled inches</span>
+                    <span className="inches-label-short">In.</span>
+                  </th>
                 </tr>
                 <tr>
                   {DAYS.map((d, i) => ([
