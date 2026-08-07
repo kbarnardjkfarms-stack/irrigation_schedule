@@ -52,6 +52,10 @@ const CROP_COLOR = {
   SQUASH: { bg: '#F5C98A', fg: '#6B3D02' }
 }
 
+function slugifyFarmName(name) {
+  return (name || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+
 function mondayOf(d) {
   const date = new Date(d)
   const day = date.getDay()
@@ -167,6 +171,7 @@ export default function App() {
   const [selectedSeasonId, setSelectedSeasonId] = useState(null)
   const [farms, setFarms] = useState([])
   const [selectedFarmId, setSelectedFarmId] = useState('all')
+  const [linkCopied, setLinkCopied] = useState(false)
   const [sortBy, setSortBy] = useState('field')
   const [sortDir, setSortDir] = useState('asc')
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
@@ -415,6 +420,19 @@ export default function App() {
     return [...set].sort((a, b) => a.localeCompare(b))
   }, [seasonDataByField])
 
+  async function copyWatchLink() {
+    const farm = farms.find((f) => String(f.id) === String(selectedFarmId))
+    if (!farm) return
+    const url = `${window.location.origin}/watch/${slugifyFarmName(farm.name)}`
+    try {
+      await navigator.clipboard.writeText(url)
+    } catch {
+      window.prompt('Copy this link:', url)
+    }
+    setLinkCopied(true)
+    setTimeout(() => setLinkCopied(false), 2000)
+  }
+
   async function saveEvents(fieldId, events) {
     await setDoc(doc(db, 'weeks', weekId, 'events', fieldId), { events })
   }
@@ -576,6 +594,9 @@ export default function App() {
                 <option key={f.id} value={f.id}>{f.name}</option>
               ))}
             </select>
+            {selectedFarmId !== 'all' && (
+              <button onClick={copyWatchLink}>{linkCopied ? 'Copied!' : 'Copy irrigator link'}</button>
+            )}
           </div>}
           {view === 'schedule' && <div className="week-nav">
             <button onClick={() => setWeekOffset((w) => w - 1)}>‹ Prev week</button>
