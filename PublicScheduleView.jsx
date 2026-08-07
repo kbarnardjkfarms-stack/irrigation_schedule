@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, Fragment } from 'react'
+import { useRegisterSW } from 'virtual:pwa-register/react'
 import { signInAnonymously } from 'firebase/auth'
 import { collection, collectionGroup, onSnapshot, query, where } from 'firebase/firestore'
 import { auth, db } from './firebase.js'
@@ -137,6 +138,14 @@ const STRINGS = {
 }
 
 export default function PublicScheduleView({ slug }) {
+  const {
+    needRefresh: [needRefresh],
+    updateServiceWorker
+  } = useRegisterSW()
+  useEffect(() => {
+    if (needRefresh) updateServiceWorker(true)
+  }, [needRefresh, updateServiceWorker])
+
   const [lang, setLang] = useState(() => {
     const saved = localStorage.getItem('aio-watch-lang')
     if (saved) return saved
