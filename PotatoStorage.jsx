@@ -12,7 +12,7 @@ import { db } from "./firebase.js"; // AIO's existing Firebase project — same 
    NORLAND CELLARS — seed data (pulled from the 2025 storage workbook)
    1200 N. Meridian, Rupert, ID
    Zones = the field/lot divisions physically stored within each bay.
-   Each zone owns a slice of the bay's tubes, so fill + shrink are
+   Each zone owns a slice of the bay's pipe, so fill + shrink are
    tracked per field, not just per bay.
 ==================================================================*/
 /* ---------------------------------------------------------------
@@ -53,12 +53,12 @@ function getCustomerColor(name) {
 function allVarieties(bays) {
   const set = new Map();
   bays.forEach((b) => b.zones.forEach((z) => set.set(z.variety, getVarietyColor(z.variety))));
-  return Array.from(set.entries());
+  return Array.from(set.entries()).sort((a, b) => naturalCompare(a[0], b[0]));
 }
 function allCustomers(bays) {
   const set = new Map();
   bays.forEach((b) => b.zones.forEach((z) => set.set(z.customer, getCustomerColor(z.customer))));
-  return Array.from(set.entries());
+  return Array.from(set.entries()).sort((a, b) => naturalCompare(a[0], b[0]));
 }
 
 /* ---------------------------------------------------------------
@@ -85,62 +85,62 @@ const DEFAULT_BUILDINGS = [
 ];
 
 // Helper: a placeholder single-field bay for complexes where we only have a
-// total capacity figure from the workbook, not tube-level detail yet. Tube
-// count of 30 is nominal — cwt/tube is derived so the capacity stays accurate
-// (capacity = tubeCount * cwtPerTube) until the real tube count is entered.
-function placeholderZone(id, capacity, tubes = 30) {
-  return [{ id, name: "Field 1", variety: "Burbank", customer: "Unassigned", tubeCount: tubes, cwtPerTube: Math.round((capacity / tubes) * 100) / 100 }];
+// total capacity figure from the workbook, not pipe-level detail yet. Pipe
+// count of 30 is nominal — cwt/pipe is derived so the capacity stays accurate
+// (capacity = pipeCount * cwtPerPipe) until the real pipe count is entered.
+function placeholderZone(id, capacity, pipes = 30) {
+  return [{ id, name: "Field 1", variety: "Burbank", customer: "Unassigned", pipeCount: pipes, cwtPerPipe: Math.round((capacity / pipes) * 100) / 100 }];
 }
 
 const DEFAULT_BAYS = [
   {
     id: "n8", name: "Norland #8", buildingId: "bldg-n89",
-    fillDate: "2025-10-16", cwtPerTube: 3200,
+    fillDate: "2025-10-16", cwtPerPipe: 3200,
     zones: [
-      { id: "n8z1", name: "Field A — North End", variety: "Burbank", customer: "Unassigned", tubeCount: 19 },
-      { id: "n8z2", name: "Field B — South End", variety: "Burbank", customer: "Unassigned", tubeCount: 15 },
+      { id: "n8z1", name: "Field A — North End", variety: "Burbank", customer: "Unassigned", pipeCount: 19 },
+      { id: "n8z2", name: "Field B — South End", variety: "Burbank", customer: "Unassigned", pipeCount: 15 },
     ],
   },
   {
     id: "n9", name: "Norland #9", buildingId: "bldg-n89",
-    fillDate: "2025-09-25", cwtPerTube: 3200,
+    fillDate: "2025-09-25", cwtPerPipe: 3200,
     zones: [
-      { id: "n9z1", name: "Hawaii 05", variety: "Burbank", customer: "Simplot", tubeCount: 25 },
-      { id: "n9z2", name: "Hawaii 3 & 7", variety: "Burbank", customer: "Unassigned", tubeCount: 6 },
+      { id: "n9z1", name: "Hawaii 05", variety: "Burbank", customer: "Simplot", pipeCount: 25 },
+      { id: "n9z2", name: "Hawaii 3 & 7", variety: "Burbank", customer: "Unassigned", pipeCount: 6 },
     ],
   },
   {
     id: "n10", name: "Norland #10", buildingId: "bldg-n1011",
-    fillDate: "2025-09-20", cwtPerTube: 2440,
-    zones: [{ id: "n10z1", name: "Field 1", variety: "Ranger", customer: "Unassigned", tubeCount: 40 }],
+    fillDate: "2025-09-20", cwtPerPipe: 2440,
+    zones: [{ id: "n10z1", name: "Field 1", variety: "Ranger", customer: "Unassigned", pipeCount: 40 }],
   },
   {
     id: "n11", name: "Norland #11", buildingId: "bldg-n1011",
-    fillDate: "2025-09-17", cwtPerTube: 2440,
-    zones: [{ id: "n11z1", name: "Field 1", variety: "Ranger", customer: "Unassigned", tubeCount: 40 }],
+    fillDate: "2025-09-17", cwtPerPipe: 2440,
+    zones: [{ id: "n11z1", name: "Field 1", variety: "Ranger", customer: "Unassigned", pipeCount: 40 }],
   },
   {
     id: "n12", name: "Norland #12", buildingId: "bldg-n12",
-    fillDate: "2025-09-12", cwtPerTube: 2750,
-    zones: [{ id: "n12z1", name: "Field 1", variety: "Ranger", customer: "Unassigned", tubeCount: 36 }],
+    fillDate: "2025-09-12", cwtPerPipe: 2750,
+    zones: [{ id: "n12z1", name: "Field 1", variety: "Ranger", customer: "Unassigned", pipeCount: 36 }],
   },
   // Remsburg — capacities from the 2025 workbook's CAPACITY SUMMARY tab.
-  { id: "rems1", name: "Remsburg #1", buildingId: "bldg-r12", fillDate: "", cwtPerTube: null, zones: placeholderZone("rems1z1", 56710) },
-  { id: "rems2", name: "Remsburg #2", buildingId: "bldg-r12", fillDate: "", cwtPerTube: null, zones: placeholderZone("rems2z1", 56710) },
-  { id: "rems3", name: "Remsburg #3", buildingId: "bldg-r3", fillDate: "", cwtPerTube: null, zones: placeholderZone("rems3z1", 73250) },
+  { id: "rems1", name: "Remsburg #1", buildingId: "bldg-r12", fillDate: "", cwtPerPipe: null, zones: placeholderZone("rems1z1", 56710) },
+  { id: "rems2", name: "Remsburg #2", buildingId: "bldg-r12", fillDate: "", cwtPerPipe: null, zones: placeholderZone("rems2z1", 56710) },
+  { id: "rems3", name: "Remsburg #3", buildingId: "bldg-r3", fillDate: "", cwtPerPipe: null, zones: placeholderZone("rems3z1", 73250) },
   // Paul — capacities from the workbook (Straight/Angle bays).
-  { id: "paul1", name: "Paul #1", buildingId: "bldg-p12", fillDate: "", cwtPerTube: null, zones: placeholderZone("paul1z1", 98914) },
-  { id: "paul2", name: "Paul #2", buildingId: "bldg-p12", fillDate: "", cwtPerTube: null, zones: placeholderZone("paul2z1", 98914) },
-  { id: "paul3", name: "Paul #3", buildingId: "bldg-p34", fillDate: "", cwtPerTube: null, zones: placeholderZone("paul3z1", 98914) },
-  { id: "paul4", name: "Paul #4", buildingId: "bldg-p34", fillDate: "", cwtPerTube: null, zones: placeholderZone("paul4z1", 98914) },
+  { id: "paul1", name: "Paul #1", buildingId: "bldg-p12", fillDate: "", cwtPerPipe: null, zones: placeholderZone("paul1z1", 98914) },
+  { id: "paul2", name: "Paul #2", buildingId: "bldg-p12", fillDate: "", cwtPerPipe: null, zones: placeholderZone("paul2z1", 98914) },
+  { id: "paul3", name: "Paul #3", buildingId: "bldg-p34", fillDate: "", cwtPerPipe: null, zones: placeholderZone("paul3z1", 98914) },
+  { id: "paul4", name: "Paul #4", buildingId: "bldg-p34", fillDate: "", cwtPerPipe: null, zones: placeholderZone("paul4z1", 98914) },
   // Watco-Dutchman — capacities from the workbook where available; #5/#6 are
   // estimated to match the rest of the complex and flagged for correction.
-  { id: "watco1", name: "Watco #1", buildingId: "bldg-w12", fillDate: "", cwtPerTube: null, zones: placeholderZone("watco1z1", 96192) },
-  { id: "watco2", name: "Watco #2", buildingId: "bldg-w12", fillDate: "", cwtPerTube: null, zones: placeholderZone("watco2z1", 96192) },
-  { id: "watco3", name: "Watco #3", buildingId: "bldg-w34", fillDate: "", cwtPerTube: null, zones: placeholderZone("watco3z1", 96192) },
-  { id: "watco4", name: "Watco #4", buildingId: "bldg-w34", fillDate: "", cwtPerTube: null, zones: placeholderZone("watco4z1", 96192) },
-  { id: "watco5", name: "Watco #5", buildingId: "bldg-w56", fillDate: "", cwtPerTube: null, zones: placeholderZone("watco5z1", 96192) },
-  { id: "watco6", name: "Watco #6", buildingId: "bldg-w56", fillDate: "", cwtPerTube: null, zones: placeholderZone("watco6z1", 96192) },
+  { id: "watco1", name: "Watco #1", buildingId: "bldg-w12", fillDate: "", cwtPerPipe: null, zones: placeholderZone("watco1z1", 96192) },
+  { id: "watco2", name: "Watco #2", buildingId: "bldg-w12", fillDate: "", cwtPerPipe: null, zones: placeholderZone("watco2z1", 96192) },
+  { id: "watco3", name: "Watco #3", buildingId: "bldg-w34", fillDate: "", cwtPerPipe: null, zones: placeholderZone("watco3z1", 96192) },
+  { id: "watco4", name: "Watco #4", buildingId: "bldg-w34", fillDate: "", cwtPerPipe: null, zones: placeholderZone("watco4z1", 96192) },
+  { id: "watco5", name: "Watco #5", buildingId: "bldg-w56", fillDate: "", cwtPerPipe: null, zones: placeholderZone("watco5z1", 96192) },
+  { id: "watco6", name: "Watco #6", buildingId: "bldg-w56", fillDate: "", cwtPerPipe: null, zones: placeholderZone("watco6z1", 96192) },
 ];
 
 // Seed a couple of real historical loads on Norland #9 so shrink math has something to show.
@@ -153,8 +153,12 @@ const LOCATIONS_KEY = "storage-locations-v3";
 const SEASONS_KEY = "storage-seasons-v1";
 const DEFAULT_SEASONS = [{ id: "season-2025-26", label: "2025–2026", snapshot: null }];
 const BUILDINGS_KEY = "storage-buildings-v3";
-const CONFIG_KEY = "norland-bays-config-v3";
-const bayDataKey = (id) => `norland-bay-data-v2:${id}`;
+// v4: bays/zones switched from "tube" to "pipe" naming, and bays gained an
+// explicit total pipeCount (previously implied by summing zone pipe counts).
+const CONFIG_KEY = "norland-bays-config-v4";
+// v3: pipe checks record empty pipe ranges (both ends pulled independently)
+// instead of a single "tubes remaining" count.
+const bayDataKey = (id) => `norland-bay-data-v3:${id}`;
 const INSPECTIONS_KEY = "norland-inspections-v2";
 const CUSTOMERS_KEY = "norland-customers-v2";
 const DEFAULT_CUSTOMERS = ["Lamb Weston", "Simplot", "McCain", "Mart Fresh", "Mart Frozen", "Grimmway"];
@@ -169,7 +173,7 @@ const APPLICATORS_KEY = "norland-applicators-v1";
 const DEFAULT_APPLICATORS = [];
 
 const emptyZoneData = (zoneId) => ({
-  tubeChecks: [], cwtRuns: SEED_RUNS[zoneId] ? [...SEED_RUNS[zoneId]] : [], sproutApplications: [],
+  pipeChecks: [], cwtRuns: SEED_RUNS[zoneId] ? [...SEED_RUNS[zoneId]] : [], sproutApplications: [],
 });
 const emptyBayData = (bay) => ({
   zones: Object.fromEntries(bay.zones.map((z) => [z.id, emptyZoneData(z.id)])),
@@ -180,6 +184,16 @@ const fmt = (n, d = 0) => (n ?? 0).toLocaleString(undefined, { maximumFractionDi
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const slugify = (s) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 const uid = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+// Default list ordering, everywhere: alphabetical, with embedded numbers
+// compared numerically rather than digit-by-digit — so "Norland #9" sorts
+// before "Norland #10" instead of after it.
+function naturalCompare(a, b) {
+  return String(a ?? "").localeCompare(String(b ?? ""), undefined, { numeric: true, sensitivity: "base" });
+}
+function sortByNatural(arr, keyFn = (x) => x) {
+  return [...arr].sort((a, b) => naturalCompare(keyFn(a), keyFn(b)));
+}
 
 /* ---------------------------------------------------------------
    Storage helpers
@@ -207,14 +221,43 @@ async function saveJSON(key, value) {
 /* ---------------------------------------------------------------
    Derived stats — per zone (field), then rolled up per bay
 ----------------------------------------------------------------*/
+// A pipe check records which pipe ranges are empty (1-indexed, inclusive,
+// numbered within this zone's own allocation) rather than a single count —
+// potatoes get pulled from both ends of a run inward, so a bay can easily
+// have two separate empty stretches with a full section still in the
+// middle. Ranges may overlap harmlessly; this just collects the union of
+// pipe numbers they cover.
+function emptyPipeSet(pipeCount, emptyRanges) {
+  const set = new Set();
+  (emptyRanges || []).forEach(({ from, to }) => {
+    const lo = Math.max(1, Math.min(Number(from), Number(to)));
+    const hi = Math.min(pipeCount, Math.max(Number(from), Number(to)));
+    for (let p = lo; p <= hi; p++) set.add(p);
+  });
+  return set;
+}
+
+// "1–5, 36–40" style summary of a check's empty ranges, for the check form's
+// live preview and the logged-check history list.
+function formatPipeRanges(ranges) {
+  if (!ranges || ranges.length === 0) return "—";
+  return ranges
+    .map(({ from, to }) => (Number(from) === Number(to) ? `${from}` : `${Math.min(from, to)}–${Math.max(from, to)}`))
+    .join(", ");
+}
+
 function computeZoneStats(bay, zone, zoneData) {
-  const tc = zoneData?.tubeChecks || [];
-  const latest = tc.length ? tc[tc.length - 1] : null;
-  const tubesRemaining = latest ? latest.tubesRemaining : 0;
-  const tubesFilled = Math.max(0, zone.tubeCount - tubesRemaining);
-  const cwtPerTube = zone.cwtPerTube || bay.cwtPerTube;
-  const currentCwt = tubesFilled * cwtPerTube;
-  const capacityCwt = zone.tubeCount * cwtPerTube;
+  const pc = zoneData?.pipeChecks || [];
+  const latest = pc.length ? pc[pc.length - 1] : null;
+  const emptySet = latest ? emptyPipeSet(zone.pipeCount, latest.emptyRanges) : new Set();
+  const pipesEmpty = emptySet.size;
+  const pipesFilled = Math.max(0, zone.pipeCount - pipesEmpty);
+  // One entry per pipe, in order — true = still full, false = emptied out.
+  // Drives the 3D pile segments and the per-pipe indicator strip.
+  const pipeFullFlags = Array.from({ length: zone.pipeCount }, (_, i) => !emptySet.has(i + 1));
+  const cwtPerPipe = zone.cwtPerPipe || bay.cwtPerPipe;
+  const currentCwt = pipesFilled * cwtPerPipe;
+  const capacityCwt = zone.pipeCount * cwtPerPipe;
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
 
   const runs = zoneData?.cwtRuns || [];
@@ -224,7 +267,7 @@ function computeZoneStats(bay, zone, zoneData) {
   const shrinkPct = initialCwt > 0 ? shrinkCwt / initialCwt : 0;
 
   return {
-    tubesRemaining, tubesFilled, cwtPerTube, currentCwt, capacityCwt, fillPct,
+    pipesEmpty, pipesFilled, pipeFullFlags, cwtPerPipe, currentCwt, capacityCwt, fillPct,
     totalRun, initialCwt, shrinkCwt, shrinkPct, runs,
     lastCheckDate: latest ? latest.date : null,
   };
@@ -361,29 +404,18 @@ function buildBayGroup(bay, dims) {
   floor.receiveShadow = true;
   g.add(floor);
 
-  const totalTubes = bay.zones.reduce((s, z) => s + z.tubeCount, 0) || 1;
+  // A bay's total pipe count is its own fixed infrastructure figure — set
+  // when the bay is created — independent of how much of it any given field
+  // currently occupies. Falling back to the sum of zone pipe counts keeps
+  // older bays (saved before bays had their own pipeCount) working.
+  const totalPipes = bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0) || 1;
   const innerW = W * 0.86;
   let zCursor = -L / 2;
   const zoneMeshes = {};
   bay.zones.forEach((zone, zi) => {
-    const depth = (zone.tubeCount / totalTubes) * L;
+    const depth = (zone.pipeCount / totalPipes) * L;
     const varietyColor = getVarietyColor(zone.variety);
     const customerColor = getCustomerColor(zone.customer);
-    const pileDepth = Math.max(0.3, depth - 0.3);
-    const pileTopDepth = pileDepth * TOP_RATIO;     // ends slope inward, same ratio as the walls
-    const pileTopWidth = innerW * TOP_RATIO;         // sides slope inward too, matching the building taper
-
-    const mat = new THREE.MeshStandardMaterial({ color: varietyColor, roughness: 0.95, side: THREE.DoubleSide });
-    const pile = new THREE.Mesh(buildPileFrustumGeometry(innerW, pileTopWidth, pileDepth, pileTopDepth), mat);
-    pile.castShadow = true;
-    pile.position.set(0, 0, zCursor + depth / 2);
-
-    // customer cap — thin colored slab that rides on the (narrower) top of the
-    // pile as it fills, so variety (body) and customer (cap) both read at a glance
-    const capMat = new THREE.MeshStandardMaterial({ color: customerColor, roughness: 0.6, metalness: 0.1 });
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(pileTopWidth * 0.94, 0.28, pileTopDepth * 0.9), capMat);
-    cap.position.set(0, 0.14, zCursor + depth / 2);
-    cap.castShadow = true;
 
     if (zi > 0) {
       const dividerMat = new THREE.MeshBasicMaterial({ color: "#f2c14e" });
@@ -392,21 +424,32 @@ function buildBayGroup(bay, dims) {
       g.add(divider);
     }
 
-    const stripCount = Math.min(10, zone.tubeCount);
+    // Pile/cap segments are (re)built in applyZoneFill, not here — how many
+    // separate mounds a zone needs depends on its latest pipe check (a pull
+    // from both ends leaves two full stretches with a gap between them), and
+    // that can change on every check. This group just gives them a home.
+    const pileGroup = new THREE.Group();
+    g.add(pileGroup);
+
+    // One indicator cylinder per actual pipe (not an approximated subset), so
+    // the strip along the floor maps 1:1 to which physical pipes are exposed
+    // (empty) vs still buried under potatoes (full).
+    const pipeWidth = depth / zone.pipeCount;
     const stripGroup = new THREE.Group();
-    for (let t = 0; t < stripCount; t++) {
-      const tubeMat = new THREE.MeshStandardMaterial({ color: "#9aa4b8", metalness: 0.6, roughness: 0.35 });
-      const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, innerW * 0.9, 10), tubeMat);
-      tube.rotation.z = Math.PI / 2;
-      tube.position.set(0, 0.09, zCursor + (depth / stripCount) * (t + 0.5));
-      stripGroup.add(tube);
-      tube.userData = { zoneId: zone.id, tubeIndex: t };
+    for (let p = 0; p < zone.pipeCount; p++) {
+      const pipeMat = new THREE.MeshStandardMaterial({ color: "#4a4238", metalness: 0.6, roughness: 0.35 });
+      const pipeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, innerW * 0.9, 10), pipeMat);
+      pipeMesh.rotation.z = Math.PI / 2;
+      pipeMesh.position.set(0, 0.09, zCursor + pipeWidth * (p + 0.5));
+      stripGroup.add(pipeMesh);
+      pipeMesh.userData = { zoneId: zone.id, pipeIndex: p };
     }
     g.add(stripGroup);
 
-    zoneMeshes[zone.id] = { pile, cap, stripGroup, stripCount, depthStart: zCursor, depth, innerW };
-    g.add(pile);
-    g.add(cap);
+    zoneMeshes[zone.id] = {
+      pileGroup, stripGroup, depthStart: zCursor, depth, innerW,
+      pipeCount: zone.pipeCount, varietyColor, customerColor,
+    };
     zCursor += depth;
   });
 
@@ -416,32 +459,56 @@ function buildBayGroup(bay, dims) {
 function applyZoneFill(zoneMeshes, zoneStatsById, maxH) {
   Object.entries(zoneMeshes).forEach(([zoneId, m]) => {
     const stats = zoneStatsById[zoneId];
-    const fillPct = stats?.fillPct || 0;
+    const fullFlags = stats?.pipeFullFlags?.length === m.pipeCount
+      ? stats.pipeFullFlags
+      : Array(m.pipeCount).fill(true);
+    const pipeWidth = m.depth / m.pipeCount;
 
-    // The pile stays topped out near full height and instead recedes along the
-    // bay's length as it's pulled out — draining from the low-Z (near) end,
-    // which matches the exposed-tube end below, toward the untouched far end.
-    // Both the leading (draining) edge and the far edge keep the natural
-    // sloped taper, so the front is always a diagonal, not a flat cut.
-    const remainingDepth = Math.max(0.35, fillPct * m.depth);
-    const topWidth = m.innerW * PILE_TAPER;
-    const topDepth = remainingDepth * PILE_TAPER;
-    m.pile.geometry.dispose();
-    m.pile.geometry = buildPileFrustumGeometry(m.innerW, topWidth, remainingDepth, topDepth);
-    m.pile.scale.set(1, maxH, 1);
-    const centerZ = m.depthStart + m.depth - remainingDepth / 2;
-    m.pile.position.set(0, 0, centerZ);
-    if (m.cap) {
-      m.cap.scale.z = remainingDepth / m.depth;
-      m.cap.position.set(0, maxH + 0.14, centerZ);
+    // Rebuild the pile from scratch on every update — the number of separate
+    // full stretches (and so the number of pile segments) can change with
+    // each check, so there's no single mesh to just resize in place.
+    while (m.pileGroup.children.length) {
+      const child = m.pileGroup.children.pop();
+      child.geometry?.dispose();
+      m.pileGroup.remove(child);
     }
-    const remaining = stats?.tubesRemaining || 0;
-    const total = stats ? stats.tubesFilled + stats.tubesRemaining : 0;
-    const emptyFrac = total > 0 ? remaining / total : 0;
-    const emptyCount = Math.round(emptyFrac * m.stripCount);
-    m.stripGroup.children.forEach((tube, i) => {
-      tube.material.color.set(i < emptyCount ? "#c7ccd4" : "#4a4238");
-      tube.visible = fillPct < 0.94 || i < emptyCount;
+
+    let i = 0;
+    while (i < fullFlags.length) {
+      if (!fullFlags[i]) { i++; continue; }
+      let j = i;
+      while (j < fullFlags.length && fullFlags[j]) j++;
+      // Contiguous run of full pipes is [i, j) — one pile+cap mound per run.
+      // Pulling from both ends renders as two separate mounds with a gap of
+      // exposed (light-colored) pipe between them, instead of one pile that
+      // only ever recedes from a single end.
+      const segDepth = Math.max(0.3, (j - i) * pipeWidth - 0.3);
+      const segTopDepth = segDepth * PILE_TAPER;
+      const topWidth = m.innerW * PILE_TAPER;
+      const segCenterZ = m.depthStart + (i + (j - i) / 2) * pipeWidth;
+
+      const mat = new THREE.MeshStandardMaterial({ color: m.varietyColor, roughness: 0.95, side: THREE.DoubleSide });
+      const pile = new THREE.Mesh(buildPileFrustumGeometry(m.innerW, topWidth, segDepth, segTopDepth), mat);
+      pile.scale.set(1, maxH, 1);
+      pile.position.set(0, 0, segCenterZ);
+      pile.castShadow = true;
+      m.pileGroup.add(pile);
+
+      // customer cap — thin colored slab riding the top of each mound, so
+      // variety (mound color) and customer (cap color) both read at a glance
+      const capMat = new THREE.MeshStandardMaterial({ color: m.customerColor, roughness: 0.6, metalness: 0.1 });
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(topWidth * 0.94, 0.28, segTopDepth * 0.9), capMat);
+      cap.position.set(0, maxH + 0.14, segCenterZ);
+      cap.castShadow = true;
+      m.pileGroup.add(cap);
+
+      i = j;
+    }
+
+    // Recolor each pipe indicator to match its actual state: dark/buried
+    // when still full, light/exposed metal when emptied out.
+    m.stripGroup.children.forEach((pipeMesh, idx) => {
+      pipeMesh.material.color.set(fullFlags[idx] ? "#4a4238" : "#c7ccd4");
     });
   });
 }
@@ -718,7 +785,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
             <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}>
               <ColorDot color={getVarietyColor(zone.variety)} /><ColorDot color={getCustomerColor(zone.customer)} /> {zone.name}
             </div>
-            <div style={{ color: "#9aa4b8" }}>{zone.variety} · {zone.customer} · {zs.tubesFilled}/{zone.tubeCount} tubes · {Math.round(zs.fillPct * 100)}%</div>
+            <div style={{ color: "#9aa4b8" }}>{zone.variety} · {zone.customer} · {zs.pipesFilled}/{zone.pipeCount} pipe · {Math.round(zs.fillPct * 100)}%</div>
           </div>
         );
       })}
@@ -861,22 +928,21 @@ const inputStyle = {
   width: "100%", background: "#161d2b", border: "1px solid #2b3549", borderRadius: 6,
   padding: "8px 10px", color: "#eef1f6", fontSize: 13.5, fontFamily: "inherit", outline: "none", boxSizing: "border-box",
 };
+// "Unassigned" always leads (it's a placeholder, not a real entry); everything
+// else — including a legacy value no longer on the main list — sorts alphabetically.
 function customerOptions(customers, currentValue) {
-  const opts = ["Unassigned", ...customers];
-  if (currentValue && !opts.includes(currentValue)) opts.push(currentValue); // keep legacy values visible
-  return opts;
+  const rest = currentValue && !customers.includes(currentValue) ? [...customers, currentValue] : customers;
+  return ["Unassigned", ...sortByNatural(rest)];
 }
 
 function varietyOptions(varieties, currentValue) {
-  const opts = [...varieties];
-  if (currentValue && !opts.includes(currentValue)) opts.push(currentValue); // keep legacy values visible
-  return opts;
+  const rest = currentValue && !varieties.includes(currentValue) ? [...varieties, currentValue] : varieties;
+  return sortByNatural(rest);
 }
 
 function applicatorOptions(applicators, currentValue) {
-  const opts = ["Unassigned", ...applicators];
-  if (currentValue && !opts.includes(currentValue)) opts.push(currentValue);
-  return opts;
+  const rest = currentValue && !applicators.includes(currentValue) ? [...applicators, currentValue] : applicators;
+  return ["Unassigned", ...sortByNatural(rest)];
 }
 
 // --- Agworld field lookup -----------------------------------------------
@@ -1022,8 +1088,8 @@ function AddZoneForm({ varieties, customers, onAdd, nextName = "Field 1" }) {
   const [name, setName] = useState(nextName);
   const [variety, setVariety] = useState(varieties[0] || "");
   const [customer, setCustomer] = useState("Unassigned");
-  const [tubes, setTubes] = useState("30");
-  const [cwtPerTube, setCwtPerTube] = useState("");
+  const [pipe, setPipe] = useState("30");
+  const [cwtPerPipe, setCwtPerPipe] = useState("");
   const [error, setError] = useState("");
   const [fromAgworld, setFromAgworld] = useState(false);
 
@@ -1036,15 +1102,15 @@ function AddZoneForm({ varieties, customers, onAdd, nextName = "Field 1" }) {
 
   const submit = () => {
     const trimmed = name.trim();
-    if (!trimmed || !variety || !Number(tubes) || Number(tubes) <= 0) {
-      setError("Needs a name, variety, and a tube count greater than 0.");
+    if (!trimmed || !variety || !Number(pipe) || Number(pipe) <= 0) {
+      setError("Needs a name, variety, and a pipe count greater than 0.");
       return;
     }
     onAdd({
       id: uid("zone"), name: trimmed, variety, customer: customer || "Unassigned",
-      tubeCount: Number(tubes), ...(cwtPerTube ? { cwtPerTube: Number(cwtPerTube) } : {}),
+      pipeCount: Number(pipe), ...(cwtPerPipe ? { cwtPerPipe: Number(cwtPerPipe) } : {}),
     });
-    setName(nextName); setVariety(varieties[0] || ""); setCustomer("Unassigned"); setTubes("30"); setCwtPerTube(""); setError(""); setFromAgworld(false);
+    setName(nextName); setVariety(varieties[0] || ""); setCustomer("Unassigned"); setPipe("30"); setCwtPerPipe(""); setError(""); setFromAgworld(false);
   };
 
   return (
@@ -1070,8 +1136,8 @@ function AddZoneForm({ varieties, customers, onAdd, nextName = "Field 1" }) {
             {customerOptions(customers, customer).map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </Field>
-        <Field label="Tubes"><input type="number" min="1" value={tubes} onChange={(e) => setTubes(e.target.value)} style={{ ...inputStyle, width: 80 }} /></Field>
-        <Field label="Cwt/tube (optional)"><input type="number" value={cwtPerTube} onChange={(e) => setCwtPerTube(e.target.value)} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 3200" /></Field>
+        <Field label="Pipe (approx. covered)"><input type="number" min="1" value={pipe} onChange={(e) => setPipe(e.target.value)} style={{ ...inputStyle, width: 90 }} /></Field>
+        <Field label="Cwt/pipe (optional)"><input type="number" value={cwtPerPipe} onChange={(e) => setCwtPerPipe(e.target.value)} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 3200" /></Field>
         <Button onClick={submit}><Plus size={14} /> Add product</Button>
       </div>
       {fromAgworld && <div style={{ fontSize: 11, color: "#8fd19e" }}>Loaded from Agworld — adjust anything above before adding.</div>}
@@ -1088,7 +1154,7 @@ function NewSeasonPrompt({ activeSeasonLabel, onCancel, onConfirm }) {
         <div style={{ fontWeight: 700, fontSize: 15, color: "#eef1f6", marginBottom: 8 }}>Start a new season</div>
         <div style={{ fontSize: 12.5, color: "#8790a3", marginBottom: 14, lineHeight: 1.5 }}>
           This archives <b>{activeSeasonLabel}</b> as a read-only historical record and resets every bay's fields —
-          variety, customer, fill date, tube checks, cwt runs, and inspections — for a fresh season. Bays, buildings,
+          variety, customer, fill date, pipe checks, cwt runs, and inspections — for a fresh season. Bays, buildings,
           and your customer/variety lists carry forward as-is.
         </div>
         <Field label="Label for the new season">
@@ -1177,29 +1243,41 @@ function EditableInline({ value, onSave, type = "text", width, disabled, placeho
 }
 
 /* ---------------------------------------------------------------
-   Bay detail panel (per-zone tube checks + cwt runs) + interior 3D
+   Bay detail panel (per-zone pipe checks + cwt runs) + interior 3D
 ----------------------------------------------------------------*/
-function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddTubeCheck, onAddCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay, onEmptyBay }) {
+function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipeCheck, onAddCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay, onEmptyBay }) {
   const [zoneId, setZoneId] = useState(bay.zones[0]?.id ?? null);
   useEffect(() => { setZoneId(bay.zones[0]?.id ?? null); }, [bay.id]);
   const [showAddZone, setShowAddZone] = useState(false);
   useEffect(() => { setShowAddZone(false); }, [bay.id]);
   const zone = bay.zones.find((z) => z.id === zoneId);
-  const zoneData = data.zones[zoneId] || { tubeChecks: [], cwtRuns: [] };
+  const zoneData = data.zones[zoneId] || { pipeChecks: [], cwtRuns: [] };
   const zs = stats.zoneStats[zoneId];
 
-  const [tubesRemaining, setTubesRemaining] = useState("");
+  // Potatoes get pulled from both ends of a run inward, so a check records
+  // up to two empty pipe ranges (front end + back end) rather than a single
+  // "how many are gone" count — leaves an accurate picture of which exact
+  // pipes are empty vs still full, including a full stretch left in the middle.
+  const [emptyFrom1, setEmptyFrom1] = useState("");
+  const [emptyTo1, setEmptyTo1] = useState("");
+  const [emptyFrom2, setEmptyFrom2] = useState("");
+  const [emptyTo2, setEmptyTo2] = useState("");
   const [checkDate, setCheckDate] = useState(todayStr());
   const [checkNote, setCheckNote] = useState("");
   const [runDate, setRunDate] = useState(todayStr());
   const [runDest, setRunDest] = useState(zone?.customer || "Unassigned");
   const [runCwt, setRunCwt] = useState("");
   useEffect(() => { setRunDest(zone?.customer || "Unassigned"); }, [zoneId]);
+  useEffect(() => { setEmptyFrom1(""); setEmptyTo1(""); setEmptyFrom2(""); setEmptyTo2(""); }, [zoneId]);
 
+  const pendingRanges = [
+    ...(emptyFrom1 !== "" && emptyTo1 !== "" ? [{ from: Number(emptyFrom1), to: Number(emptyTo1) }] : []),
+    ...(emptyFrom2 !== "" && emptyTo2 !== "" ? [{ from: Number(emptyFrom2), to: Number(emptyTo2) }] : []),
+  ];
   const submitCheck = () => {
-    if (tubesRemaining === "" || isNaN(Number(tubesRemaining))) return;
-    onAddTubeCheck(bay.id, zoneId, { date: checkDate, tubesRemaining: Number(tubesRemaining), note: checkNote });
-    setTubesRemaining(""); setCheckNote("");
+    if (!zone || pendingRanges.length === 0) return;
+    onAddPipeCheck(bay.id, zoneId, { date: checkDate, emptyRanges: pendingRanges, note: checkNote });
+    setEmptyFrom1(""); setEmptyTo1(""); setEmptyFrom2(""); setEmptyTo2(""); setCheckNote("");
   };
   const submitRun = () => {
     if (!runCwt || isNaN(Number(runCwt))) return;
@@ -1207,7 +1285,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddTube
     setRunCwt(""); setRunDest("");
   };
 
-  const tubeChecks = [...(zoneData.tubeChecks || [])].reverse();
+  const pipeChecks = [...(zoneData.pipeChecks || [])].reverse();
   const cwtRuns = [...(zoneData.cwtRuns || [])].reverse();
 
   return (
@@ -1216,7 +1294,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddTube
         <div>
           <h2 style={{ margin: 0, fontSize: 22, color: "#eef1f6" }}>{bay.name}</h2>
           <div style={{ color: "#8790a3", fontSize: 12.5, marginTop: 3 }}>
-            Filled {bay.fillDate} · {bay.zones.length} field{bay.zones.length !== 1 ? "s" : ""} · {bay.zones.reduce((s, z) => s + z.tubeCount, 0)} tubes total
+            Filled {bay.fillDate} · {bay.zones.length} field{bay.zones.length !== 1 ? "s" : ""} · {bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0)} pipes total
           </div>
         </div>
         {!readOnly && bay.zones.length > 0 && (
@@ -1294,7 +1372,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddTube
       {zone && zs && (
         <>
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
-            <StatBlock label={`${zone.name} inventory`} value={`${fmt(zs.currentCwt)} cwt`} sub={`${Math.round(zs.fillPct * 100)}% of ${fmt(zs.capacityCwt)} cwt · ${zs.tubesFilled}/${zone.tubeCount} tubes`} accent="#f2c14e" />
+            <StatBlock label={`${zone.name} inventory`} value={`${fmt(zs.currentCwt)} cwt`} sub={`${Math.round(zs.fillPct * 100)}% of ${fmt(zs.capacityCwt)} cwt · ${zs.pipesFilled}/${zone.pipeCount} pipe`} accent="#f2c14e" />
             <div>
               <div style={{ fontSize: 10.5, letterSpacing: 1, textTransform: "uppercase", color: "#8790a3" }}>Variety</div>
               <select value={zone.variety} disabled={readOnly} onChange={(e) => onUpdateZoneVariety(bay.id, zone.id, e.target.value)}
@@ -1315,30 +1393,49 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddTube
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
             <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
               <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
-                <Gauge size={16} color="#f2c14e" /> Log tube check — {zone.name}
+                <Gauge size={16} color="#f2c14e" /> Log pipe check — {zone.name}
               </div>
               <div style={{ fontSize: 12, color: "#8790a3", marginBottom: 10 }}>
-                Enter how many of this field's tubes are still empty (uncovered) — cwt is calculated automatically.
+                Potatoes get pulled from both ends, so enter which pipe number ranges are empty on each end — cwt is
+                calculated automatically from whatever's left full in between. Leave the second range blank if you've
+                only pulled from one end.
               </div>
               <Field label="Date"><input type="date" value={checkDate} onChange={(e) => setCheckDate(e.target.value)} style={inputStyle} /></Field>
-              <Field label={`Tubes remaining (empty), out of ${zone.tubeCount}`}>
-                <input type="number" min="0" max={zone.tubeCount} value={tubesRemaining} onChange={(e) => setTubesRemaining(e.target.value)} style={inputStyle} placeholder="e.g. 4" />
-              </Field>
+              <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 4, letterSpacing: 0.3 }}>Empty range 1 (out of {zone.pipeCount})</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                <input type="number" min="1" max={zone.pipeCount} value={emptyFrom1} onChange={(e) => setEmptyFrom1(e.target.value)} style={inputStyle} placeholder="pipe #" />
+                <span style={{ color: "#6f7890", alignSelf: "center" }}>to</span>
+                <input type="number" min="1" max={zone.pipeCount} value={emptyTo1} onChange={(e) => setEmptyTo1(e.target.value)} style={inputStyle} placeholder="pipe #" />
+              </div>
+              <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 4, letterSpacing: 0.3 }}>Empty range 2 (optional — the other end)</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                <input type="number" min="1" max={zone.pipeCount} value={emptyFrom2} onChange={(e) => setEmptyFrom2(e.target.value)} style={inputStyle} placeholder="pipe #" />
+                <span style={{ color: "#6f7890", alignSelf: "center" }}>to</span>
+                <input type="number" min="1" max={zone.pipeCount} value={emptyTo2} onChange={(e) => setEmptyTo2(e.target.value)} style={inputStyle} placeholder="pipe #" />
+              </div>
               <Field label="Note (optional)"><input value={checkNote} onChange={(e) => setCheckNote(e.target.value)} style={inputStyle} /></Field>
-              {tubesRemaining !== "" && !isNaN(Number(tubesRemaining)) && (
-                <div style={{ fontSize: 12.5, color: "#c7cede", marginBottom: 10 }}>
-                  → {zone.tubeCount - Number(tubesRemaining)} tubes filled = <b style={{ color: "#f2c14e" }}>{fmt((zone.tubeCount - Number(tubesRemaining)) * zs.cwtPerTube)} cwt</b>
-                </div>
-              )}
-              <Button onClick={submitCheck} disabled={readOnly}><Plus size={14} /> Add check</Button>
-              <div style={{ marginTop: 14, maxHeight: 150, overflowY: "auto" }}>
-                {tubeChecks.length === 0 && <div style={{ color: "#5b6478", fontSize: 12 }}>No checks logged yet.</div>}
-                {tubeChecks.map((c, i) => (
-                  <div key={i} style={{ fontSize: 12, color: "#c7cede", padding: "6px 0", borderTop: "1px solid #232d40" }}>
-                    <b>{c.date}</b> — {c.tubesRemaining} empty ({zone.tubeCount - c.tubesRemaining} filled)
-                    {c.note && <div style={{ color: "#8790a3" }}>{c.note}</div>}
+              {pendingRanges.length > 0 && (() => {
+                const pipesEmpty = emptyPipeSet(zone.pipeCount, pendingRanges).size;
+                const pipesFilled = zone.pipeCount - pipesEmpty;
+                return (
+                  <div style={{ fontSize: 12.5, color: "#c7cede", marginBottom: 10 }}>
+                    → Pipe {formatPipeRanges(pendingRanges)} empty ({pipesEmpty} pipe) · {pipesFilled} pipe still full =
+                    {" "}<b style={{ color: "#f2c14e" }}>{fmt(pipesFilled * zs.cwtPerPipe)} cwt</b>
                   </div>
-                ))}
+                );
+              })()}
+              <Button onClick={submitCheck} disabled={readOnly || pendingRanges.length === 0}><Plus size={14} /> Add check</Button>
+              <div style={{ marginTop: 14, maxHeight: 150, overflowY: "auto" }}>
+                {pipeChecks.length === 0 && <div style={{ color: "#5b6478", fontSize: 12 }}>No checks logged yet.</div>}
+                {pipeChecks.map((c, i) => {
+                  const emptyCount = emptyPipeSet(zone.pipeCount, c.emptyRanges).size;
+                  return (
+                    <div key={i} style={{ fontSize: 12, color: "#c7cede", padding: "6px 0", borderTop: "1px solid #232d40" }}>
+                      <b>{c.date}</b> — pipe {formatPipeRanges(c.emptyRanges)} empty ({zone.pipeCount - emptyCount} filled)
+                      {c.note && <div style={{ color: "#8790a3" }}>{c.note}</div>}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
@@ -1439,7 +1536,7 @@ function latestByPipe(logs) {
 function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
   const [bayId, setBayId] = useState(bays[0]?.id);
   const bay = bays.find((b) => b.id === bayId);
-  const totalTubes = bay ? bay.zones.reduce((s, z) => s + z.tubeCount, 0) : 0;
+  const totalPipes = bay ? (bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0)) : 0;
   const [pipeNumber, setPipeNumber] = useState(1);
   const [position, setPosition] = useState("Top");
   const [date, setDate] = useState(todayStr());
@@ -1469,7 +1566,7 @@ function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
         </Field>
         <Field label="Pipe #">
           <select value={pipeNumber} onChange={(e) => setPipeNumber(Number(e.target.value))} style={{ ...inputStyle, width: 90 }}>
-            {Array.from({ length: totalTubes }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
+            {Array.from({ length: totalPipes }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </Field>
         <Field label="Position">
@@ -1837,11 +1934,11 @@ function CustomersTab({ customers, bays, onAdd }) {
     setName(""); setError("");
   };
   const usage = useMemo(() => {
-    const map = new Map(customers.map((c) => [c, { fields: 0, tubes: 0 }]));
+    const map = new Map(customers.map((c) => [c, { fields: 0, pipes: 0 }]));
     bays.forEach((bay) => bay.zones.forEach((z) => {
-      if (!map.has(z.customer)) map.set(z.customer, { fields: 0, tubes: 0 });
+      if (!map.has(z.customer)) map.set(z.customer, { fields: 0, pipes: 0 });
       const u = map.get(z.customer);
-      u.fields += 1; u.tubes += z.tubeCount;
+      u.fields += 1; u.pipes += z.pipeCount;
     }));
     return map;
   }, [customers, bays]);
@@ -1866,7 +1963,7 @@ function CustomersTab({ customers, bays, onAdd }) {
         <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Current customers</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {customers.map((c) => {
-            const u = usage.get(c) || { fields: 0, tubes: 0 };
+            const u = usage.get(c) || { fields: 0, pipes: 0 };
             return (
               <div key={c} style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#eef1f6", fontWeight: 600 }}>
@@ -1899,11 +1996,11 @@ function VarietiesTab({ varieties, bays, onAdd }) {
     setName(""); setError("");
   };
   const usage = useMemo(() => {
-    const map = new Map(varieties.map((v) => [v, { fields: 0, tubes: 0 }]));
+    const map = new Map(varieties.map((v) => [v, { fields: 0, pipes: 0 }]));
     bays.forEach((bay) => bay.zones.forEach((z) => {
-      if (!map.has(z.variety)) map.set(z.variety, { fields: 0, tubes: 0 });
+      if (!map.has(z.variety)) map.set(z.variety, { fields: 0, pipes: 0 });
       const u = map.get(z.variety);
-      u.fields += 1; u.tubes += z.tubeCount;
+      u.fields += 1; u.pipes += z.pipeCount;
     }));
     return map;
   }, [varieties, bays]);
@@ -1928,7 +2025,7 @@ function VarietiesTab({ varieties, bays, onAdd }) {
         <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Current varieties</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {varieties.map((v) => {
-            const u = usage.get(v) || { fields: 0, tubes: 0 };
+            const u = usage.get(v) || { fields: 0, pipes: 0 };
             return (
               <div key={v} style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#eef1f6", fontWeight: 600 }}>
@@ -1974,6 +2071,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   // --- add building ---
   const [bldgLocationId, setBldgLocationId] = useState(locations[0]?.id || "");
   const [bldgName, setBldgName] = useState("");
+  const [bldgCwtPerPipe, setBldgCwtPerPipe] = useState("");
   const [bldgError, setBldgError] = useState("");
 
   const submitBuilding = () => {
@@ -1982,8 +2080,11 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
     if (buildings.some((b) => b.locationId === bldgLocationId && b.name.toLowerCase() === trimmed.toLowerCase())) {
       setBldgError(`"${trimmed}" already exists at this location.`); return;
     }
-    onAddBuilding({ id: uid("bldg"), name: trimmed, locationId: bldgLocationId });
-    setBldgName(""); setBldgError("");
+    onAddBuilding({
+      id: uid("bldg"), name: trimmed, locationId: bldgLocationId,
+      ...(bldgCwtPerPipe ? { cwtPerPipe: Number(bldgCwtPerPipe) } : {}),
+    });
+    setBldgName(""); setBldgCwtPerPipe(""); setBldgError("");
   };
 
   // --- add bay (with zones) ---
@@ -1997,6 +2098,17 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
 
   const [bayName, setBayName] = useState("");
   const [bayFillDate, setBayFillDate] = useState(todayStr());
+  const [bayPipeCount, setBayPipeCount] = useState("");
+  const [bayCwtPerPipe, setBayCwtPerPipe] = useState("");
+  // Prefill the bay's cwt/pipe from its building's approximate default
+  // whenever the building changes — but only while the field is still
+  // untouched, so it never clobbers something already typed in.
+  const bayCwtTouched = useRef(false);
+  useEffect(() => {
+    if (bayCwtTouched.current) return;
+    const bldg = buildings.find((b) => b.id === bayBuildingId);
+    setBayCwtPerPipe(bldg?.cwtPerPipe ? String(bldg.cwtPerPipe) : "");
+  }, [bayBuildingId, buildings]);
   // A bay can be created empty — product/fields get added afterward, once
   // there's something to fill it with. These rows are an optional shortcut
   // for adding fields right away if you already know them.
@@ -2004,28 +2116,32 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   const [bayError, setBayError] = useState("");
 
   const updateZoneRow = (i, patch) => setZoneRows((rows) => rows.map((r, ri) => ri === i ? { ...r, ...patch } : r));
-  const addZoneRow = () => setZoneRows((rows) => [...rows, { name: `Field ${rows.length + 1}`, variety: varieties[0] || "", customer: "Unassigned", tubeCount: "30", cwtPerTube: "" }]);
+  const addZoneRow = () => setZoneRows((rows) => [...rows, { name: `Field ${rows.length + 1}`, variety: varieties[0] || "", customer: "Unassigned", pipeCount: "30", cwtPerPipe: "" }]);
   const removeZoneRow = (i) => setZoneRows((rows) => rows.filter((_, ri) => ri !== i));
+
+  const zoneRowPipeSum = zoneRows.reduce((s, r) => s + (Number(r.pipeCount) || 0), 0);
 
   const submitBay = () => {
     const trimmed = bayName.trim();
     if (!trimmed) { setBayError("Give the bay a name."); return; }
     if (!bayBuildingId) { setBayError("Pick or create a building first."); return; }
     for (const r of zoneRows) {
-      if (!r.name.trim() || !r.variety || !Number(r.tubeCount) || Number(r.tubeCount) <= 0) {
-        setBayError("Every field needs a name, variety, and a tube count greater than 0."); return;
+      if (!r.name.trim() || !r.variety || !Number(r.pipeCount) || Number(r.pipeCount) <= 0) {
+        setBayError("Every field needs a name, variety, and a pipe count greater than 0."); return;
       }
     }
     const bayId = uid("bay");
     const zones = zoneRows.map((r) => ({
       id: uid("zone"), name: r.name.trim(), variety: r.variety, customer: r.customer || "Unassigned",
-      tubeCount: Number(r.tubeCount), ...(r.cwtPerTube ? { cwtPerTube: Number(r.cwtPerTube) } : {}),
+      pipeCount: Number(r.pipeCount), ...(r.cwtPerPipe ? { cwtPerPipe: Number(r.cwtPerPipe) } : {}),
     }));
     onAddBay({
       id: bayId, name: trimmed, buildingId: bayBuildingId, fillDate: bayFillDate,
-      cwtPerTube: zones.length > 0 && zones.every((z) => z.cwtPerTube) ? null : 2500, zones,
+      pipeCount: bayPipeCount !== "" ? Number(bayPipeCount) : (zoneRowPipeSum || null),
+      cwtPerPipe: bayCwtPerPipe !== "" ? Number(bayCwtPerPipe) : 2500,
+      zones,
     });
-    setBayName(""); setZoneRows([]);
+    setBayName(""); setBayPipeCount(""); bayCwtTouched.current = false; setZoneRows([]);
     setBayError("");
   };
 
@@ -2058,6 +2174,10 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
             </select>
           </Field>
           <Field label="Building name"><input value={bldgName} onChange={(e) => setBldgName(e.target.value)} style={inputStyle} placeholder="e.g. Hidden Valley 1–2 Building" /></Field>
+          <Field label="Approx. cwt/pipe for this building (optional)">
+            <input type="number" value={bldgCwtPerPipe} onChange={(e) => setBldgCwtPerPipe(e.target.value)} style={inputStyle} placeholder="e.g. 3200" />
+          </Field>
+          <div style={{ fontSize: 11, color: "#5b6478", marginBottom: 8 }}>Used to prefill cwt/pipe whenever a new bay is added to this building — each bay can still override it.</div>
           {bldgError && <div style={{ fontSize: 12, color: "#e08787", marginBottom: 8 }}>{bldgError}</div>}
           <Button onClick={submitBuilding} disabled={!locations.length}><Plus size={14} /> Add building</Button>
         </div>
@@ -2082,6 +2202,22 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
           </Field>
           <Field label="Bay name"><input value={bayName} onChange={(e) => setBayName(e.target.value)} style={inputStyle} placeholder="e.g. Hidden Valley #1" /></Field>
           <Field label="Fill date"><input type="date" value={bayFillDate} onChange={(e) => setBayFillDate(e.target.value)} style={inputStyle} /></Field>
+          <Field label="Total pipe in this bay">
+            <input type="number" min="1" value={bayPipeCount} onChange={(e) => setBayPipeCount(e.target.value)} style={{ ...inputStyle, width: 110 }} placeholder={zoneRowPipeSum ? String(zoneRowPipeSum) : "e.g. 40"} />
+          </Field>
+          <Field label="Cwt/pipe">
+            <input
+              type="number"
+              value={bayCwtPerPipe}
+              onChange={(e) => { bayCwtTouched.current = true; setBayCwtPerPipe(e.target.value); }}
+              style={{ ...inputStyle, width: 110 }}
+              placeholder="e.g. 3200"
+            />
+          </Field>
+        </div>
+        <div style={{ fontSize: 11, color: "#5b6478", margin: "6px 0" }}>
+          Leave "Total pipe" blank to use the sum of the fields below once they're filled in. Cwt/pipe prefills from the
+          building's approximate default and can be changed here or later.
         </div>
 
         <div style={{ fontSize: 11, color: "#8790a3", margin: "10px 0 6px", letterSpacing: 0.3 }}>
@@ -2106,8 +2242,8 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                   {customerOptions(customers, r.customer).map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </Field>
-              <Field label="Tubes"><input type="number" min="1" value={r.tubeCount} onChange={(e) => updateZoneRow(i, { tubeCount: e.target.value })} style={{ ...inputStyle, width: 80 }} /></Field>
-              <Field label="Cwt/tube (optional)"><input type="number" value={r.cwtPerTube} onChange={(e) => updateZoneRow(i, { cwtPerTube: e.target.value })} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 3200" /></Field>
+              <Field label="Pipe (approx. covered)"><input type="number" min="1" value={r.pipeCount} onChange={(e) => updateZoneRow(i, { pipeCount: e.target.value })} style={{ ...inputStyle, width: 90 }} /></Field>
+              <Field label="Cwt/pipe (optional)"><input type="number" value={r.cwtPerPipe} onChange={(e) => updateZoneRow(i, { cwtPerPipe: e.target.value })} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 3200" /></Field>
               <Button variant="ghost" onClick={() => removeZoneRow(i)} style={{ marginBottom: 10 }}>Remove</Button>
             </div>
           ))}
@@ -2115,6 +2251,11 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
         <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
           <Button variant="ghost" onClick={addZoneRow}><Plus size={14} /> Add field</Button>
         </div>
+        {bayPipeCount !== "" && zoneRowPipeSum > Number(bayPipeCount) && (
+          <div style={{ fontSize: 12, color: "#e0a63e", marginTop: 8 }}>
+            Fields above add up to {zoneRowPipeSum} pipe, more than the {bayPipeCount} total entered for this bay — just a heads up, it'll still save.
+          </div>
+        )}
 
         {bayError && <div style={{ fontSize: 12, color: "#e08787", margin: "10px 0" }}>{bayError}</div>}
         {readOnly && <div style={{ fontSize: 12, color: "#f2c14e", margin: "10px 0" }}>Switch to the current season to add a bay.</div>}
@@ -2167,12 +2308,14 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
                 {buildings.filter((b) => b.locationId === loc.id).map((b) => (
                   <div key={b.id} style={{ paddingLeft: 16, borderLeft: "2px solid #232d40" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <Building2 size={12} color="#8790a3" />
                       <EditableInline value={b.name} onSave={(v) => onUpdateBuilding(b.id, { name: v })} width={220} />
+                      <span style={{ fontSize: 11, color: "#6f7890" }}>approx. cwt/pipe</span>
+                      <EditableInline value={b.cwtPerPipe ?? ""} type="number" onSave={(v) => onUpdateBuilding(b.id, { cwtPerPipe: v })} width={90} placeholder="—" />
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
-                      {bays.filter((bay) => bay.buildingId === b.id).map((bay) => (
+                      {sortByNatural(bays.filter((bay) => bay.buildingId === b.id), (bay) => bay.name).map((bay) => (
                         <BayRow key={bay.id} bay={bay} readOnly={readOnly} varieties={varieties} customers={customers}
                           onUpdateBayMeta={onUpdateBayMeta} onUpdateZoneMeta={onUpdateZoneMeta} onAddZoneToBay={onAddZoneToBay} onEmptyBay={onEmptyBay} />
                       ))}
@@ -2206,8 +2349,10 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
         <EditableInline value={bay.name} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { name: v })} width={140} />
         <span style={{ fontSize: 11, color: "#6f7890" }}>filled</span>
         <EditableInline value={bay.fillDate} type="date" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { fillDate: v })} width={140} />
-        <span style={{ fontSize: 11, color: "#6f7890" }}>cwt/tube (bay default)</span>
-        <EditableInline value={bay.cwtPerTube ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { cwtPerTube: v })} width={90} placeholder="—" />
+        <span style={{ fontSize: 11, color: "#6f7890" }}>total pipe</span>
+        <EditableInline value={bay.pipeCount ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { pipeCount: v })} width={70} placeholder="—" />
+        <span style={{ fontSize: 11, color: "#6f7890" }}>cwt/pipe (bay default)</span>
+        <EditableInline value={bay.cwtPerPipe ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { cwtPerPipe: v })} width={90} placeholder="—" />
         {!readOnly && bay.zones.length > 0 && (
           <button
             onClick={() => {
@@ -2226,8 +2371,8 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
           <div key={z.id} style={{ paddingLeft: 20, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12 }}>
             <ColorDot color={getVarietyColor(z.variety)} size={7} /><ColorDot color={getCustomerColor(z.customer)} size={7} />
             <EditableInline value={z.name} disabled={readOnly} onSave={(v) => onUpdateZoneMeta(bay.id, z.id, { name: v })} width={130} />
-            <span style={{ color: "#6f7890" }}>tubes</span>
-            <EditableInline value={z.tubeCount} type="number" disabled={readOnly} onSave={(v) => onUpdateZoneMeta(bay.id, z.id, { tubeCount: v })} width={70} />
+            <span style={{ color: "#6f7890" }}>pipe</span>
+            <EditableInline value={z.pipeCount} type="number" disabled={readOnly} onSave={(v) => onUpdateZoneMeta(bay.id, z.id, { pipeCount: v })} width={70} />
             <span style={{ color: "#6f7890" }}>{z.variety} · {z.customer}</span>
           </div>
         ))}
@@ -2535,12 +2680,25 @@ export default function PotatoStorage() {
 
   const buildingsById = useMemo(() => Object.fromEntries(buildings.map((b) => [b.id, b])), [buildings]);
   const locationsById = useMemo(() => Object.fromEntries(locations.map((l) => [l.id, l])), [locations]);
-  const selectedLocation = locationsById[selectedLocationId] || locations[0];
+
+  // Default display order everywhere: alphabetical (numeric-aware). Bays stay
+  // grouped by building — sorting bay names first, then grouping by building
+  // in alphabetical building order, keeps each building's bays contiguous
+  // (the yard view's spacing logic depends on that) while still landing in
+  // alpha order both between and within buildings.
+  const sortedLocations = useMemo(() => sortByNatural(locations, (l) => l.name), [locations]);
+  const sortedBuildings = useMemo(() => sortByNatural(buildings, (b) => b.name), [buildings]);
+  const sortedCustomers = useMemo(() => sortByNatural(customers), [customers]);
+  const sortedVarieties = useMemo(() => sortByNatural(varieties), [varieties]);
+  const sortedProducts = useMemo(() => sortByNatural(products, (p) => p.name), [products]);
+  const sortedApplicators = useMemo(() => sortByNatural(applicators), [applicators]);
+
+  const selectedLocation = locationsById[selectedLocationId] || sortedLocations[0];
 
   const locationBays = useMemo(() => {
     const filtered = displayBays.filter((b) => buildingsById[b.buildingId]?.locationId === selectedLocationId);
-    return sortBaysByBuilding(filtered, buildings);
-  }, [displayBays, buildingsById, buildings, selectedLocationId]);
+    return sortBaysByBuilding(sortByNatural(filtered, (b) => b.name), sortedBuildings);
+  }, [displayBays, buildingsById, sortedBuildings, selectedLocationId]);
 
   useEffect(() => {
     if (!locationBays.length) return;
@@ -2553,7 +2711,7 @@ export default function PotatoStorage() {
     setDataById((prev) => {
       const bayData = prev[bayId] || {};
       const zones = bayData.zones || {};
-      const zoneData = zones[zoneId] || { tubeChecks: [], cwtRuns: [] };
+      const zoneData = zones[zoneId] || { pipeChecks: [], cwtRuns: [] };
       const nextZoneData = updater(zoneData);
       const nextBayData = { ...bayData, zones: { ...zones, [zoneId]: nextZoneData } };
       const next = { ...prev, [bayId]: nextBayData };
@@ -2562,8 +2720,8 @@ export default function PotatoStorage() {
     });
   }, [isReadOnly]);
 
-  const onAddTubeCheck = useCallback((bayId, zoneId, entry) => {
-    updateZoneData(bayId, zoneId, (zd) => ({ ...zd, tubeChecks: [...(zd.tubeChecks || []), entry] }));
+  const onAddPipeCheck = useCallback((bayId, zoneId, entry) => {
+    updateZoneData(bayId, zoneId, (zd) => ({ ...zd, pipeChecks: [...(zd.pipeChecks || []), entry] }));
   }, [updateZoneData]);
 
   const onAddCwtRun = useCallback((bayId, zoneId, entry) => {
@@ -2831,7 +2989,7 @@ export default function PotatoStorage() {
             <div style={{ fontSize: 10.5, color: "#6f7890", letterSpacing: 0.5, marginBottom: 3 }}>SITE</div>
             <select value={selectedLocationId} onChange={(e) => setSelectedLocationId(e.target.value)}
               style={{ ...inputStyle, width: "auto", fontSize: 13, fontWeight: 600, padding: "6px 10px" }}>
-              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              {sortedLocations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           </div>
           <div>
@@ -2906,7 +3064,7 @@ export default function PotatoStorage() {
 
         {tab === "map" && (
           <div style={{ flex: 1, minHeight: 380 }}>
-            <MapTab locations={locations} bays={displayBays} buildingsById={buildingsById} statsById={statsById}
+            <MapTab locations={sortedLocations} bays={displayBays} buildingsById={buildingsById} statsById={statsById}
               onSelectLocation={(id) => { setSelectedLocationId(id); setTab("yard"); }} />
           </div>
         )}
@@ -2928,7 +3086,7 @@ export default function PotatoStorage() {
                   ))}
                 </div>
                 <BayDetail bay={selectedBay} data={displayDataById[selectedBay.id] || emptyBayData(selectedBay)} stats={statsById[selectedBay.id]}
-                  customers={customers} varieties={varieties} readOnly={isReadOnly} onAddTubeCheck={onAddTubeCheck} onAddCwtRun={onAddCwtRun}
+                  customers={sortedCustomers} varieties={sortedVarieties} readOnly={isReadOnly} onAddPipeCheck={onAddPipeCheck} onAddCwtRun={onAddCwtRun}
                   onUpdateZoneCustomer={onUpdateZoneCustomer} onUpdateZoneVariety={onUpdateZoneVariety} onAddZoneToBay={onAddZoneToBay}
                   onEmptyBay={onEmptyBay} />
               </>
@@ -2944,7 +3102,7 @@ export default function PotatoStorage() {
 
         {tab === "manage" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-            <ManageTab locations={locations} buildings={buildings} bays={bays} varieties={varieties} customers={customers} readOnly={isReadOnly}
+            <ManageTab locations={sortedLocations} buildings={sortedBuildings} bays={bays} varieties={sortedVarieties} customers={sortedCustomers} readOnly={isReadOnly}
               onAddLocation={onAddLocation} onAddBuilding={onAddBuilding} onAddBay={onAddBay}
               onUpdateLocation={onUpdateLocation} onUpdateBuilding={onUpdateBuilding} onUpdateBayMeta={onUpdateBayMeta} onUpdateZoneMeta={onUpdateZoneMeta}
               onAddZoneToBay={onAddZoneToBay} onEmptyBay={onEmptyBay} onEmptyAllBays={onEmptyAllBays} />
@@ -2953,13 +3111,13 @@ export default function PotatoStorage() {
 
         {tab === "customers" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-            <CustomersTab customers={customers} bays={displayBays} onAdd={onAddCustomer} />
+            <CustomersTab customers={sortedCustomers} bays={displayBays} onAdd={onAddCustomer} />
           </div>
         )}
 
         {tab === "varieties" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-            <VarietiesTab varieties={varieties} bays={displayBays} onAdd={onAddVariety} />
+            <VarietiesTab varieties={sortedVarieties} bays={displayBays} onAdd={onAddVariety} />
           </div>
         )}
 
@@ -2974,7 +3132,7 @@ export default function PotatoStorage() {
         {tab === "sproutnip" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
-              <SproutNipTab bays={locationBays} dataById={displayDataById} customers={customers} products={products} applicators={applicators}
+              <SproutNipTab bays={locationBays} dataById={displayDataById} customers={sortedCustomers} products={sortedProducts} applicators={sortedApplicators}
                 readOnly={isReadOnly} onAddSproutApplication={onAddSproutApplication} onAddProduct={onAddProduct}
                 onUpdateProductRestrictions={onUpdateProductRestrictions} onAddApplicator={onAddApplicator} />
             )}
