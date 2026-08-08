@@ -3,9 +3,9 @@ import * as THREE from "three";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import {
   Warehouse, Thermometer, ClipboardCheck, Package, TrendingDown, Map as MapIcon,
-  Plus, ChevronRight, MapPin, Gauge, BarChart3, AlertTriangle, Check, Layers, Users, Sprout, Building2, FlaskConical,
+  Plus, ChevronRight, MapPin, Gauge, BarChart3, AlertTriangle, Check, Layers, Users, Sprout, Building2, FlaskConical, Trash2,
 } from "lucide-react";
-import { doc, getDoc, setDoc, collection, collectionGroup, query, where, getDocs } from "firebase/firestore";
+import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, query, where, getDocs } from "firebase/firestore";
 import { db } from "./firebase.js"; // AIO's existing Firebase project — same login, no second sign-in
 
 /* =================================================================
@@ -217,6 +217,12 @@ async function saveJSON(key, value) {
   try { await setDoc(doc(db, "potatoStorage", key), { value: JSON.stringify(value), updatedAt: Date.now() }); }
   catch (e) { console.error("storage save failed", key, e); }
 }
+// Used when a bay (or everything under a building/location) is deleted, so
+// its old per-bay data doc doesn't just sit around orphaned in Firestore.
+async function deleteJSON(key) {
+  try { await deleteDoc(doc(db, "potatoStorage", key)); }
+  catch (e) { console.error("storage delete failed", key, e); }
+}
 
 /* ---------------------------------------------------------------
    Derived stats — per zone (field), then rolled up per bay
@@ -299,13 +305,21 @@ function computeZoneStats(bay, zone, zoneData) {
 
 function computeBayStats(bay, bayData) {
   const zoneStats = {};
-  let currentCwt = 0, capacityCwt = 0, totalRun = 0, initialCwt = 0, shrinkCwt = 0;
+  let currentCwt = 0, zoneCapacityCwt = 0, totalRun = 0, initialCwt = 0, shrinkCwt = 0;
   bay.zones.forEach((z) => {
     const zs = computeZoneStats(bay, z, bayData?.zones?.[z.id]);
     zoneStats[z.id] = zs;
-    currentCwt += zs.currentCwt; capacityCwt += zs.capacityCwt;
+    currentCwt += zs.currentCwt; zoneCapacityCwt += zs.capacityCwt;
     totalRun += zs.totalRun; initialCwt += zs.initialCwt; shrinkCwt += zs.shrinkCwt;
   });
+  // A bay's own declared pipe count + cwt/pipe is its physical capacity —
+  // known the moment the bay is created, even before any field is assigned
+  // to it (or if fields don't yet cover every pipe). Falls back to the sum
+  // of what's actually assigned only when the bay wasn't given its own
+  // totals, so older bays without them still work as before.
+  const capacityCwt = (bay.pipeCount && bay.cwtPerPipe)
+    ? bay.pipeCount * bay.cwtPerPipe
+    : zoneCapacityCwt;
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
   const shrinkPct = initialCwt > 0 ? shrinkCwt / initialCwt : 0;
   return { zoneStats, currentCwt, capacityCwt, fillPct, totalRun, initialCwt, shrinkCwt, shrinkPct };
@@ -1330,6 +1344,27 @@ function Button({ children, onClick, variant = "primary", style, disabled }) {
   return <button disabled={disabled} onClick={onClick} style={{ ...base, ...variants[variant], ...style }}>{children}</button>;
 }
 
+// Small red icon-only delete affordance used throughout Manage Sites —
+// confirms with a plain `window.confirm` (the caller supplies the message,
+// since what's actually at stake varies a lot by level: a field vs. an
+// entire location's worth of buildings and bays).
+function DeleteButton({ onConfirm, confirmMessage, title = "Delete", disabled, size = 13 }) {
+  if (disabled) return null;
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={() => { if (window.confirm(confirmMessage)) onConfirm(); }}
+      style={{
+        border: "1px solid #4a2b2b", background: "transparent", color: "#e08787",
+        borderRadius: 6, padding: "3px 6px", cursor: "pointer", display: "inline-flex", alignItems: "center",
+      }}
+    >
+      <Trash2 size={size} />
+    </button>
+  );
+}
+
 // Uncontrolled inline-editable field — saves on blur (or Enter), and resets
 // its displayed value whenever the underlying prop changes (e.g. after a
 // successful save round-trip), via the `key`.
@@ -2201,7 +2236,7 @@ function VarietiesTab({ varieties, bays, onAdd }) {
    Manage tab — create Locations (complexes), Buildings, and Bays
    (with their fields) without touching code.
 ----------------------------------------------------------------*/
-function ManageTab({ locations, buildings, bays, varieties, customers, readOnly, onAddLocation, onAddBuilding, onAddBay, onUpdateLocation, onUpdateBuilding, onUpdateBayMeta, onUpdateZoneMeta, onAddZoneToBay, onEmptyBay, onEmptyAllBays }) {
+function ManageTab({ locations, buildings, bays, varieties, customers, readOnly, onAddLocation, onAddBuilding, onAddBay, onUpdateLocation, onUpdateBuilding, onUpdateBayMeta, onUpdateZoneMeta, onAddZoneToBay, onEmptyBay, onEmptyAllBays, onDeleteLocation, onDeleteBuilding, onDeleteBay, onDeleteZone }) {
   const [showEmptyAll, setShowEmptyAll] = useState(false);
   const filledBayCount = bays.filter((b) => b.zones.length > 0).length;
   // --- add location ---
@@ -2465,41 +2500,61 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {locations.map((loc) => (
+          {locations.map((loc) => {
+            const buildingsHere = buildings.filter((b) => b.locationId === loc.id);
+            const bayCountHere = bays.filter((bay) => buildingsHere.some((b) => b.id === bay.buildingId)).length;
+            return (
             <div key={loc.id} style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <MapPin size={13} color="#f2c14e" />
-                <EditableInline value={loc.name} onSave={(v) => onUpdateLocation(loc.id, { name: v })} width={180} />
-                <EditableInline value={loc.address} onSave={(v) => onUpdateLocation(loc.id, { address: v })} width={220} placeholder="address" />
-                <EditableInline value={loc.lat} type="number" onSave={(v) => onUpdateLocation(loc.id, { lat: v })} width={90} placeholder="lat" />
-                <EditableInline value={loc.lng} type="number" onSave={(v) => onUpdateLocation(loc.id, { lng: v })} width={90} placeholder="lng" />
+                <EditableInline value={loc.name} disabled={readOnly} onSave={(v) => onUpdateLocation(loc.id, { name: v })} width={180} />
+                <EditableInline value={loc.address} disabled={readOnly} onSave={(v) => onUpdateLocation(loc.id, { address: v })} width={220} placeholder="address" />
+                <EditableInline value={loc.lat} type="number" disabled={readOnly} onSave={(v) => onUpdateLocation(loc.id, { lat: v })} width={90} placeholder="lat" />
+                <EditableInline value={loc.lng} type="number" disabled={readOnly} onSave={(v) => onUpdateLocation(loc.id, { lng: v })} width={90} placeholder="lng" />
+                <DeleteButton
+                  disabled={readOnly}
+                  title="Delete location"
+                  onConfirm={() => onDeleteLocation(loc.id)}
+                  confirmMessage={`Delete "${loc.name}"? This also deletes its ${buildingsHere.length} building${buildingsHere.length !== 1 ? "s" : ""} and ${bayCountHere} bay${bayCountHere !== 1 ? "s" : ""}, along with everything logged in them. This can't be undone.`}
+                />
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
-                {buildings.filter((b) => b.locationId === loc.id).map((b) => (
+                {buildingsHere.map((b) => {
+                  const baysHere = bays.filter((bay) => bay.buildingId === b.id);
+                  return (
                   <div key={b.id} style={{ paddingLeft: 16, borderLeft: "2px solid #232d40" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <Building2 size={12} color="#8790a3" />
-                      <EditableInline value={b.name} onSave={(v) => onUpdateBuilding(b.id, { name: v })} width={220} />
+                      <EditableInline value={b.name} disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { name: v })} width={220} />
                       <span style={{ fontSize: 11, color: "#6f7890" }}>approx. cwt/pipe</span>
-                      <EditableInline value={b.cwtPerPipe ?? ""} type="number" onSave={(v) => onUpdateBuilding(b.id, { cwtPerPipe: v })} width={90} placeholder="—" />
+                      <EditableInline value={b.cwtPerPipe ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { cwtPerPipe: v })} width={90} placeholder="—" />
+                      <DeleteButton
+                        disabled={readOnly}
+                        title="Delete building"
+                        onConfirm={() => onDeleteBuilding(b.id)}
+                        confirmMessage={`Delete "${b.name}"? This also deletes its ${baysHere.length} bay${baysHere.length !== 1 ? "s" : ""}, along with everything logged in them. This can't be undone.`}
+                      />
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
-                      {sortByNatural(bays.filter((bay) => bay.buildingId === b.id), (bay) => bay.name).map((bay) => (
+                      {sortByNatural(baysHere, (bay) => bay.name).map((bay) => (
                         <BayRow key={bay.id} bay={bay} readOnly={readOnly} varieties={varieties} customers={customers}
-                          onUpdateBayMeta={onUpdateBayMeta} onUpdateZoneMeta={onUpdateZoneMeta} onAddZoneToBay={onAddZoneToBay} onEmptyBay={onEmptyBay} />
+                          onUpdateBayMeta={onUpdateBayMeta} onUpdateZoneMeta={onUpdateZoneMeta} onAddZoneToBay={onAddZoneToBay}
+                          onEmptyBay={onEmptyBay} onDeleteBay={onDeleteBay} onDeleteZone={onDeleteZone} />
                       ))}
-                      {bays.filter((bay) => bay.buildingId === b.id).length === 0 && (
+                      {baysHere.length === 0 && (
                         <div style={{ paddingLeft: 16, fontSize: 12, color: "#5b6478" }}>No bays yet.</div>
                       )}
                     </div>
                   </div>
-                ))}
-                {buildings.filter((b) => b.locationId === loc.id).length === 0 && (
+                  );
+                })}
+                {buildingsHere.length === 0 && (
                   <div style={{ paddingLeft: 16, fontSize: 12.5, color: "#5b6478" }}>No buildings yet.</div>
                 )}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
@@ -2509,7 +2564,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
 // A bay in the Manage Sites structure tree. A bay can exist with zero fields
 // — "No product assigned yet" — and product gets attached to it here (or
 // from Bay Detail) whenever it's actually ready to be filled.
-function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdateZoneMeta, onAddZoneToBay, onEmptyBay }) {
+function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdateZoneMeta, onAddZoneToBay, onEmptyBay, onDeleteBay, onDeleteZone }) {
   const [adding, setAdding] = useState(false);
   return (
     <div style={{ paddingLeft: 16, borderLeft: "2px solid #1a2130" }}>
@@ -2534,6 +2589,12 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
             Empty bay
           </button>
         )}
+        <DeleteButton
+          disabled={readOnly}
+          title="Delete bay"
+          onConfirm={() => onDeleteBay(bay.id)}
+          confirmMessage={`Delete "${bay.name}"? This removes the bay entirely${bay.zones.length ? `, including its ${bay.zones.length} field${bay.zones.length !== 1 ? "s" : ""}` : ""} and everything logged in it. This can't be undone.`}
+        />
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
         {bay.zones.map((z) => (
@@ -2543,7 +2604,21 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
             <span style={{ color: "#6f7890" }}>
               pipe {formatPipeRanges(z.pipeRanges)} ({zonePipeCount(z)})
             </span>
-            <span style={{ color: "#6f7890" }}>{z.variety} · {z.customer}</span>
+            <select value={z.variety} disabled={readOnly} onChange={(e) => onUpdateZoneMeta(bay.id, z.id, { variety: e.target.value })}
+              style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
+              {varietyOptions(varieties, z.variety).map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+            <select value={z.customer} disabled={readOnly} onChange={(e) => onUpdateZoneMeta(bay.id, z.id, { customer: e.target.value })}
+              style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
+              {customerOptions(customers, z.customer).map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <DeleteButton
+              disabled={readOnly}
+              size={11}
+              title="Delete field"
+              onConfirm={() => onDeleteZone(bay.id, z.id)}
+              confirmMessage={`Delete field "${z.name}"? This removes it from the bay along with everything logged for it. This can't be undone.`}
+            />
           </div>
         ))}
         {bay.zones.length === 0 && (
@@ -2876,6 +2951,14 @@ export default function PotatoStorage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLocationId, selectedSeasonId, locationBays.map((b) => b.id).join(",")]);
 
+  // If the currently-selected location gets deleted, fall back to whatever's
+  // first in the list rather than pointing at nothing.
+  useEffect(() => {
+    if (sortedLocations.length && !sortedLocations.find((l) => l.id === selectedLocationId)) {
+      setSelectedLocationId(sortedLocations[0].id);
+    }
+  }, [sortedLocations, selectedLocationId]);
+
   const updateZoneData = useCallback((bayId, zoneId, updater) => {
     if (isReadOnly) return;
     setDataById((prev) => {
@@ -3130,6 +3213,98 @@ export default function PotatoStorage() {
     });
   }, [isReadOnly, bays]);
 
+  // Deletes a single field from a bay — unlike emptying a bay, this drops
+  // that one field's logged history (checks/runs) for good. The confirming
+  // prompt happens at the UI layer before this is called.
+  const onDeleteZone = useCallback((bayId, zoneId) => {
+    if (isReadOnly) return;
+    setBays((prev) => {
+      const next = prev.map((b) => b.id === bayId ? { ...b, zones: b.zones.filter((z) => z.id !== zoneId) } : b);
+      saveJSON(CONFIG_KEY, next);
+      return next;
+    });
+    setDataById((prev) => {
+      const bayData = prev[bayId];
+      if (!bayData?.zones?.[zoneId]) return prev;
+      const zones = { ...bayData.zones };
+      delete zones[zoneId];
+      const nextBayData = { ...bayData, zones };
+      const next = { ...prev, [bayId]: nextBayData };
+      saveJSON(bayDataKey(bayId), nextBayData);
+      return next;
+    });
+  }, [isReadOnly]);
+
+  // Deletes a bay entirely — its structure and everything logged in it.
+  // The building/location it lived in is untouched.
+  const onDeleteBay = useCallback((bayId) => {
+    if (isReadOnly) return;
+    setBays((prev) => {
+      const next = prev.filter((b) => b.id !== bayId);
+      saveJSON(CONFIG_KEY, next);
+      return next;
+    });
+    setDataById((prev) => {
+      if (!prev[bayId]) return prev;
+      const next = { ...prev };
+      delete next[bayId];
+      return next;
+    });
+    deleteJSON(bayDataKey(bayId));
+  }, [isReadOnly]);
+
+  // Deletes a building and cascades to every bay inside it (and each bay's
+  // logged history). The UI confirms the bay count with the user first.
+  const onDeleteBuilding = useCallback((buildingId) => {
+    if (isReadOnly) return;
+    const bayIdsHere = bays.filter((b) => b.buildingId === buildingId).map((b) => b.id);
+    setBuildings((prev) => {
+      const next = prev.filter((b) => b.id !== buildingId);
+      saveJSON(BUILDINGS_KEY, next);
+      return next;
+    });
+    setBays((prev) => {
+      const next = prev.filter((b) => b.buildingId !== buildingId);
+      saveJSON(CONFIG_KEY, next);
+      return next;
+    });
+    setDataById((prev) => {
+      const next = { ...prev };
+      bayIdsHere.forEach((id) => delete next[id]);
+      return next;
+    });
+    bayIdsHere.forEach((id) => deleteJSON(bayDataKey(id)));
+  }, [isReadOnly, bays]);
+
+  // Deletes a location and cascades to every building and bay under it. The
+  // UI confirms the building/bay counts with the user first.
+  const onDeleteLocation = useCallback((locationId) => {
+    if (isReadOnly) return;
+    const buildingIdsHere = buildings.filter((b) => b.locationId === locationId).map((b) => b.id);
+    const bayIdsHere = bays.filter((b) => buildingIdsHere.includes(b.buildingId)).map((b) => b.id);
+    setLocations((prev) => {
+      const next = prev.filter((l) => l.id !== locationId);
+      saveJSON(LOCATIONS_KEY, next);
+      return next;
+    });
+    setBuildings((prev) => {
+      const next = prev.filter((b) => b.locationId !== locationId);
+      saveJSON(BUILDINGS_KEY, next);
+      return next;
+    });
+    setBays((prev) => {
+      const next = prev.filter((b) => !buildingIdsHere.includes(b.buildingId));
+      saveJSON(CONFIG_KEY, next);
+      return next;
+    });
+    setDataById((prev) => {
+      const next = { ...prev };
+      bayIdsHere.forEach((id) => delete next[id]);
+      return next;
+    });
+    bayIdsHere.forEach((id) => deleteJSON(bayDataKey(id)));
+  }, [isReadOnly, buildings, bays]);
+
   const onStartNewSeason = useCallback((label) => {
     const newSeasonId = uid("season");
     setSeasons((prev) => {
@@ -3303,7 +3478,8 @@ export default function PotatoStorage() {
             <ManageTab locations={sortedLocations} buildings={sortedBuildings} bays={bays} varieties={sortedVarieties} customers={sortedCustomers} readOnly={isReadOnly}
               onAddLocation={onAddLocation} onAddBuilding={onAddBuilding} onAddBay={onAddBay}
               onUpdateLocation={onUpdateLocation} onUpdateBuilding={onUpdateBuilding} onUpdateBayMeta={onUpdateBayMeta} onUpdateZoneMeta={onUpdateZoneMeta}
-              onAddZoneToBay={onAddZoneToBay} onEmptyBay={onEmptyBay} onEmptyAllBays={onEmptyAllBays} />
+              onAddZoneToBay={onAddZoneToBay} onEmptyBay={onEmptyBay} onEmptyAllBays={onEmptyAllBays}
+              onDeleteLocation={onDeleteLocation} onDeleteBuilding={onDeleteBuilding} onDeleteBay={onDeleteBay} onDeleteZone={onDeleteZone} />
           </div>
         )}
 
