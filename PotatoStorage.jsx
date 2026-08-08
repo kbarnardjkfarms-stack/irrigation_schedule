@@ -266,6 +266,18 @@ function formatPipeRanges(ranges) {
     .join(", ");
 }
 
+// Every cwt/pipe number on record (bay or field) was calibrated against an
+// 18' pile — that's been the assumption everywhere up to now. A bay can now
+// be marked as a 9' pile instead, which holds roughly half as much potato
+// per pipe for the same footprint, so its cwt gets scaled down by this ratio
+// wherever cwt/pipe is actually used in a calculation. Defaulting to 18 for
+// any bay that's never had a pile height set keeps every existing bay's
+// numbers exactly as they were before this feature existed.
+const PILE_HEIGHT_OPTIONS = [18, 9];
+function pileHeightRatio(bay) {
+  return (bay?.pileHeight || 18) / 18;
+}
+
 function computeZoneStats(bay, zone, zoneData) {
   const footprint = pipeRangeSet(zone.pipeRanges);
   const pipeCount = footprint.size;
@@ -285,7 +297,10 @@ function computeZoneStats(bay, zone, zoneData) {
   });
   const pipesFilled = Array.from(fullMap.values()).filter(Boolean).length;
   const pipesEmpty = pipeCount - pipesFilled;
-  const cwtPerPipe = zone.cwtPerPipe || bay.cwtPerPipe;
+  // The entered cwt/pipe is always the 18'-pile number — scale it down for a
+  // bay marked as a 9' pile so capacity/current cwt reflect the shorter pile
+  // without anyone having to re-enter a new approximation by hand.
+  const cwtPerPipe = (zone.cwtPerPipe || bay.cwtPerPipe || 0) * pileHeightRatio(bay);
   const currentCwt = pipesFilled * cwtPerPipe;
   const capacityCwt = pipeCount * cwtPerPipe;
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
@@ -318,7 +333,7 @@ function computeBayStats(bay, bayData) {
   // of what's actually assigned only when the bay wasn't given its own
   // totals, so older bays without them still work as before.
   const capacityCwt = (bay.pipeCount && bay.cwtPerPipe)
-    ? bay.pipeCount * bay.cwtPerPipe
+    ? bay.pipeCount * bay.cwtPerPipe * pileHeightRatio(bay)
     : zoneCapacityCwt;
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
   const shrinkPct = initialCwt > 0 ? shrinkCwt / initialCwt : 0;
@@ -501,6 +516,10 @@ function buildPipeSlotOwnership(bay, zoneStatsById, totalPipes) {
 function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
   const { pileGroup, dividerGroup, stripGroup, totalPipes, pipeWidth, zStart, innerW } = bayMesh;
   const { owner, full } = buildPipeSlotOwnership(bay, zoneStatsById, totalPipes);
+  // The building shell (maxH) always renders at the same eave height — a 9'
+  // pile bay isn't a shorter building, it just doesn't get filled as high.
+  // So only the pile mounds themselves get scaled down.
+  const pileH = maxH * pileHeightRatio(bay);
 
   // Rebuild the mounds from scratch every update — which pipes are full (and
   // therefore how many separate mounds exist) changes with every log entry,
@@ -527,7 +546,7 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
 
     const mat = new THREE.MeshStandardMaterial({ color: getVarietyColor(zone.variety), roughness: 0.95, side: THREE.DoubleSide });
     const pile = new THREE.Mesh(buildPileFrustumGeometry(innerW, topWidth, segDepth, segTopDepth), mat);
-    pile.scale.set(1, maxH, 1);
+    pile.scale.set(1, pileH, 1);
     pile.position.set(0, 0, segCenterZ);
     pile.castShadow = true;
     pileGroup.add(pile);
@@ -536,7 +555,7 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
     // variety (mound color) and customer (cap color) both read at a glance
     const capMat = new THREE.MeshStandardMaterial({ color: getCustomerColor(zone.customer), roughness: 0.6, metalness: 0.1 });
     const cap = new THREE.Mesh(new THREE.BoxGeometry(topWidth * 0.94, 0.28, segTopDepth * 0.9), capMat);
-    cap.position.set(0, maxH + 0.14, segCenterZ);
+    cap.position.set(0, pileH + 0.14, segCenterZ);
     cap.castShadow = true;
     pileGroup.add(cap);
 
@@ -1264,7 +1283,7 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
         <Field label="to">
           <input type="number" min="1" max={bayPipeBound || undefined} value={pipeTo} onChange={(e) => setPipeTo(e.target.value)} style={{ ...inputStyle, width: 90 }} placeholder="e.g. 15" />
         </Field>
-        <Field label="Cwt/pipe (optional)"><input type="number" value={cwtPerPipe} onChange={(e) => setCwtPerPipe(e.target.value)} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 3200" /></Field>
+        <Field label="Cwt/pipe at 18' (optional)"><input type="number" value={cwtPerPipe} onChange={(e) => setCwtPerPipe(e.target.value)} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 3200" /></Field>
         <Button onClick={submit}><Plus size={14} /> Add product</Button>
       </div>
       {overlap.length > 0 && (
@@ -1469,7 +1488,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
         <div>
           <h2 style={{ margin: 0, fontSize: 22, color: "#eef1f6" }}>{bay.name}</h2>
           <div style={{ color: "#8790a3", fontSize: 12.5, marginTop: 3 }}>
-            Filled {bay.fillDate} · {bay.zones.length} field{bay.zones.length !== 1 ? "s" : ""} · {bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0)} pipes total
+            Filled {bay.fillDate} · {bay.zones.length} field{bay.zones.length !== 1 ? "s" : ""} · {bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0)} pipes total · {bay.pileHeight || 18}' pile
           </div>
         </div>
         {!readOnly && bay.zones.length > 0 && (
@@ -2263,6 +2282,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   const [bldgLocationId, setBldgLocationId] = useState(locations[0]?.id || "");
   const [bldgName, setBldgName] = useState("");
   const [bldgCwtPerPipe, setBldgCwtPerPipe] = useState("");
+  const [bldgPileHeight, setBldgPileHeight] = useState(18);
   const [bldgError, setBldgError] = useState("");
 
   const submitBuilding = () => {
@@ -2272,10 +2292,10 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
       setBldgError(`"${trimmed}" already exists at this location.`); return;
     }
     onAddBuilding({
-      id: uid("bldg"), name: trimmed, locationId: bldgLocationId,
+      id: uid("bldg"), name: trimmed, locationId: bldgLocationId, pileHeight: bldgPileHeight,
       ...(bldgCwtPerPipe ? { cwtPerPipe: Number(bldgCwtPerPipe) } : {}),
     });
-    setBldgName(""); setBldgCwtPerPipe(""); setBldgError("");
+    setBldgName(""); setBldgCwtPerPipe(""); setBldgPileHeight(18); setBldgError("");
   };
 
   // --- add bay (with zones) ---
@@ -2291,14 +2311,16 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   const [bayFillDate, setBayFillDate] = useState(todayStr());
   const [bayPipeCount, setBayPipeCount] = useState("");
   const [bayCwtPerPipe, setBayCwtPerPipe] = useState("");
-  // Prefill the bay's cwt/pipe from its building's approximate default
-  // whenever the building changes — but only while the field is still
-  // untouched, so it never clobbers something already typed in.
+  const [bayPileHeight, setBayPileHeight] = useState(18);
+  // Prefill the bay's cwt/pipe and pile height from its building's defaults
+  // whenever the building changes — but only while still untouched, so it
+  // never clobbers something already picked/typed in.
   const bayCwtTouched = useRef(false);
+  const bayPileHeightTouched = useRef(false);
   useEffect(() => {
-    if (bayCwtTouched.current) return;
     const bldg = buildings.find((b) => b.id === bayBuildingId);
-    setBayCwtPerPipe(bldg?.cwtPerPipe ? String(bldg.cwtPerPipe) : "");
+    if (!bayCwtTouched.current) setBayCwtPerPipe(bldg?.cwtPerPipe ? String(bldg.cwtPerPipe) : "");
+    if (!bayPileHeightTouched.current) setBayPileHeight(bldg?.pileHeight || 18);
   }, [bayBuildingId, buildings]);
   // A bay can be created empty — product/fields get added afterward, once
   // there's something to fill it with. These rows are an optional shortcut
@@ -2338,9 +2360,10 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
       id: bayId, name: trimmed, buildingId: bayBuildingId, fillDate: bayFillDate,
       pipeCount: bayPipeBound ?? (zoneRowPipeSum || null),
       cwtPerPipe: bayCwtPerPipe !== "" ? Number(bayCwtPerPipe) : 2500,
+      pileHeight: bayPileHeight,
       zones,
     });
-    setBayName(""); setBayPipeCount(""); bayCwtTouched.current = false; setZoneRows([]);
+    setBayName(""); setBayPipeCount(""); bayCwtTouched.current = false; bayPileHeightTouched.current = false; setZoneRows([]);
     setBayError("");
   };
 
@@ -2373,10 +2396,20 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
             </select>
           </Field>
           <Field label="Building name"><input value={bldgName} onChange={(e) => setBldgName(e.target.value)} style={inputStyle} placeholder="e.g. Hidden Valley 1–2 Building" /></Field>
-          <Field label="Approx. cwt/pipe for this building (optional)">
-            <input type="number" value={bldgCwtPerPipe} onChange={(e) => setBldgCwtPerPipe(e.target.value)} style={inputStyle} placeholder="e.g. 3200" />
-          </Field>
-          <div style={{ fontSize: 11, color: "#5b6478", marginBottom: 8 }}>Used to prefill cwt/pipe whenever a new bay is added to this building — each bay can still override it.</div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <Field label="Approx. cwt/pipe at an 18' pile (optional)">
+              <input type="number" value={bldgCwtPerPipe} onChange={(e) => setBldgCwtPerPipe(e.target.value)} style={{ ...inputStyle, width: 150 }} placeholder="e.g. 3200" />
+            </Field>
+            <Field label="Default pile height for new bays">
+              <select value={bldgPileHeight} onChange={(e) => setBldgPileHeight(Number(e.target.value))} style={{ ...inputStyle, width: 100 }}>
+                {PILE_HEIGHT_OPTIONS.map((h) => <option key={h} value={h}>{h}'</option>)}
+              </select>
+            </Field>
+          </div>
+          <div style={{ fontSize: 11, color: "#5b6478", marginBottom: 8 }}>
+            Both prefill whenever a new bay is added to this building — each bay can still override them. Cwt/pipe should
+            always be entered as if piled 18' high; a bay marked as a 9' pile automatically gets about half that.
+          </div>
           {bldgError && <div style={{ fontSize: 12, color: "#e08787", marginBottom: 8 }}>{bldgError}</div>}
           <Button onClick={submitBuilding} disabled={!locations.length}><Plus size={14} /> Add building</Button>
         </div>
@@ -2404,7 +2437,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
           <Field label="Total pipe in this bay">
             <input type="number" min="1" value={bayPipeCount} onChange={(e) => setBayPipeCount(e.target.value)} style={{ ...inputStyle, width: 110 }} placeholder={zoneRowPipeSum ? String(zoneRowPipeSum) : "e.g. 40"} />
           </Field>
-          <Field label="Cwt/pipe">
+          <Field label="Cwt/pipe (at 18' pile)">
             <input
               type="number"
               value={bayCwtPerPipe}
@@ -2413,10 +2446,23 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
               placeholder="e.g. 3200"
             />
           </Field>
+          <Field label="Pile height">
+            <select
+              value={bayPileHeight}
+              onChange={(e) => { bayPileHeightTouched.current = true; setBayPileHeight(Number(e.target.value)); }}
+              style={{ ...inputStyle, width: 90 }}
+            >
+              {PILE_HEIGHT_OPTIONS.map((h) => <option key={h} value={h}>{h}'</option>)}
+            </select>
+          </Field>
         </div>
         <div style={{ fontSize: 11, color: "#5b6478", margin: "6px 0" }}>
-          Leave "Total pipe" blank to use the sum of the fields below once they're filled in. Cwt/pipe prefills from the
-          building's approximate default and can be changed here or later.
+          Leave "Total pipe" blank to use the sum of the fields below once they're filled in. Cwt/pipe and pile height
+          prefill from the building's defaults and can be changed here or later. Always enter cwt/pipe as if piled 18'
+          high — a 9' pile automatically holds about half that.
+          {bayPileHeight === 9 && bayCwtPerPipe !== "" && !isNaN(Number(bayCwtPerPipe)) && (
+            <> <b style={{ color: "#e0a63e" }}>≈ {fmt(Number(bayCwtPerPipe) * 0.5)} cwt/pipe effective at 9'.</b></>
+          )}
         </div>
 
         <div style={{ fontSize: 11, color: "#8790a3", margin: "10px 0 6px", letterSpacing: 0.3 }}>
@@ -2447,7 +2493,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
               <Field label="to">
                 <input type="number" min="1" max={bayPipeBound || undefined} value={r.pipeTo} onChange={(e) => updateZoneRow(i, { pipeTo: e.target.value })} style={{ ...inputStyle, width: 90 }} placeholder="e.g. 15" />
               </Field>
-              <Field label="Cwt/pipe (optional)"><input type="number" value={r.cwtPerPipe} onChange={(e) => updateZoneRow(i, { cwtPerPipe: e.target.value })} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 3200" /></Field>
+              <Field label="Cwt/pipe at 18' (optional)"><input type="number" value={r.cwtPerPipe} onChange={(e) => updateZoneRow(i, { cwtPerPipe: e.target.value })} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 3200" /></Field>
               <Button variant="ghost" onClick={() => removeZoneRow(i)} style={{ marginBottom: 10 }}>Remove</Button>
             </div>
           ))}
@@ -2526,8 +2572,13 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <Building2 size={12} color="#8790a3" />
                       <EditableInline value={b.name} disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { name: v })} width={220} />
-                      <span style={{ fontSize: 11, color: "#6f7890" }}>approx. cwt/pipe</span>
+                      <span style={{ fontSize: 11, color: "#6f7890" }}>approx. cwt/pipe (at 18')</span>
                       <EditableInline value={b.cwtPerPipe ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { cwtPerPipe: v })} width={90} placeholder="—" />
+                      <span style={{ fontSize: 11, color: "#6f7890" }}>default pile height</span>
+                      <select value={b.pileHeight || 18} disabled={readOnly} onChange={(e) => onUpdateBuilding(b.id, { pileHeight: Number(e.target.value) })}
+                        style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
+                        {PILE_HEIGHT_OPTIONS.map((h) => <option key={h} value={h}>{h}'</option>)}
+                      </select>
                       <DeleteButton
                         disabled={readOnly}
                         title="Delete building"
@@ -2575,8 +2626,16 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
         <EditableInline value={bay.fillDate} type="date" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { fillDate: v })} width={140} />
         <span style={{ fontSize: 11, color: "#6f7890" }}>total pipe</span>
         <EditableInline value={bay.pipeCount ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { pipeCount: v })} width={70} placeholder="—" />
-        <span style={{ fontSize: 11, color: "#6f7890" }}>cwt/pipe (bay default)</span>
+        <span style={{ fontSize: 11, color: "#6f7890" }}>cwt/pipe at 18' (bay default)</span>
         <EditableInline value={bay.cwtPerPipe ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { cwtPerPipe: v })} width={90} placeholder="—" />
+        <span style={{ fontSize: 11, color: "#6f7890" }}>pile height</span>
+        <select value={bay.pileHeight || 18} disabled={readOnly} onChange={(e) => onUpdateBayMeta(bay.id, { pileHeight: Number(e.target.value) })}
+          style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
+          {PILE_HEIGHT_OPTIONS.map((h) => <option key={h} value={h}>{h}'</option>)}
+        </select>
+        {(bay.pileHeight || 18) === 9 && bay.cwtPerPipe > 0 && (
+          <span style={{ fontSize: 11, color: "#e0a63e" }}>≈ {fmt(bay.cwtPerPipe * 0.5)} cwt/pipe effective</span>
+        )}
         {!readOnly && bay.zones.length > 0 && (
           <button
             onClick={() => {
