@@ -426,18 +426,15 @@ function applyZoneFill(zoneMeshes, zoneStatsById, maxH) {
     const remainingDepth = Math.max(0.35, fillPct * m.depth);
     const topWidth = m.innerW * PILE_TAPER;
     const topDepth = remainingDepth * PILE_TAPER;
-
     m.pile.geometry.dispose();
     m.pile.geometry = buildPileFrustumGeometry(m.innerW, topWidth, remainingDepth, topDepth);
     m.pile.scale.set(1, maxH, 1);
     const centerZ = m.depthStart + m.depth - remainingDepth / 2;
     m.pile.position.set(0, 0, centerZ);
-
     if (m.cap) {
       m.cap.scale.z = remainingDepth / m.depth;
       m.cap.position.set(0, maxH + 0.14, centerZ);
     }
-
     const remaining = stats?.tubesRemaining || 0;
     const total = stats ? stats.tubesFilled + stats.tubesRemaining : 0;
     const emptyFrac = total > 0 ? remaining / total : 0;
@@ -501,6 +498,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
 
     const buildingGroup = new THREE.Group();
     scene.add(buildingGroup);
+
     const bayMeshes = {};
     bays.forEach((bay, i) => {
       const { group, zoneMeshes, maxH } = buildBayGroup(bay, DIMS);
@@ -522,6 +520,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     let theta = mode === "interior" ? 1.15 : Math.PI / 2 - 0.5;
     let phi = mode === "interior" ? 0.85 : 1.02;
     const clampPhi = (p) => Math.max(0.3, Math.min(1.4, p));
+
     function updateCamera() {
       camera.position.x = target.x + radius * Math.sin(phi) * Math.cos(theta);
       camera.position.y = target.y + radius * Math.cos(phi);
@@ -571,6 +570,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       radius = Math.max(min, Math.min(max, radius + e.deltaY * 0.03));
       updateCamera();
     };
+
     renderer.domElement.style.touchAction = "none";
     renderer.domElement.addEventListener("pointerdown", onDown);
     window.addEventListener("pointermove", onMove);
@@ -581,6 +581,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     const animate = () => {
       raf = requestAnimationFrame(animate);
       renderer.render(scene, camera);
+
       const newLabels = [];
       bays.forEach((bay) => {
         const m = bayMeshes[bay.id];
@@ -751,17 +752,25 @@ function loadLeaflet() {
   });
 }
 
-function MapTab({ location, bays, statsById, onSelect }) {
+// One pin per complex (location), placed at the lat/lng entered for it in
+// Manage Sites. Clicking a pin's popup link jumps into that complex's 3D
+// yard (all of its bays) — the map is a way to get to a complex, not a
+// bay-level view.
+function MapTab({ locations, bays, buildingsById, statsById, onSelectLocation }) {
   const mountRef = useRef(null);
   const mapRef = useRef(null);
   const [ready, setReady] = useState(false);
+
+  const withCoords = locations.filter((l) => Number.isFinite(l.lat) && Number.isFinite(l.lng));
 
   useEffect(() => {
     let cancelled = false;
     loadLeaflet().then((L) => {
       if (cancelled || !mountRef.current || mapRef.current) return;
       if (mountRef.current._leaflet_id) delete mountRef.current._leaflet_id; // guard against a stray re-init on a reused container
-      const map = L.map(mountRef.current, { zoomControl: true }).setView([location.lat, location.lng], 18);
+
+      const center = withCoords[0] ? [withCoords[0].lat, withCoords[0].lng] : [42.62, -113.70];
+      const map = L.map(mountRef.current, { zoomControl: true }).setView(center, 12);
 
       const imagery = L.tileLayer(
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -772,56 +781,46 @@ function MapTab({ location, bays, statsById, onSelect }) {
       });
       L.control.layers({ "Satellite (Esri)": imagery, "Streets (OSM)": streets }, {}, { position: "topright" }).addTo(map);
 
-      const cols = 3;
-      bays.forEach((bay, i) => {
-        const dx = (i % cols - 1) * 0.00012;
-        const dz = Math.floor(i / cols) * 0.00012;
-        const lat = location.lat + dz;
-        const lng = location.lng + dx;
-        const stats = statsById[bay.id] || {};
-        const primaryZone = bay.zones[0];
-        const varietyColor = getVarietyColor(primaryZone.variety);
-        const customerColor = getCustomerColor(primaryZone.customer);
+      withCoords.forEach((loc) => {
+        const locBays = bays.filter((b) => buildingsById[b.buildingId]?.locationId === loc.id);
+        const agg = locBays.reduce((acc, b) => {
+          const s = statsById[b.id] || {};
+          return { cwt: acc.cwt + (s.currentCwt || 0), capacity: acc.capacity + (s.capacityCwt || 0) };
+        }, { cwt: 0, capacity: 0 });
+
         const icon = L.divIcon({
           className: "",
-          html: `<div style="width:16px;height:16px;border-radius:4px;overflow:hidden;border:2px solid #0e1420;box-shadow:0 0 0 1px rgba(255,255,255,0.4)">
-                   <div style="height:60%;background:${varietyColor}"></div>
-                   <div style="height:40%;background:${customerColor}"></div>
-                 </div>`,
-          iconSize: [16, 16],
+          html: `<div style="width:24px;height:24px;border-radius:50% 50% 50% 0;background:#e0a63e;border:2px solid #0e1420;transform:rotate(-45deg);box-shadow:0 0 0 1px rgba(255,255,255,0.4)"></div>`,
+          iconSize: [24, 24],
+          iconAnchor: [12, 24],
         });
-        const marker = L.marker([lat, lng], { icon }).addTo(map);
-        const zoneRows = bay.zones.map((z) => {
-          const zs = stats.zoneStats?.[z.id];
-          return `<div style="display:flex;align-items:center;gap:5px;margin-top:3px">
-                    <span style="width:8px;height:8px;border-radius:50%;background:${getVarietyColor(z.variety)};display:inline-block"></span>
-                    <span style="width:8px;height:8px;border-radius:50%;background:${getCustomerColor(z.customer)};display:inline-block"></span>
-                    ${z.name} — ${z.variety}, ${z.customer} (${zs ? Math.round(zs.fillPct * 100) : 0}%)
-                  </div>`;
-        }).join("");
+        const marker = L.marker([loc.lat, loc.lng], { icon }).addTo(map);
         marker.bindPopup(
           `<div style="font-family:sans-serif;font-size:13px;min-width:190px">
-             <b>${bay.name}</b><br/>
-             ${zoneRows}
-             <div style="margin-top:6px">${fmt(stats.currentCwt)} / ${fmt(stats.capacityCwt)} cwt (${Math.round((stats.fillPct || 0) * 100)}%)</div>
-             <a href="#" data-bay="${bay.id}" style="color:#c17a3b">View bay →</a>
+             <b>${loc.name}</b><br/>
+             <span style="color:#666">${loc.address || ""}</span>
+             <div style="margin-top:6px">${locBays.length} bay${locBays.length === 1 ? "" : "s"}</div>
+             <div>${fmt(agg.cwt)} / ${fmt(agg.capacity)} cwt (${agg.capacity ? Math.round((agg.cwt / agg.capacity) * 100) : 0}%)</div>
+             <a href="#" data-loc="${loc.id}" style="color:#c17a3b">View 3D yard →</a>
            </div>`
         );
         marker.on("popupopen", () => {
-          const link = document.querySelector(`a[data-bay="${bay.id}"]`);
-          if (link) link.onclick = (e) => { e.preventDefault(); onSelect(bay.id); };
+          const link = document.querySelector(`a[data-loc="${loc.id}"]`);
+          if (link) link.onclick = (e) => { e.preventDefault(); onSelectLocation(loc.id); };
         });
       });
 
-      const marker0 = L.marker([location.lat, location.lng]).addTo(map);
-      marker0.bindPopup(`<b>${location.name}</b><br/>${location.address}`);
+      if (withCoords.length > 1) {
+        const bounds = L.latLngBounds(withCoords.map((l) => [l.lat, l.lng]));
+        map.fitBounds(bounds, { padding: [60, 60], maxZoom: 13 });
+      }
 
       mapRef.current = map;
       setReady(true);
     });
     return () => { cancelled = true; if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.id]);
+  }, [withCoords.map((l) => `${l.id}:${l.lat}:${l.lng}`).join(",")]);
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
@@ -831,8 +830,8 @@ function MapTab({ location, bays, statsById, onSelect }) {
           loading map…
         </div>
       )}
-      <div style={{ position: "absolute", bottom: 10, left: 10, background: "rgba(14,20,32,0.82)", border: "1px solid #2b3549", borderRadius: 6, padding: "6px 10px", fontSize: 11, color: "#8790a3", maxWidth: 280 }}>
-        Basemap: Esri World Imagery (satellite, no key required). Pin location is approximate — nudge it once you confirm the exact parcel.
+      <div style={{ position: "absolute", bottom: 10, left: 10, background: "rgba(14,20,32,0.82)", border: "1px solid #2b3549", borderRadius: 6, padding: "6px 10px", fontSize: 11, color: "#8790a3", maxWidth: 300 }}>
+        Basemap: Esri World Imagery (satellite, no key required). Each pin is a complex, placed at the lat/lng set in Manage Sites — click a pin, then "View 3D yard" to see its bays.
       </div>
     </div>
   );
@@ -878,6 +877,52 @@ function applicatorOptions(applicators, currentValue) {
   const opts = ["Unassigned", ...applicators];
   if (currentValue && !opts.includes(currentValue)) opts.push(currentValue);
   return opts;
+}
+
+// Shared "add one product/field to a bay" mini-form. Used both in Bay Detail
+// (add product to the bay you're looking at) and in Manage Sites (add product
+// to any existing bay from the structure tree). A bay can exist with zero
+// fields — this is the one place a field/product gets attached to it.
+function AddZoneForm({ varieties, customers, onAdd, nextName = "Field 1" }) {
+  const [name, setName] = useState(nextName);
+  const [variety, setVariety] = useState(varieties[0] || "");
+  const [customer, setCustomer] = useState("Unassigned");
+  const [tubes, setTubes] = useState("30");
+  const [cwtPerTube, setCwtPerTube] = useState("");
+  const [error, setError] = useState("");
+
+  const submit = () => {
+    const trimmed = name.trim();
+    if (!trimmed || !variety || !Number(tubes) || Number(tubes) <= 0) {
+      setError("Needs a name, variety, and a tube count greater than 0.");
+      return;
+    }
+    onAdd({
+      id: uid("zone"), name: trimmed, variety, customer: customer || "Unassigned",
+      tubeCount: Number(tubes), ...(cwtPerTube ? { cwtPerTube: Number(cwtPerTube) } : {}),
+    });
+    setName(nextName); setVariety(varieties[0] || ""); setCustomer("Unassigned"); setTubes("30"); setCwtPerTube(""); setError("");
+  };
+
+  return (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", background: "#0e1420", border: "1px solid #232d40", borderRadius: 8, padding: 10 }}>
+      <Field label="Field name"><input value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, width: 140 }} /></Field>
+      <Field label="Variety">
+        <select value={variety} onChange={(e) => setVariety(e.target.value)} style={{ ...inputStyle, width: 130 }}>
+          {varieties.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+      </Field>
+      <Field label="Customer">
+        <select value={customer} onChange={(e) => setCustomer(e.target.value)} style={{ ...inputStyle, width: 130 }}>
+          {customerOptions(customers, customer).map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </Field>
+      <Field label="Tubes"><input type="number" min="1" value={tubes} onChange={(e) => setTubes(e.target.value)} style={{ ...inputStyle, width: 80 }} /></Field>
+      <Field label="Cwt/tube (optional)"><input type="number" value={cwtPerTube} onChange={(e) => setCwtPerTube(e.target.value)} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 3200" /></Field>
+      <Button onClick={submit}><Plus size={14} /> Add product</Button>
+      {error && <div style={{ width: "100%", fontSize: 12, color: "#e08787" }}>{error}</div>}
+    </div>
+  );
 }
 
 function NewSeasonPrompt({ activeSeasonLabel, onCancel, onConfirm }) {
@@ -979,9 +1024,11 @@ function EditableInline({ value, onSave, type = "text", width, disabled, placeho
 /* ---------------------------------------------------------------
    Bay detail panel (per-zone tube checks + cwt runs) + interior 3D
 ----------------------------------------------------------------*/
-function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddTubeCheck, onAddCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety }) {
-  const [zoneId, setZoneId] = useState(bay.zones[0].id);
-  useEffect(() => { setZoneId(bay.zones[0].id); }, [bay.id]);
+function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddTubeCheck, onAddCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay }) {
+  const [zoneId, setZoneId] = useState(bay.zones[0]?.id ?? null);
+  useEffect(() => { setZoneId(bay.zones[0]?.id ?? null); }, [bay.id]);
+  const [showAddZone, setShowAddZone] = useState(false);
+  useEffect(() => { setShowAddZone(false); }, [bay.id]);
   const zone = bay.zones.find((z) => z.id === zoneId);
   const zoneData = data.zones[zoneId] || { tubeChecks: [], cwtRuns: [] };
   const zs = stats.zoneStats[zoneId];
@@ -1013,9 +1060,20 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddTube
       <div>
         <h2 style={{ margin: 0, fontSize: 22, color: "#eef1f6" }}>{bay.name}</h2>
         <div style={{ color: "#8790a3", fontSize: 12.5, marginTop: 3 }}>
-          Filled {bay.fillDate} · {bay.zones.length} field{bay.zones.length > 1 ? "s" : ""} · {bay.zones.reduce((s, z) => s + z.tubeCount, 0)} tubes total
+          Filled {bay.fillDate} · {bay.zones.length} field{bay.zones.length !== 1 ? "s" : ""} · {bay.zones.reduce((s, z) => s + z.tubeCount, 0)} tubes total
         </div>
       </div>
+
+      {bay.zones.length === 0 && (
+        <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
+          <div style={{ fontSize: 14, color: "#c7cede", marginBottom: 10 }}>
+            This bay is empty — no product assigned yet. Add a field below when it's ready to fill.
+          </div>
+          {!readOnly && (
+            <AddZoneForm varieties={varieties} customers={customers} onAdd={(z) => onAddZoneToBay(bay.id, z)} />
+          )}
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <StatBlock label="Bay inventory" value={`${fmt(stats.currentCwt)} cwt`} sub={`${Math.round(stats.fillPct * 100)}% of ${fmt(stats.capacityCwt)} cwt`} accent="#f2c14e" />
@@ -1033,20 +1091,35 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddTube
         <div style={{ marginTop: 8 }}><Legend bays={[bay]} /></div>
       </div>
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {bay.zones.map((z) => (
-          <button key={z.id} onClick={() => setZoneId(z.id)} style={{
-            border: `1px solid ${z.id === zoneId ? "#e0a63e" : "#232d40"}`,
-            background: z.id === zoneId ? "rgba(224,166,62,0.12)" : "transparent",
-            color: z.id === zoneId ? "#f2c14e" : "#8790a3",
-            borderRadius: 20, padding: "6px 14px", fontSize: 12.5, cursor: "pointer", fontWeight: 600,
-            display: "inline-flex", alignItems: "center", gap: 6,
-          }}>
-            <ColorDot color={getVarietyColor(z.variety)} /><ColorDot color={getCustomerColor(z.customer)} />
-            {z.name} <span style={{ opacity: 0.7 }}>· {z.variety} · {z.customer}</span>
-          </button>
-        ))}
-      </div>
+      {bay.zones.length > 0 && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {bay.zones.map((z) => (
+            <button key={z.id} onClick={() => setZoneId(z.id)} style={{
+              border: `1px solid ${z.id === zoneId ? "#e0a63e" : "#232d40"}`,
+              background: z.id === zoneId ? "rgba(224,166,62,0.12)" : "transparent",
+              color: z.id === zoneId ? "#f2c14e" : "#8790a3",
+              borderRadius: 20, padding: "6px 14px", fontSize: 12.5, cursor: "pointer", fontWeight: 600,
+              display: "inline-flex", alignItems: "center", gap: 6,
+            }}>
+              <ColorDot color={getVarietyColor(z.variety)} /><ColorDot color={getCustomerColor(z.customer)} />
+              {z.name} <span style={{ opacity: 0.7 }}>· {z.variety} · {z.customer}</span>
+            </button>
+          ))}
+          {!readOnly && (
+            <Button variant="ghost" onClick={() => setShowAddZone((v) => !v)}>
+              <Plus size={13} /> {showAddZone ? "Cancel" : "Add product"}
+            </Button>
+          )}
+        </div>
+      )}
+
+      {bay.zones.length > 0 && !readOnly && showAddZone && (
+        <AddZoneForm
+          varieties={varieties} customers={customers}
+          nextName={`Field ${bay.zones.length + 1}`}
+          onAdd={(z) => { onAddZoneToBay(bay.id, z); setShowAddZone(false); }}
+        />
+      )}
 
       {zone && zs && (
         <>
@@ -1197,14 +1270,11 @@ function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
   const [bayId, setBayId] = useState(bays[0]?.id);
   const bay = bays.find((b) => b.id === bayId);
   const totalTubes = bay ? bay.zones.reduce((s, z) => s + z.tubeCount, 0) : 0;
-
   const [pipeNumber, setPipeNumber] = useState(1);
   const [position, setPosition] = useState("Top");
   const [date, setDate] = useState(todayStr());
   const [temp, setTemp] = useState("");
-
   useEffect(() => { setPipeNumber(1); }, [bayId]);
-
   const logs = dataById[bayId]?.tempLogs || [];
   const series = useMemo(() => buildBayDaySeries(logs), [logs]);
   const pipeLatest = useMemo(() => latestByPipe(logs), [logs]);
@@ -1214,13 +1284,11 @@ function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
   const allDeltas = series.map((r) => r.delta).filter((d) => d != null);
   const avgDelta = allDeltas.length ? Math.round((allDeltas.reduce((s, d) => s + d, 0) / allDeltas.length) * 10) / 10 : null;
   const avgStatus = avgDelta != null ? deltaStatus(avgDelta, daysSince(bay?.fillDate, latestRow?.date)) : null;
-
   const submit = () => {
     if (temp === "" || isNaN(Number(temp))) return;
     onAddTemp(bayId, { date, pipeNumber, position, temp: Number(temp) });
     setTemp("");
   };
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
@@ -1250,7 +1318,6 @@ function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
         <Field label="Temp (°F)"><input type="number" value={temp} onChange={(e) => setTemp(e.target.value)} style={{ ...inputStyle, width: 110 }} /></Field>
         <Button onClick={submit} disabled={readOnly} style={{ marginBottom: 10 }}><Plus size={14} /> Log reading</Button>
       </div>
-
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <StatBlock label={`${bay?.name} · all pipes`} value={series.length ? `${series.length} day${series.length === 1 ? "" : "s"} logged` : "no data"} sub="top vs. bottom across every pipe in this bay" />
         <StatBlock label="Current Δ T (top − bottom)" value={latestDelta != null ? `${latestDelta > 0 ? "+" : ""}${latestDelta}°F` : "—"}
@@ -1266,7 +1333,6 @@ function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
         Target Δ T is ~1.5°F once cured. Flagged amber under ~0.5°F (too tight — check airflow), red over 3°F (too wide).
         In the first {CURING_DAYS} days after fill, up to ~5°F is normal and won't be flagged.
       </div>
-
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16, height: 320 }}>
         <div style={{ fontWeight: 700, marginBottom: 8, color: "#eef1f6" }}>{bay?.name} — all pipes, top vs. bottom over time</div>
         {series.length === 0 ? (
@@ -1286,7 +1352,6 @@ function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
           </ResponsiveContainer>
         )}
       </div>
-
       <div>
         <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>{bay?.name} — latest reading by pipe</div>
         <div style={{ overflowX: "auto", border: "1px solid #232d40", borderRadius: 10 }}>
@@ -1329,21 +1394,18 @@ function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
    Inspections tab
 ----------------------------------------------------------------*/
 const CHECKLIST_ITEMS = ["Fans running", "Doors / curtains sealed", "Signs of rot or pests", "Condensation / humidity ok", "Temperature within target"];
-
 function InspectionsTab({ bays, inspections, onAdd, readOnly }) {
   const [bayId, setBayId] = useState(bays[0]?.id);
   const [date, setDate] = useState(todayStr());
   const [inspector, setInspector] = useState("");
   const [notes, setNotes] = useState("");
   const [results, setResults] = useState({});
-
   const toggle = (item) => setResults((r) => ({ ...r, [item]: r[item] === "issue" ? "ok" : r[item] === "ok" ? undefined : "ok" }));
   const submit = () => {
     onAdd({ id: `${Date.now()}`, bayId, date, inspector: inspector || "Unnamed", results, notes });
     setNotes(""); setResults({}); setInspector("");
   };
   const list = [...inspections].reverse();
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
@@ -1412,7 +1474,6 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
   useEffect(() => { setZoneId(bays.find((b) => b.id === bayId)?.zones[0]?.id); }, [bayId, bays]);
   const zone = bay?.zones.find((z) => z.id === zoneId);
   const zoneData = dataById[bayId]?.zones?.[zoneId] || { sproutApplications: [] };
-
   const [productId, setProductId] = useState(products[0]?.id || "");
   useEffect(() => { if (!products.find((p) => p.id === productId)) setProductId(products[0]?.id || ""); }, [products, productId]);
   const [date, setDate] = useState(todayStr());
@@ -1421,10 +1482,8 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
   const [cwtApplied, setCwtApplied] = useState("");
   const [applicator, setApplicator] = useState("Unassigned");
   const [appError, setAppError] = useState("");
-
   const selectedProduct = products.find((p) => p.id === productId);
   const blocked = !!(selectedProduct && zone && selectedProduct.restrictedCustomers.includes(zone.customer));
-
   const submitApplication = () => {
     if (readOnly) return;
     if (blocked) { setAppError(`${selectedProduct.name} is restricted for ${zone.customer} — pick a different product or field.`); return; }
@@ -1435,7 +1494,6 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
     });
     setRate(""); setCwtApplied(""); setAppError("");
   };
-
   const [newProductName, setNewProductName] = useState("");
   const [productError, setProductError] = useState("");
   const addProduct = () => {
@@ -1445,7 +1503,6 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
     onAddProduct({ id: uid("prod"), name: trimmed, restrictedCustomers: [] });
     setNewProductName(""); setProductError("");
   };
-
   const [newApplicatorName, setNewApplicatorName] = useState("");
   const addApplicator = () => {
     const trimmed = newApplicatorName.trim();
@@ -1453,16 +1510,13 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
     onAddApplicator(trimmed);
     setNewApplicatorName("");
   };
-
   const toggleRestriction = (product, customerName) => {
     const next = product.restrictedCustomers.includes(customerName)
       ? product.restrictedCustomers.filter((c) => c !== customerName)
       : [...product.restrictedCustomers, customerName];
     onUpdateProductRestrictions(product.id, next);
   };
-
   const history = [...(zoneData.sproutApplications || [])].reverse();
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
       {/* Product library */}
@@ -1504,7 +1558,6 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
         </div>
         {productError && <div style={{ fontSize: 12, color: "#e08787", marginTop: 6 }}>{productError}</div>}
       </div>
-
       {/* Applicator companies */}
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Applicator companies</div>
@@ -1518,7 +1571,6 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
           <Button onClick={addApplicator}><Plus size={14} /> Add</Button>
         </div>
       </div>
-
       {/* Log application */}
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Log an application</div>
@@ -1550,7 +1602,6 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
             </select>
           </Field>
         </div>
-
         {zone && (
           <div style={{ fontSize: 12.5, color: "#8790a3", margin: "4px 0 10px" }}>
             {zone.name} is <ColorDot color={getCustomerColor(zone.customer)} size={7} /> <b style={{ color: "#c7cede" }}>{zone.customer}</b>'s potatoes.
@@ -1564,7 +1615,6 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
         {appError && !blocked && <div style={{ fontSize: 12.5, color: "#e08787", marginBottom: 10 }}>{appError}</div>}
         <Button onClick={submitApplication} disabled={readOnly || blocked}><Plus size={14} /> Log application</Button>
       </div>
-
       {/* History */}
       <div>
         <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>{bay?.name} — {zone?.name} application history</div>
@@ -1606,7 +1656,6 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
 function CustomersTab({ customers, bays, onAdd }) {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
-
   const submit = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -1617,7 +1666,6 @@ function CustomersTab({ customers, bays, onAdd }) {
     onAdd(trimmed);
     setName(""); setError("");
   };
-
   const usage = useMemo(() => {
     const map = new Map(customers.map((c) => [c, { fields: 0, tubes: 0 }]));
     bays.forEach((bay) => bay.zones.forEach((z) => {
@@ -1627,7 +1675,6 @@ function CustomersTab({ customers, bays, onAdd }) {
     }));
     return map;
   }, [customers, bays]);
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18, maxWidth: 640 }}>
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
@@ -1645,7 +1692,6 @@ function CustomersTab({ customers, bays, onAdd }) {
         </div>
         {error && <div style={{ fontSize: 12, color: "#e08787", marginTop: 8 }}>{error}</div>}
       </div>
-
       <div>
         <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Current customers</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1672,7 +1718,6 @@ function CustomersTab({ customers, bays, onAdd }) {
 function VarietiesTab({ varieties, bays, onAdd }) {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
-
   const submit = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -1683,7 +1728,6 @@ function VarietiesTab({ varieties, bays, onAdd }) {
     onAdd(trimmed);
     setName(""); setError("");
   };
-
   const usage = useMemo(() => {
     const map = new Map(varieties.map((v) => [v, { fields: 0, tubes: 0 }]));
     bays.forEach((bay) => bay.zones.forEach((z) => {
@@ -1693,7 +1737,6 @@ function VarietiesTab({ varieties, bays, onAdd }) {
     }));
     return map;
   }, [varieties, bays]);
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18, maxWidth: 640 }}>
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
@@ -1711,7 +1754,6 @@ function VarietiesTab({ varieties, bays, onAdd }) {
         </div>
         {error && <div style={{ fontSize: 12, color: "#e08787", marginTop: 8 }}>{error}</div>}
       </div>
-
       <div>
         <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Current varieties</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1736,7 +1778,7 @@ function VarietiesTab({ varieties, bays, onAdd }) {
    Manage tab — create Locations (complexes), Buildings, and Bays
    (with their fields) without touching code.
 ----------------------------------------------------------------*/
-function ManageTab({ locations, buildings, bays, varieties, customers, readOnly, onAddLocation, onAddBuilding, onAddBay, onUpdateLocation, onUpdateBuilding, onUpdateBayMeta, onUpdateZoneMeta }) {
+function ManageTab({ locations, buildings, bays, varieties, customers, readOnly, onAddLocation, onAddBuilding, onAddBay, onUpdateLocation, onUpdateBuilding, onUpdateBayMeta, onUpdateZoneMeta, onAddZoneToBay }) {
   // --- add location ---
   const [locName, setLocName] = useState("");
   const [locAddress, setLocAddress] = useState("");
@@ -1783,12 +1825,15 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
 
   const [bayName, setBayName] = useState("");
   const [bayFillDate, setBayFillDate] = useState(todayStr());
-  const [zoneRows, setZoneRows] = useState([{ name: "Field 1", variety: varieties[0] || "", customer: "Unassigned", tubeCount: "30", cwtPerTube: "" }]);
+  // A bay can be created empty — product/fields get added afterward, once
+  // there's something to fill it with. These rows are an optional shortcut
+  // for adding fields right away if you already know them.
+  const [zoneRows, setZoneRows] = useState([]);
   const [bayError, setBayError] = useState("");
 
   const updateZoneRow = (i, patch) => setZoneRows((rows) => rows.map((r, ri) => ri === i ? { ...r, ...patch } : r));
   const addZoneRow = () => setZoneRows((rows) => [...rows, { name: `Field ${rows.length + 1}`, variety: varieties[0] || "", customer: "Unassigned", tubeCount: "30", cwtPerTube: "" }]);
-  const removeZoneRow = (i) => setZoneRows((rows) => rows.length > 1 ? rows.filter((_, ri) => ri !== i) : rows);
+  const removeZoneRow = (i) => setZoneRows((rows) => rows.filter((_, ri) => ri !== i));
 
   const submitBay = () => {
     const trimmed = bayName.trim();
@@ -1806,9 +1851,9 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
     }));
     onAddBay({
       id: bayId, name: trimmed, buildingId: bayBuildingId, fillDate: bayFillDate,
-      cwtPerTube: zones.every((z) => z.cwtPerTube) ? null : 2500, zones,
+      cwtPerTube: zones.length > 0 && zones.every((z) => z.cwtPerTube) ? null : 2500, zones,
     });
-    setBayName(""); setZoneRows([{ name: "Field 1", variety: varieties[0] || "", customer: "Unassigned", tubeCount: "30", cwtPerTube: "" }]);
+    setBayName(""); setZoneRows([]);
     setBayError("");
   };
 
@@ -1867,7 +1912,14 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
           <Field label="Fill date"><input type="date" value={bayFillDate} onChange={(e) => setBayFillDate(e.target.value)} style={inputStyle} /></Field>
         </div>
 
-        <div style={{ fontSize: 11, color: "#8790a3", margin: "10px 0 6px", letterSpacing: 0.3 }}>FIELDS IN THIS BAY</div>
+        <div style={{ fontSize: 11, color: "#8790a3", margin: "10px 0 6px", letterSpacing: 0.3 }}>
+          FIELDS IN THIS BAY (OPTIONAL — you can create the bay empty and add product later)
+        </div>
+        {zoneRows.length === 0 && (
+          <div style={{ fontSize: 12, color: "#5b6478", marginBottom: 4 }}>
+            No fields added yet. The bay will be created empty — add product to it anytime from here or from Bay Detail.
+          </div>
+        )}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {zoneRows.map((r, i) => (
             <div key={i} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", background: "#0e1420", border: "1px solid #232d40", borderRadius: 8, padding: 10 }}>
@@ -1922,27 +1974,8 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
                       {bays.filter((bay) => bay.buildingId === b.id).map((bay) => (
-                        <div key={bay.id} style={{ paddingLeft: 16, borderLeft: "2px solid #1a2130" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                            <Package size={12} color="#8790a3" />
-                            <EditableInline value={bay.name} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { name: v })} width={140} />
-                            <span style={{ fontSize: 11, color: "#6f7890" }}>filled</span>
-                            <EditableInline value={bay.fillDate} type="date" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { fillDate: v })} width={140} />
-                            <span style={{ fontSize: 11, color: "#6f7890" }}>cwt/tube (bay default)</span>
-                            <EditableInline value={bay.cwtPerTube ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { cwtPerTube: v })} width={90} placeholder="—" />
-                          </div>
-                          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
-                            {bay.zones.map((z) => (
-                              <div key={z.id} style={{ paddingLeft: 20, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12 }}>
-                                <ColorDot color={getVarietyColor(z.variety)} size={7} /><ColorDot color={getCustomerColor(z.customer)} size={7} />
-                                <EditableInline value={z.name} disabled={readOnly} onSave={(v) => onUpdateZoneMeta(bay.id, z.id, { name: v })} width={130} />
-                                <span style={{ color: "#6f7890" }}>tubes</span>
-                                <EditableInline value={z.tubeCount} type="number" disabled={readOnly} onSave={(v) => onUpdateZoneMeta(bay.id, z.id, { tubeCount: v })} width={70} />
-                                <span style={{ color: "#6f7890" }}>{z.variety} · {z.customer}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
+                        <BayRow key={bay.id} bay={bay} readOnly={readOnly} varieties={varieties} customers={customers}
+                          onUpdateBayMeta={onUpdateBayMeta} onUpdateZoneMeta={onUpdateZoneMeta} onAddZoneToBay={onAddZoneToBay} />
                       ))}
                       {bays.filter((bay) => bay.buildingId === b.id).length === 0 && (
                         <div style={{ paddingLeft: 16, fontSize: 12, color: "#5b6478" }}>No bays yet.</div>
@@ -1958,6 +1991,55 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+// A bay in the Manage Sites structure tree. A bay can exist with zero fields
+// — "No product assigned yet" — and product gets attached to it here (or
+// from Bay Detail) whenever it's actually ready to be filled.
+function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdateZoneMeta, onAddZoneToBay }) {
+  const [adding, setAdding] = useState(false);
+  return (
+    <div style={{ paddingLeft: 16, borderLeft: "2px solid #1a2130" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <Package size={12} color="#8790a3" />
+        <EditableInline value={bay.name} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { name: v })} width={140} />
+        <span style={{ fontSize: 11, color: "#6f7890" }}>filled</span>
+        <EditableInline value={bay.fillDate} type="date" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { fillDate: v })} width={140} />
+        <span style={{ fontSize: 11, color: "#6f7890" }}>cwt/tube (bay default)</span>
+        <EditableInline value={bay.cwtPerTube ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { cwtPerTube: v })} width={90} placeholder="—" />
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+        {bay.zones.map((z) => (
+          <div key={z.id} style={{ paddingLeft: 20, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12 }}>
+            <ColorDot color={getVarietyColor(z.variety)} size={7} /><ColorDot color={getCustomerColor(z.customer)} size={7} />
+            <EditableInline value={z.name} disabled={readOnly} onSave={(v) => onUpdateZoneMeta(bay.id, z.id, { name: v })} width={130} />
+            <span style={{ color: "#6f7890" }}>tubes</span>
+            <EditableInline value={z.tubeCount} type="number" disabled={readOnly} onSave={(v) => onUpdateZoneMeta(bay.id, z.id, { tubeCount: v })} width={70} />
+            <span style={{ color: "#6f7890" }}>{z.variety} · {z.customer}</span>
+          </div>
+        ))}
+        {bay.zones.length === 0 && (
+          <div style={{ paddingLeft: 20, fontSize: 12, color: "#5b6478" }}>No product assigned yet.</div>
+        )}
+      </div>
+      {!readOnly && (
+        adding ? (
+          <div style={{ marginLeft: 20, marginTop: 8 }}>
+            <AddZoneForm
+              varieties={varieties} customers={customers}
+              nextName={`Field ${bay.zones.length + 1}`}
+              onAdd={(z) => { onAddZoneToBay(bay.id, z); setAdding(false); }}
+            />
+            <Button variant="ghost" onClick={() => setAdding(false)} style={{ marginTop: 6 }}>Cancel</Button>
+          </div>
+        ) : (
+          <div style={{ marginLeft: 20, marginTop: 8 }}>
+            <Button variant="ghost" onClick={() => setAdding(true)}><Plus size={13} /> Add product to this bay</Button>
+          </div>
+        )
+      )}
     </div>
   );
 }
@@ -2432,6 +2514,18 @@ export default function PotatoStorage() {
     });
   }, [isReadOnly]);
 
+  // Attaches a new field/product to a bay that already exists — this is how
+  // an empty bay (created with no product yet) gets filled in later, and how
+  // a bay gets a second field without having to have known about it upfront.
+  const onAddZoneToBay = useCallback((bayId, zone) => {
+    if (isReadOnly) return;
+    setBays((prev) => {
+      const next = prev.map((b) => b.id === bayId ? { ...b, zones: [...b.zones, zone] } : b);
+      saveJSON(CONFIG_KEY, next);
+      return next;
+    });
+  }, [isReadOnly]);
+
   const onStartNewSeason = useCallback((label) => {
     const newSeasonId = uid("season");
     setSeasons((prev) => {
@@ -2564,7 +2658,8 @@ export default function PotatoStorage() {
 
         {tab === "map" && (
           <div style={{ flex: 1, minHeight: 380 }}>
-            <MapTab key={selectedLocationId} location={selectedLocation} bays={locationBays} statsById={statsById} onSelect={(id) => { setSelectedId(id); setTab("detail"); }} />
+            <MapTab locations={locations} bays={displayBays} buildingsById={buildingsById} statsById={statsById}
+              onSelectLocation={(id) => { setSelectedLocationId(id); setTab("yard"); }} />
           </div>
         )}
 
@@ -2586,7 +2681,7 @@ export default function PotatoStorage() {
                 </div>
                 <BayDetail bay={selectedBay} data={displayDataById[selectedBay.id] || emptyBayData(selectedBay)} stats={statsById[selectedBay.id]}
                   customers={customers} varieties={varieties} readOnly={isReadOnly} onAddTubeCheck={onAddTubeCheck} onAddCwtRun={onAddCwtRun}
-                  onUpdateZoneCustomer={onUpdateZoneCustomer} onUpdateZoneVariety={onUpdateZoneVariety} />
+                  onUpdateZoneCustomer={onUpdateZoneCustomer} onUpdateZoneVariety={onUpdateZoneVariety} onAddZoneToBay={onAddZoneToBay} />
               </>
             )}
           </div>
@@ -2602,7 +2697,8 @@ export default function PotatoStorage() {
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             <ManageTab locations={locations} buildings={buildings} bays={bays} varieties={varieties} customers={customers} readOnly={isReadOnly}
               onAddLocation={onAddLocation} onAddBuilding={onAddBuilding} onAddBay={onAddBay}
-              onUpdateLocation={onUpdateLocation} onUpdateBuilding={onUpdateBuilding} onUpdateBayMeta={onUpdateBayMeta} onUpdateZoneMeta={onUpdateZoneMeta} />
+              onUpdateLocation={onUpdateLocation} onUpdateBuilding={onUpdateBuilding} onUpdateBayMeta={onUpdateBayMeta} onUpdateZoneMeta={onUpdateZoneMeta}
+              onAddZoneToBay={onAddZoneToBay} />
           </div>
         )}
 
