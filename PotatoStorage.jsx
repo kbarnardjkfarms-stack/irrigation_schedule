@@ -2727,9 +2727,11 @@ function buildLedger(bays, statsById, buildingsById, locationsById) {
     if (!bs) return;
     const building = buildingsById[bay.buildingId];
     const locationName = (building && locationsById[building.locationId]?.name) || "Unknown";
+    let zonesCapacitySum = 0;
     bay.zones.forEach((zone) => {
       const zs = bs.zoneStats[zone.id];
       const base = { location: locationName, bay: bay.name, field: zone.name, variety: zone.variety };
+      zonesCapacitySum += zs.capacityCwt;
       rows.push({ ...base, customer: zone.customer, metric: "In Storage", cwt: zs.currentCwt });
       rows.push({ ...base, customer: zone.customer, metric: "Capacity", cwt: zs.capacityCwt });
       rows.push({ ...base, customer: zone.customer, metric: "Shrink", cwt: zs.shrinkCwt });
@@ -2737,6 +2739,19 @@ function buildLedger(bays, statsById, buildingsById, locationsById) {
         rows.push({ ...base, customer: r.dest, metric: "Shipped", cwt: Number(r.cwt || 0) });
       });
     });
+    // A bay's declared capacity (pipe count × cwt/pipe) can be bigger than
+    // what's actually assigned to a field yet — a brand-new bay with no
+    // product, or a field that doesn't cover every pipe. Count that leftover
+    // as capacity too, just not attributed to any variety/customer, so
+    // "Total capacity" reflects what you told the bay it can hold even
+    // before there's product logged against it.
+    const unassigned = Math.max(0, (bs.capacityCwt || 0) - zonesCapacitySum);
+    if (unassigned > 0) {
+      rows.push({
+        location: locationName, bay: bay.name, field: "(unassigned pipe)", variety: "Unassigned", customer: "Unassigned",
+        metric: "Capacity", cwt: unassigned,
+      });
+    }
   });
   return rows;
 }
