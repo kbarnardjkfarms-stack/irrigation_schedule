@@ -158,7 +158,7 @@ const BUILDINGS_KEY = "storage-buildings-v3";
 const CONFIG_KEY = "norland-bays-config-v4";
 // v3: pipe checks record empty pipe ranges (both ends pulled independently)
 // instead of a single "tubes remaining" count.
-const bayDataKey = (id) => `norland-bay-data-v3:${id}`;
+const bayDataKey = (id) => `norland-bay-data-v4:${id}`;
 const INSPECTIONS_KEY = "norland-inspections-v2";
 const CUSTOMERS_KEY = "norland-customers-v2";
 const DEFAULT_CUSTOMERS = ["Lamb Weston", "Simplot", "McCain", "Mart Fresh", "Mart Frozen", "Grimmway"];
@@ -221,24 +221,38 @@ async function saveJSON(key, value) {
 /* ---------------------------------------------------------------
    Derived stats — per zone (field), then rolled up per bay
 ----------------------------------------------------------------*/
-// A pipe check records which pipe ranges are empty (1-indexed, inclusive,
-// numbered within this zone's own allocation) rather than a single count —
-// potatoes get pulled from both ends of a run inward, so a bay can easily
-// have two separate empty stretches with a full section still in the
-// middle. Ranges may overlap harmlessly; this just collects the union of
-// pipe numbers they cover.
-function emptyPipeSet(pipeCount, emptyRanges) {
+// Pipe numbers are GLOBAL to the bay (1..bay.pipeCount) — "pipe 12" means
+// the same physical pipe in every field's records, the 3D rendering, and the
+// Log Pipe form. A zone's pipeRanges is the set of bay pipe numbers that
+// field's potatoes occupy; ranges may be non-contiguous (a field can end up
+// split across two stretches) and are stored as a flat list rather than a
+// pre-merged one — overlaps and duplicates collapse naturally wherever this
+// is turned into a Set.
+function pipeRangeSet(ranges) {
   const set = new Set();
-  (emptyRanges || []).forEach(({ from, to }) => {
-    const lo = Math.max(1, Math.min(Number(from), Number(to)));
-    const hi = Math.min(pipeCount, Math.max(Number(from), Number(to)));
+  (ranges || []).forEach(({ from, to }) => {
+    const lo = Math.min(Number(from), Number(to));
+    const hi = Math.max(Number(from), Number(to));
     for (let p = lo; p <= hi; p++) set.add(p);
   });
   return set;
 }
 
-// "1–5, 36–40" style summary of a check's empty ranges, for the check form's
-// live preview and the logged-check history list.
+// A pipe range is only valid if every pipe number in it actually exists in
+// the bay — you can't log or assign pipe 278 in a 273-pipe bay.
+function rangeFitsBay(range, bayPipeCount) {
+  if (!bayPipeCount) return true; // bay hasn't been given a total yet — nothing to check against
+  const lo = Math.min(Number(range.from), Number(range.to));
+  const hi = Math.max(Number(range.from), Number(range.to));
+  return Number.isFinite(lo) && Number.isFinite(hi) && lo >= 1 && hi <= bayPipeCount;
+}
+
+function zonePipeCount(zone) {
+  return pipeRangeSet(zone.pipeRanges).size;
+}
+
+// "1–5, 36–40" style summary of a set of pipe ranges, for the Log Pipe form's
+// live preview and the logged history list.
 function formatPipeRanges(ranges) {
   if (!ranges || ranges.length === 0) return "—";
   return ranges
@@ -247,17 +261,27 @@ function formatPipeRanges(ranges) {
 }
 
 function computeZoneStats(bay, zone, zoneData) {
-  const pc = zoneData?.pipeChecks || [];
-  const latest = pc.length ? pc[pc.length - 1] : null;
-  const emptySet = latest ? emptyPipeSet(zone.pipeCount, latest.emptyRanges) : new Set();
-  const pipesEmpty = emptySet.size;
-  const pipesFilled = Math.max(0, zone.pipeCount - pipesEmpty);
-  // One entry per pipe, in order — true = still full, false = emptied out.
-  // Drives the 3D pile segments and the per-pipe indicator strip.
-  const pipeFullFlags = Array.from({ length: zone.pipeCount }, (_, i) => !emptySet.has(i + 1));
+  const footprint = pipeRangeSet(zone.pipeRanges);
+  const pipeCount = footprint.size;
+  // Every pipe starts full the moment it's part of the field's footprint
+  // (freshly filled) — logged entries afterward flip specific pipes: a
+  // "haul" entry (pulled out) marks pipes empty, a "fill" entry (filled back
+  // in, or the field's footprint growing into more pipe) marks them full.
+  // Replayed in the order they were logged, so the latest entry for any
+  // given pipe wins.
+  const fullMap = new Map();
+  footprint.forEach((p) => fullMap.set(p, true));
+  const pipeLog = zoneData?.pipeChecks || [];
+  pipeLog.forEach((entry) => {
+    pipeRangeSet(entry.ranges).forEach((p) => {
+      if (fullMap.has(p)) fullMap.set(p, entry.type === "fill");
+    });
+  });
+  const pipesFilled = Array.from(fullMap.values()).filter(Boolean).length;
+  const pipesEmpty = pipeCount - pipesFilled;
   const cwtPerPipe = zone.cwtPerPipe || bay.cwtPerPipe;
   const currentCwt = pipesFilled * cwtPerPipe;
-  const capacityCwt = zone.pipeCount * cwtPerPipe;
+  const capacityCwt = pipeCount * cwtPerPipe;
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
 
   const runs = zoneData?.cwtRuns || [];
@@ -267,9 +291,9 @@ function computeZoneStats(bay, zone, zoneData) {
   const shrinkPct = initialCwt > 0 ? shrinkCwt / initialCwt : 0;
 
   return {
-    pipesEmpty, pipesFilled, pipeFullFlags, cwtPerPipe, currentCwt, capacityCwt, fillPct,
+    pipeCount, pipesEmpty, pipesFilled, fullMap, cwtPerPipe, currentCwt, capacityCwt, fillPct,
     totalRun, initialCwt, shrinkCwt, shrinkPct, runs,
-    lastCheckDate: latest ? latest.date : null,
+    lastCheckDate: pipeLog.length ? pipeLog[pipeLog.length - 1].date : null,
   };
 }
 
@@ -404,112 +428,128 @@ function buildBayGroup(bay, dims) {
   floor.receiveShadow = true;
   g.add(floor);
 
-  // A bay's total pipe count is its own fixed infrastructure figure — set
-  // when the bay is created — independent of how much of it any given field
-  // currently occupies. Falling back to the sum of zone pipe counts keeps
-  // older bays (saved before bays had their own pipeCount) working.
-  const totalPipes = bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0) || 1;
+  // Pipe numbers are GLOBAL across the whole bay (1..totalPipes) — every
+  // field's pipeRanges reference this same numbering, so "pipe 12" always
+  // means the same physical slot regardless of which field owns it. Falling
+  // back to the sum of zone pipe counts keeps older bays (saved before bays
+  // had their own pipeCount) working.
+  const totalPipes = bay.pipeCount || bay.zones.reduce((s, z) => s + zonePipeCount(z), 0) || 1;
   const innerW = W * 0.86;
-  let zCursor = -L / 2;
-  const zoneMeshes = {};
-  bay.zones.forEach((zone, zi) => {
-    const depth = (zone.pipeCount / totalPipes) * L;
-    const varietyColor = getVarietyColor(zone.variety);
-    const customerColor = getCustomerColor(zone.customer);
+  const pipeWidth = L / totalPipes;
+  const zStart = -L / 2;
 
-    if (zi > 0) {
-      const dividerMat = new THREE.MeshBasicMaterial({ color: "#f2c14e" });
-      const divider = new THREE.Mesh(new THREE.BoxGeometry(innerW + 0.3, 0.06, 0.06), dividerMat);
-      divider.position.set(0, 0.03, zCursor);
-      g.add(divider);
-    }
+  // One indicator cylinder per physical pipe, positioned by its actual
+  // global pipe number — independent of which field (if any) currently
+  // owns it. Ownership/fill state gets applied in applyZoneFill.
+  const stripGroup = new THREE.Group();
+  for (let p = 0; p < totalPipes; p++) {
+    const pipeMat = new THREE.MeshStandardMaterial({ color: "#4a4238", metalness: 0.6, roughness: 0.35 });
+    const pipeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, innerW * 0.9, 10), pipeMat);
+    pipeMesh.rotation.z = Math.PI / 2;
+    pipeMesh.position.set(0, 0.09, zStart + pipeWidth * (p + 0.5));
+    stripGroup.add(pipeMesh);
+    pipeMesh.userData = { pipeNumber: p + 1 };
+  }
+  g.add(stripGroup);
 
-    // Pile/cap segments are (re)built in applyZoneFill, not here — how many
-    // separate mounds a zone needs depends on its latest pipe check (a pull
-    // from both ends leaves two full stretches with a gap between them), and
-    // that can change on every check. This group just gives them a home.
-    const pileGroup = new THREE.Group();
-    g.add(pileGroup);
+  // Pile/cap mounds and the field-boundary dividers are all (re)built in
+  // applyZoneFill, not here — which pipes are full, and which field owns
+  // which stretch, can change with every log entry, so there's no fixed set
+  // of meshes to just resize in place.
+  const pileGroup = new THREE.Group();
+  g.add(pileGroup);
+  const dividerGroup = new THREE.Group();
+  g.add(dividerGroup);
 
-    // One indicator cylinder per actual pipe (not an approximated subset), so
-    // the strip along the floor maps 1:1 to which physical pipes are exposed
-    // (empty) vs still buried under potatoes (full).
-    const pipeWidth = depth / zone.pipeCount;
-    const stripGroup = new THREE.Group();
-    for (let p = 0; p < zone.pipeCount; p++) {
-      const pipeMat = new THREE.MeshStandardMaterial({ color: "#4a4238", metalness: 0.6, roughness: 0.35 });
-      const pipeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, innerW * 0.9, 10), pipeMat);
-      pipeMesh.rotation.z = Math.PI / 2;
-      pipeMesh.position.set(0, 0.09, zCursor + pipeWidth * (p + 0.5));
-      stripGroup.add(pipeMesh);
-      pipeMesh.userData = { zoneId: zone.id, pipeIndex: p };
-    }
-    g.add(stripGroup);
-
-    zoneMeshes[zone.id] = {
-      pileGroup, stripGroup, depthStart: zCursor, depth, innerW,
-      pipeCount: zone.pipeCount, varietyColor, customerColor,
-    };
-    zCursor += depth;
-  });
-
-  return { group: g, zoneMeshes, maxH: H * 0.82 };
+  return { group: g, pileGroup, dividerGroup, stripGroup, totalPipes, pipeWidth, zStart, innerW, maxH: H * 0.82 };
 }
 
-function applyZoneFill(zoneMeshes, zoneStatsById, maxH) {
-  Object.entries(zoneMeshes).forEach(([zoneId, m]) => {
-    const stats = zoneStatsById[zoneId];
-    const fullFlags = stats?.pipeFullFlags?.length === m.pipeCount
-      ? stats.pipeFullFlags
-      : Array(m.pipeCount).fill(true);
-    const pipeWidth = m.depth / m.pipeCount;
-
-    // Rebuild the pile from scratch on every update — the number of separate
-    // full stretches (and so the number of pile segments) can change with
-    // each check, so there's no single mesh to just resize in place.
-    while (m.pileGroup.children.length) {
-      const child = m.pileGroup.children.pop();
-      child.geometry?.dispose();
-      m.pileGroup.remove(child);
-    }
-
-    let i = 0;
-    while (i < fullFlags.length) {
-      if (!fullFlags[i]) { i++; continue; }
-      let j = i;
-      while (j < fullFlags.length && fullFlags[j]) j++;
-      // Contiguous run of full pipes is [i, j) — one pile+cap mound per run.
-      // Pulling from both ends renders as two separate mounds with a gap of
-      // exposed (light-colored) pipe between them, instead of one pile that
-      // only ever recedes from a single end.
-      const segDepth = Math.max(0.3, (j - i) * pipeWidth - 0.3);
-      const segTopDepth = segDepth * PILE_TAPER;
-      const topWidth = m.innerW * PILE_TAPER;
-      const segCenterZ = m.depthStart + (i + (j - i) / 2) * pipeWidth;
-
-      const mat = new THREE.MeshStandardMaterial({ color: m.varietyColor, roughness: 0.95, side: THREE.DoubleSide });
-      const pile = new THREE.Mesh(buildPileFrustumGeometry(m.innerW, topWidth, segDepth, segTopDepth), mat);
-      pile.scale.set(1, maxH, 1);
-      pile.position.set(0, 0, segCenterZ);
-      pile.castShadow = true;
-      m.pileGroup.add(pile);
-
-      // customer cap — thin colored slab riding the top of each mound, so
-      // variety (mound color) and customer (cap color) both read at a glance
-      const capMat = new THREE.MeshStandardMaterial({ color: m.customerColor, roughness: 0.6, metalness: 0.1 });
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(topWidth * 0.94, 0.28, segTopDepth * 0.9), capMat);
-      cap.position.set(0, maxH + 0.14, segCenterZ);
-      cap.castShadow = true;
-      m.pileGroup.add(cap);
-
-      i = j;
-    }
-
-    // Recolor each pipe indicator to match its actual state: dark/buried
-    // when still full, light/exposed metal when emptied out.
-    m.stripGroup.children.forEach((pipeMesh, idx) => {
-      pipeMesh.material.color.set(fullFlags[idx] ? "#4a4238" : "#c7ccd4");
+// Maps every pipe slot (1..totalPipes) to whichever zone currently owns it
+// (via that zone's pipeRanges footprint) and whether it's presently full —
+// the single source of truth the pile mounds, dividers, and pipe strip all
+// render from.
+function buildPipeSlotOwnership(bay, zoneStatsById, totalPipes) {
+  const owner = new Array(totalPipes + 1).fill(null); // 1-indexed; owner[0] unused
+  const full = new Array(totalPipes + 1).fill(false);
+  bay.zones.forEach((zone) => {
+    const zs = zoneStatsById[zone.id];
+    if (!zs) return;
+    zs.fullMap.forEach((isFull, pipeNumber) => {
+      if (pipeNumber >= 1 && pipeNumber <= totalPipes) {
+        owner[pipeNumber] = zone;
+        full[pipeNumber] = isFull;
+      }
     });
+  });
+  return { owner, full };
+}
+
+function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
+  const { pileGroup, dividerGroup, stripGroup, totalPipes, pipeWidth, zStart, innerW } = bayMesh;
+  const { owner, full } = buildPipeSlotOwnership(bay, zoneStatsById, totalPipes);
+
+  // Rebuild the mounds from scratch every update — which pipes are full (and
+  // therefore how many separate mounds exist) changes with every log entry,
+  // so there's no fixed mesh to just resize in place.
+  while (pileGroup.children.length) {
+    const child = pileGroup.children.pop();
+    child.geometry?.dispose();
+    pileGroup.remove(child);
+  }
+  let p = 1;
+  while (p <= totalPipes) {
+    if (!owner[p] || !full[p]) { p++; continue; }
+    const zone = owner[p];
+    let q = p;
+    while (q + 1 <= totalPipes && owner[q + 1] === zone && full[q + 1]) q++;
+    // Contiguous full run [p, q] (1-indexed, inclusive) owned by the same
+    // field — one pile+cap mound per run. Pulling from both ends leaves two
+    // separate mounds with a gap of exposed (light-colored) pipe between
+    // them, instead of one pile that only ever recedes from a single end.
+    const segDepth = Math.max(0.3, (q - p + 1) * pipeWidth - 0.3);
+    const segTopDepth = segDepth * PILE_TAPER;
+    const topWidth = innerW * PILE_TAPER;
+    const segCenterZ = zStart + (p - 1 + (q - p + 1) / 2) * pipeWidth;
+
+    const mat = new THREE.MeshStandardMaterial({ color: getVarietyColor(zone.variety), roughness: 0.95, side: THREE.DoubleSide });
+    const pile = new THREE.Mesh(buildPileFrustumGeometry(innerW, topWidth, segDepth, segTopDepth), mat);
+    pile.scale.set(1, maxH, 1);
+    pile.position.set(0, 0, segCenterZ);
+    pile.castShadow = true;
+    pileGroup.add(pile);
+
+    // customer cap — thin colored slab riding the top of each mound, so
+    // variety (mound color) and customer (cap color) both read at a glance
+    const capMat = new THREE.MeshStandardMaterial({ color: getCustomerColor(zone.customer), roughness: 0.6, metalness: 0.1 });
+    const cap = new THREE.Mesh(new THREE.BoxGeometry(topWidth * 0.94, 0.28, segTopDepth * 0.9), capMat);
+    cap.position.set(0, maxH + 0.14, segCenterZ);
+    cap.castShadow = true;
+    pileGroup.add(cap);
+
+    p = q + 1;
+  }
+
+  // Field-boundary dividers — rebuilt alongside the mounds since ownership
+  // can shift (a field's footprint growing via a fill log entry) just like
+  // fill state can.
+  while (dividerGroup.children.length) {
+    const child = dividerGroup.children.pop();
+    child.geometry?.dispose();
+    dividerGroup.remove(child);
+  }
+  for (let b = 2; b <= totalPipes; b++) {
+    if (owner[b] !== owner[b - 1] && (owner[b] || owner[b - 1])) {
+      const dividerMat = new THREE.MeshBasicMaterial({ color: "#f2c14e" });
+      const divider = new THREE.Mesh(new THREE.BoxGeometry(innerW + 0.3, 0.06, 0.06), dividerMat);
+      divider.position.set(0, 0.03, zStart + (b - 1) * pipeWidth);
+      dividerGroup.add(divider);
+    }
+  }
+
+  // Recolor each pipe indicator to match its actual state: dark/buried when
+  // full, light/exposed metal when empty or not yet claimed by any field.
+  stripGroup.children.forEach((pipeMesh, idx) => {
+    pipeMesh.material.color.set(full[idx + 1] ? "#4a4238" : "#c7ccd4");
   });
 }
 
@@ -568,15 +608,15 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
 
     const bayMeshes = {};
     bays.forEach((bay, i) => {
-      const { group, zoneMeshes, maxH } = buildBayGroup(bay, DIMS);
-      group.position.x = xPositions[i];
-      buildingGroup.add(group);
-      bayMeshes[bay.id] = { group, zoneMeshes, maxH };
+      const built = buildBayGroup(bay, DIMS);
+      built.group.position.x = xPositions[i];
+      buildingGroup.add(built.group);
+      bayMeshes[bay.id] = built;
 
       const ringMat = new THREE.MeshBasicMaterial({ color: "#f2c14e", transparent: true, opacity: 0.85 });
       const ring = new THREE.Mesh(new THREE.RingGeometry(DIMS.W * 0.7, DIMS.W * 0.78, 32), ringMat);
       ring.rotation.x = -Math.PI / 2;
-      ring.position.set(group.position.x, 0.02, 0);
+      ring.position.set(built.group.position.x, 0.02, 0);
       ring.visible = mode === "yard" && bay.id === selectedId;
       scene.add(ring);
       bayMeshes[bay.id].ring = ring;
@@ -652,17 +692,40 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       const newLabels = [];
       bays.forEach((bay) => {
         const m = bayMeshes[bay.id];
-        Object.entries(m.zoneMeshes).forEach(([zoneId, zm]) => {
-          const worldZ = zm.depthStart + zm.depth / 2;
+        bay.zones.forEach((zone) => {
+          const footprint = pipeRangeSet(zone.pipeRanges);
+          if (!footprint.size) return; // no pipe assigned yet — nowhere to anchor a label
+          const nums = Array.from(footprint);
+          const lo = Math.min(...nums), hi = Math.max(...nums);
+          const worldZ = m.zStart + ((lo - 1) + (hi - lo + 1) / 2) * m.pipeWidth;
           const p = new THREE.Vector3(0, m.maxH + 1.6, worldZ).add(m.group.position);
           p.project(camera);
           newLabels.push({
-            key: `${bay.id}:${zoneId}`, bayId: bay.id, zoneId,
+            key: `${bay.id}:${zone.id}`, bayId: bay.id, zoneId: zone.id,
             x: (p.x * 0.5 + 0.5) * mount.clientWidth,
             y: (-p.y * 0.5 + 0.5) * mount.clientHeight,
             visible: p.z < 1,
           });
         });
+
+        // Pipe number markers along the floor at the bottom of the bay —
+        // thinned out on bays with lots of pipe so it stays readable instead
+        // of a wall of overlapping numbers. Always includes pipe 1 and the
+        // last pipe so the range's ends are never ambiguous.
+        const step = m.totalPipes <= 20 ? 1 : Math.ceil(m.totalPipes / 20);
+        for (let pn = 1; pn <= m.totalPipes; pn++) {
+          if (pn !== 1 && pn !== m.totalPipes && (pn - 1) % step !== 0) continue;
+          const worldZ = m.zStart + m.pipeWidth * (pn - 0.5);
+          const pp = new THREE.Vector3(0, 0.02, worldZ).add(m.group.position);
+          pp.project(camera);
+          newLabels.push({
+            key: `pipe:${bay.id}:${pn}`, bayId: bay.id, isPipeLabel: true, pipeNumber: pn,
+            x: (pp.x * 0.5 + 0.5) * mount.clientWidth,
+            y: (-pp.y * 0.5 + 0.5) * mount.clientHeight,
+            visible: pp.z < 1,
+          });
+        }
+
         if (mode === "yard") {
           const p2 = new THREE.Vector3(0, m.maxH + 3.4, 0).add(m.group.position);
           p2.project(camera);
@@ -733,7 +796,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       const m = bm[bay.id];
       if (!m) return;
       const bayStats = statsById[bay.id];
-      if (bayStats) applyZoneFill(m.zoneMeshes, bayStats.zoneStats, m.maxH);
+      if (bayStats) applyZoneFill(m, bay, bayStats.zoneStats, m.maxH);
       if (m.ring) m.ring.visible = mode === "yard" && bay.id === selectedId;
     });
   }, [bays, statsById, selectedId, mode]);
@@ -769,6 +832,17 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
             }}>
               <div style={{ fontWeight: 700 }}>{bay.name}</div>
               <div style={{ color: "#9aa4b8", marginTop: 1 }}>{Math.round((bayStats?.fillPct || 0) * 100)}% full</div>
+            </div>
+          );
+        }
+        if (l.isPipeLabel) {
+          return (
+            <div key={l.key} style={{
+              position: "absolute", left: l.x, top: l.y, transform: "translate(-50%,0)",
+              pointerEvents: "none", color: "#8790a3", fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 9.5, whiteSpace: "nowrap", textShadow: "0 1px 3px rgba(0,0,0,0.9)",
+            }}>
+              {l.pipeNumber}
             </div>
           );
         }
@@ -973,6 +1047,21 @@ function useAgworldSeasons() {
   return seasons;
 }
 
+// Defaults the Agworld season picker to whichever synced season covers the
+// current calendar year (matched against its start/end date or name), so
+// users don't have to manually reselect it every year — falls back to the
+// most recent season (list is already sorted newest-first) if none match.
+function pickDefaultSeasonId(seasons) {
+  if (!seasons || seasons.length === 0) return "";
+  const year = String(new Date().getFullYear());
+  const match = seasons.find((s) =>
+    (s.startDate && s.startDate.slice(0, 4) === year) ||
+    (s.endDate && s.endDate.slice(0, 4) === year) ||
+    (s.name && s.name.includes(year))
+  );
+  return (match || seasons[0]).id;
+}
+
 // Collection-group query across every field's "seasons" subcollection,
 // narrowed to one seasonId, then joined back to each field's parent doc for
 // its name/farm. Filtered client-side to fields whose synced crop looks like
@@ -1029,7 +1118,7 @@ function AgworldFieldPicker({ onPick }) {
   const seasons = useAgworldSeasons();
   const [seasonId, setSeasonId] = useState("");
   useEffect(() => {
-    if (seasons && seasons.length && !seasonId) setSeasonId(seasons[0].id);
+    if (seasons && seasons.length && !seasonId) setSeasonId(pickDefaultSeasonId(seasons));
   }, [seasons]); // eslint-disable-line react-hooks/exhaustive-deps
   const fields = useAgworldFields(seasonId);
   const [search, setSearch] = useState("");
@@ -1079,19 +1168,27 @@ function AgworldFieldPicker({ onPick }) {
 // Shared "add one product/field to a bay" mini-form. Used both in Bay Detail
 // (add product to the bay you're looking at) and in Manage Sites (add product
 // to any existing bay from the structure tree). A bay can exist with zero
-// fields — this is the one place a field/product gets attached to it.
+// fields — this is the one place a field/product gets attached to it, by
+// saying exactly which of the bay's own pipe numbers it covers.
 // Fields can be picked straight from Agworld's synced field list for the
 // season (name + variety autofill, still editable), or typed in by hand for
 // anything Agworld doesn't track (purchased loads, un-synced fields, etc.).
-function AddZoneForm({ varieties, customers, onAdd, nextName = "Field 1" }) {
+function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" }) {
   const [source, setSource] = useState("agworld"); // "agworld" | "manual"
   const [name, setName] = useState(nextName);
   const [variety, setVariety] = useState(varieties[0] || "");
   const [customer, setCustomer] = useState("Unassigned");
-  const [pipe, setPipe] = useState("30");
+  const [pipeFrom, setPipeFrom] = useState("");
+  const [pipeTo, setPipeTo] = useState("");
   const [cwtPerPipe, setCwtPerPipe] = useState("");
   const [error, setError] = useState("");
   const [fromAgworld, setFromAgworld] = useState(false);
+
+  // A bay without its own total yet falls back to whatever's already
+  // assigned to other fields — so validation still catches an obviously
+  // out-of-range pipe number even before someone's entered the bay's total.
+  const bayPipeBound = bay.pipeCount || bay.zones.reduce((s, z) => s + zonePipeCount(z), 0) || null;
+  const takenPipes = pipeRangeSet(bay.zones.flatMap((z) => z.pipeRanges || []));
 
   const applyAgworldField = (f) => {
     setName(f.name || nextName);
@@ -1102,16 +1199,27 @@ function AddZoneForm({ varieties, customers, onAdd, nextName = "Field 1" }) {
 
   const submit = () => {
     const trimmed = name.trim();
-    if (!trimmed || !variety || !Number(pipe) || Number(pipe) <= 0) {
-      setError("Needs a name, variety, and a pipe count greater than 0.");
+    if (!trimmed || !variety || pipeFrom === "" || pipeTo === "") {
+      setError("Needs a name, variety, and a pipe range.");
+      return;
+    }
+    const range = { from: Number(pipeFrom), to: Number(pipeTo) };
+    if (!rangeFitsBay(range, bayPipeBound)) {
+      setError(`This bay only has ${bayPipeBound} pipe — pipe ${Math.max(range.from, range.to)} doesn't exist.`);
       return;
     }
     onAdd({
       id: uid("zone"), name: trimmed, variety, customer: customer || "Unassigned",
-      pipeCount: Number(pipe), ...(cwtPerPipe ? { cwtPerPipe: Number(cwtPerPipe) } : {}),
+      pipeRanges: [range], pipeCount: pipeRangeSet([range]).size,
+      ...(cwtPerPipe ? { cwtPerPipe: Number(cwtPerPipe) } : {}),
     });
-    setName(nextName); setVariety(varieties[0] || ""); setCustomer("Unassigned"); setPipe("30"); setCwtPerPipe(""); setError(""); setFromAgworld(false);
+    setName(nextName); setVariety(varieties[0] || ""); setCustomer("Unassigned");
+    setPipeFrom(""); setPipeTo(""); setCwtPerPipe(""); setError(""); setFromAgworld(false);
   };
+
+  const overlap = pipeFrom !== "" && pipeTo !== ""
+    ? Array.from(pipeRangeSet([{ from: pipeFrom, to: pipeTo }])).filter((p) => takenPipes.has(p))
+    : [];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, background: "#0e1420", border: "1px solid #232d40", borderRadius: 8, padding: 10, width: "100%" }}>
@@ -1136,10 +1244,18 @@ function AddZoneForm({ varieties, customers, onAdd, nextName = "Field 1" }) {
             {customerOptions(customers, customer).map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </Field>
-        <Field label="Pipe (approx. covered)"><input type="number" min="1" value={pipe} onChange={(e) => setPipe(e.target.value)} style={{ ...inputStyle, width: 90 }} /></Field>
+        <Field label={`Pipe from (of ${bayPipeBound ?? "?"})`}>
+          <input type="number" min="1" max={bayPipeBound || undefined} value={pipeFrom} onChange={(e) => setPipeFrom(e.target.value)} style={{ ...inputStyle, width: 90 }} placeholder="e.g. 1" />
+        </Field>
+        <Field label="to">
+          <input type="number" min="1" max={bayPipeBound || undefined} value={pipeTo} onChange={(e) => setPipeTo(e.target.value)} style={{ ...inputStyle, width: 90 }} placeholder="e.g. 15" />
+        </Field>
         <Field label="Cwt/pipe (optional)"><input type="number" value={cwtPerPipe} onChange={(e) => setCwtPerPipe(e.target.value)} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 3200" /></Field>
         <Button onClick={submit}><Plus size={14} /> Add product</Button>
       </div>
+      {overlap.length > 0 && (
+        <div style={{ fontSize: 11, color: "#e0a63e" }}>Heads up: pipe {formatPipeRanges([{ from: Math.min(...overlap), to: Math.max(...overlap) }])} is already assigned to another field in this bay.</div>
+      )}
       {fromAgworld && <div style={{ fontSize: 11, color: "#8fd19e" }}>Loaded from Agworld — adjust anything above before adding.</div>}
       {error && <div style={{ width: "100%", fontSize: 12, color: "#e08787" }}>{error}</div>}
     </div>
@@ -1254,30 +1370,54 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
   const zoneData = data.zones[zoneId] || { pipeChecks: [], cwtRuns: [] };
   const zs = stats.zoneStats[zoneId];
 
-  // Potatoes get pulled from both ends of a run inward, so a check records
-  // up to two empty pipe ranges (front end + back end) rather than a single
-  // "how many are gone" count — leaves an accurate picture of which exact
-  // pipes are empty vs still full, including a full stretch left in the middle.
-  const [emptyFrom1, setEmptyFrom1] = useState("");
-  const [emptyTo1, setEmptyTo1] = useState("");
-  const [emptyFrom2, setEmptyFrom2] = useState("");
-  const [emptyTo2, setEmptyTo2] = useState("");
+  // Potatoes get pulled from (or filled back into) both ends of a run, so a
+  // log entry records up to two pipe ranges (front end + back end) rather
+  // than a single count — leaves an accurate picture of exactly which pipes
+  // are empty vs still full, including a full stretch left in the middle.
+  // Log Pipe does double duty: "haul" pulls product out of pipe already in
+  // this field's footprint; "fill" puts product into pipe (including pipe
+  // not yet part of this field, growing its footprint).
+  const [logType, setLogType] = useState("haul"); // "haul" | "fill"
+  const [rangeFrom1, setRangeFrom1] = useState("");
+  const [rangeTo1, setRangeTo1] = useState("");
+  const [rangeFrom2, setRangeFrom2] = useState("");
+  const [rangeTo2, setRangeTo2] = useState("");
   const [checkDate, setCheckDate] = useState(todayStr());
   const [checkNote, setCheckNote] = useState("");
+  const [logError, setLogError] = useState("");
   const [runDate, setRunDate] = useState(todayStr());
   const [runDest, setRunDest] = useState(zone?.customer || "Unassigned");
   const [runCwt, setRunCwt] = useState("");
   useEffect(() => { setRunDest(zone?.customer || "Unassigned"); }, [zoneId]);
-  useEffect(() => { setEmptyFrom1(""); setEmptyTo1(""); setEmptyFrom2(""); setEmptyTo2(""); }, [zoneId]);
+  useEffect(() => { setRangeFrom1(""); setRangeTo1(""); setRangeFrom2(""); setRangeTo2(""); setLogError(""); }, [zoneId, logType]);
+
+  // A bay without its own total yet falls back to whatever's already
+  // assigned across its fields — same fallback AddZoneForm uses.
+  const bayPipeBound = bay.pipeCount || bay.zones.reduce((s, z) => s + zonePipeCount(z), 0) || null;
 
   const pendingRanges = [
-    ...(emptyFrom1 !== "" && emptyTo1 !== "" ? [{ from: Number(emptyFrom1), to: Number(emptyTo1) }] : []),
-    ...(emptyFrom2 !== "" && emptyTo2 !== "" ? [{ from: Number(emptyFrom2), to: Number(emptyTo2) }] : []),
+    ...(rangeFrom1 !== "" && rangeTo1 !== "" ? [{ from: Number(rangeFrom1), to: Number(rangeTo1) }] : []),
+    ...(rangeFrom2 !== "" && rangeTo2 !== "" ? [{ from: Number(rangeFrom2), to: Number(rangeTo2) }] : []),
   ];
   const submitCheck = () => {
     if (!zone || pendingRanges.length === 0) return;
-    onAddPipeCheck(bay.id, zoneId, { date: checkDate, emptyRanges: pendingRanges, note: checkNote });
-    setEmptyFrom1(""); setEmptyTo1(""); setEmptyFrom2(""); setEmptyTo2(""); setCheckNote("");
+    for (const r of pendingRanges) {
+      if (!rangeFitsBay(r, bayPipeBound)) {
+        setLogError(`This bay only has ${bayPipeBound} pipe — pipe ${Math.max(r.from, r.to)} doesn't exist.`);
+        return;
+      }
+    }
+    if (logType === "haul") {
+      const footprint = pipeRangeSet(zone.pipeRanges);
+      const outside = Array.from(pipeRangeSet(pendingRanges)).filter((p) => !footprint.has(p));
+      if (outside.length > 0) {
+        setLogError(`Pipe ${outside[0]} isn't part of ${zone.name}'s pipe yet — can't haul it from here.`);
+        return;
+      }
+    }
+    setLogError("");
+    onAddPipeCheck(bay.id, zoneId, { date: checkDate, type: logType, ranges: pendingRanges, note: checkNote });
+    setRangeFrom1(""); setRangeTo1(""); setRangeFrom2(""); setRangeTo2(""); setCheckNote("");
   };
   const submitRun = () => {
     if (!runCwt || isNaN(Number(runCwt))) return;
@@ -1318,7 +1458,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
             This bay is empty — no product assigned yet. Add a field below when it's ready to fill.
           </div>
           {!readOnly && (
-            <AddZoneForm varieties={varieties} customers={customers} onAdd={(z) => onAddZoneToBay(bay.id, z)} />
+            <AddZoneForm bay={bay} varieties={varieties} customers={customers} onAdd={(z) => onAddZoneToBay(bay.id, z)} />
           )}
         </div>
       )}
@@ -1363,7 +1503,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
 
       {bay.zones.length > 0 && !readOnly && showAddZone && (
         <AddZoneForm
-          varieties={varieties} customers={customers}
+          bay={bay} varieties={varieties} customers={customers}
           nextName={`Field ${bay.zones.length + 1}`}
           onAdd={(z) => { onAddZoneToBay(bay.id, z); setShowAddZone(false); }}
         />
@@ -1393,45 +1533,61 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
             <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
               <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
-                <Gauge size={16} color="#f2c14e" /> Log pipe check — {zone.name}
+                <Gauge size={16} color="#f2c14e" /> Log pipe — {zone.name}
+              </div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                <button type="button" onClick={() => setLogType("haul")} style={agworldTabStyle(logType === "haul")}>Hauling out</button>
+                <button type="button" onClick={() => setLogType("fill")} style={agworldTabStyle(logType === "fill")}>Filling in</button>
               </div>
               <div style={{ fontSize: 12, color: "#8790a3", marginBottom: 10 }}>
-                Potatoes get pulled from both ends, so enter which pipe number ranges are empty on each end — cwt is
-                calculated automatically from whatever's left full in between. Leave the second range blank if you've
-                only pulled from one end.
+                {logType === "haul"
+                  ? "Potatoes get pulled from both ends, so enter which pipe number ranges have been hauled out on each end. Leave the second range blank if you've only pulled from one end."
+                  : "Enter which pipe number ranges this load filled — pipe not already part of this field gets added to its footprint. Leave the second range blank if you only filled one stretch."}
               </div>
               <Field label="Date"><input type="date" value={checkDate} onChange={(e) => setCheckDate(e.target.value)} style={inputStyle} /></Field>
-              <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 4, letterSpacing: 0.3 }}>Empty range 1 (out of {zone.pipeCount})</div>
+              <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 4, letterSpacing: 0.3 }}>Pipe range 1 (bay has {bayPipeBound ?? "?"} total)</div>
               <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                <input type="number" min="1" max={zone.pipeCount} value={emptyFrom1} onChange={(e) => setEmptyFrom1(e.target.value)} style={inputStyle} placeholder="pipe #" />
+                <input type="number" min="1" max={bayPipeBound || undefined} value={rangeFrom1} onChange={(e) => setRangeFrom1(e.target.value)} style={inputStyle} placeholder="pipe #" />
                 <span style={{ color: "#6f7890", alignSelf: "center" }}>to</span>
-                <input type="number" min="1" max={zone.pipeCount} value={emptyTo1} onChange={(e) => setEmptyTo1(e.target.value)} style={inputStyle} placeholder="pipe #" />
+                <input type="number" min="1" max={bayPipeBound || undefined} value={rangeTo1} onChange={(e) => setRangeTo1(e.target.value)} style={inputStyle} placeholder="pipe #" />
               </div>
-              <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 4, letterSpacing: 0.3 }}>Empty range 2 (optional — the other end)</div>
+              <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 4, letterSpacing: 0.3 }}>Pipe range 2 (optional — the other end)</div>
               <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                <input type="number" min="1" max={zone.pipeCount} value={emptyFrom2} onChange={(e) => setEmptyFrom2(e.target.value)} style={inputStyle} placeholder="pipe #" />
+                <input type="number" min="1" max={bayPipeBound || undefined} value={rangeFrom2} onChange={(e) => setRangeFrom2(e.target.value)} style={inputStyle} placeholder="pipe #" />
                 <span style={{ color: "#6f7890", alignSelf: "center" }}>to</span>
-                <input type="number" min="1" max={zone.pipeCount} value={emptyTo2} onChange={(e) => setEmptyTo2(e.target.value)} style={inputStyle} placeholder="pipe #" />
+                <input type="number" min="1" max={bayPipeBound || undefined} value={rangeTo2} onChange={(e) => setRangeTo2(e.target.value)} style={inputStyle} placeholder="pipe #" />
               </div>
               <Field label="Note (optional)"><input value={checkNote} onChange={(e) => setCheckNote(e.target.value)} style={inputStyle} /></Field>
               {pendingRanges.length > 0 && (() => {
-                const pipesEmpty = emptyPipeSet(zone.pipeCount, pendingRanges).size;
-                const pipesFilled = zone.pipeCount - pipesEmpty;
+                const affected = pipeRangeSet(pendingRanges);
+                if (logType === "fill") {
+                  const footprint = pipeRangeSet(zone.pipeRanges);
+                  const newToField = Array.from(affected).filter((p) => !footprint.has(p)).length;
+                  return (
+                    <div style={{ fontSize: 12.5, color: "#c7cede", marginBottom: 10 }}>
+                      → Pipe {formatPipeRanges(pendingRanges)} filled ({affected.size} pipe{newToField > 0 ? `, ${newToField} new to this field` : ""}) =
+                      {" "}<b style={{ color: "#f2c14e" }}>+{fmt(affected.size * zs.cwtPerPipe)} cwt</b>
+                    </div>
+                  );
+                }
+                const currentlyFull = Array.from(affected).filter((p) => zs.fullMap.get(p)).length;
                 return (
                   <div style={{ fontSize: 12.5, color: "#c7cede", marginBottom: 10 }}>
-                    → Pipe {formatPipeRanges(pendingRanges)} empty ({pipesEmpty} pipe) · {pipesFilled} pipe still full =
-                    {" "}<b style={{ color: "#f2c14e" }}>{fmt(pipesFilled * zs.cwtPerPipe)} cwt</b>
+                    → Pipe {formatPipeRanges(pendingRanges)} hauled out ({currentlyFull} pipe still full there) =
+                    {" "}<b style={{ color: "#f2c14e" }}>-{fmt(currentlyFull * zs.cwtPerPipe)} cwt</b>
                   </div>
                 );
               })()}
-              <Button onClick={submitCheck} disabled={readOnly || pendingRanges.length === 0}><Plus size={14} /> Add check</Button>
+              {logError && <div style={{ fontSize: 12, color: "#e08787", marginBottom: 10 }}>{logError}</div>}
+              <Button onClick={submitCheck} disabled={readOnly || pendingRanges.length === 0}><Plus size={14} /> Add log entry</Button>
               <div style={{ marginTop: 14, maxHeight: 150, overflowY: "auto" }}>
-                {pipeChecks.length === 0 && <div style={{ color: "#5b6478", fontSize: 12 }}>No checks logged yet.</div>}
+                {pipeChecks.length === 0 && <div style={{ color: "#5b6478", fontSize: 12 }}>No pipe logged yet.</div>}
                 {pipeChecks.map((c, i) => {
-                  const emptyCount = emptyPipeSet(zone.pipeCount, c.emptyRanges).size;
+                  const affected = pipeRangeSet(c.ranges).size;
+                  const isFill = c.type === "fill";
                   return (
                     <div key={i} style={{ fontSize: 12, color: "#c7cede", padding: "6px 0", borderTop: "1px solid #232d40" }}>
-                      <b>{c.date}</b> — pipe {formatPipeRanges(c.emptyRanges)} empty ({zone.pipeCount - emptyCount} filled)
+                      <b>{c.date}</b> — {isFill ? "filled" : "hauled out"} pipe {formatPipeRanges(c.ranges)} ({affected} pipe)
                       {c.note && <div style={{ color: "#8790a3" }}>{c.note}</div>}
                     </div>
                   );
@@ -2116,28 +2272,36 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   const [bayError, setBayError] = useState("");
 
   const updateZoneRow = (i, patch) => setZoneRows((rows) => rows.map((r, ri) => ri === i ? { ...r, ...patch } : r));
-  const addZoneRow = () => setZoneRows((rows) => [...rows, { name: `Field ${rows.length + 1}`, variety: varieties[0] || "", customer: "Unassigned", pipeCount: "30", cwtPerPipe: "" }]);
+  const addZoneRow = () => setZoneRows((rows) => [...rows, { name: `Field ${rows.length + 1}`, variety: varieties[0] || "", customer: "Unassigned", pipeFrom: "", pipeTo: "", cwtPerPipe: "" }]);
   const removeZoneRow = (i) => setZoneRows((rows) => rows.filter((_, ri) => ri !== i));
 
-  const zoneRowPipeSum = zoneRows.reduce((s, r) => s + (Number(r.pipeCount) || 0), 0);
+  const zoneRowPipeSum = zoneRows.reduce((s, r) => s + pipeRangeSet([{ from: r.pipeFrom, to: r.pipeTo }]).size, 0);
+  const bayPipeBound = bayPipeCount !== "" ? Number(bayPipeCount) : null;
 
   const submitBay = () => {
     const trimmed = bayName.trim();
     if (!trimmed) { setBayError("Give the bay a name."); return; }
     if (!bayBuildingId) { setBayError("Pick or create a building first."); return; }
     for (const r of zoneRows) {
-      if (!r.name.trim() || !r.variety || !Number(r.pipeCount) || Number(r.pipeCount) <= 0) {
-        setBayError("Every field needs a name, variety, and a pipe count greater than 0."); return;
+      if (!r.name.trim() || !r.variety || r.pipeFrom === "" || r.pipeTo === "") {
+        setBayError("Every field needs a name, variety, and a pipe range."); return;
+      }
+      if (!rangeFitsBay({ from: r.pipeFrom, to: r.pipeTo }, bayPipeBound)) {
+        setBayError(`"${r.name}" references pipe outside the ${bayPipeBound} total entered for this bay.`); return;
       }
     }
     const bayId = uid("bay");
-    const zones = zoneRows.map((r) => ({
-      id: uid("zone"), name: r.name.trim(), variety: r.variety, customer: r.customer || "Unassigned",
-      pipeCount: Number(r.pipeCount), ...(r.cwtPerPipe ? { cwtPerPipe: Number(r.cwtPerPipe) } : {}),
-    }));
+    const zones = zoneRows.map((r) => {
+      const range = { from: Number(r.pipeFrom), to: Number(r.pipeTo) };
+      return {
+        id: uid("zone"), name: r.name.trim(), variety: r.variety, customer: r.customer || "Unassigned",
+        pipeRanges: [range], pipeCount: pipeRangeSet([range]).size,
+        ...(r.cwtPerPipe ? { cwtPerPipe: Number(r.cwtPerPipe) } : {}),
+      };
+    });
     onAddBay({
       id: bayId, name: trimmed, buildingId: bayBuildingId, fillDate: bayFillDate,
-      pipeCount: bayPipeCount !== "" ? Number(bayPipeCount) : (zoneRowPipeSum || null),
+      pipeCount: bayPipeBound ?? (zoneRowPipeSum || null),
       cwtPerPipe: bayCwtPerPipe !== "" ? Number(bayCwtPerPipe) : 2500,
       zones,
     });
@@ -2242,7 +2406,12 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                   {customerOptions(customers, r.customer).map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </Field>
-              <Field label="Pipe (approx. covered)"><input type="number" min="1" value={r.pipeCount} onChange={(e) => updateZoneRow(i, { pipeCount: e.target.value })} style={{ ...inputStyle, width: 90 }} /></Field>
+              <Field label={`Pipe from (of ${bayPipeBound ?? "?"})`}>
+                <input type="number" min="1" max={bayPipeBound || undefined} value={r.pipeFrom} onChange={(e) => updateZoneRow(i, { pipeFrom: e.target.value })} style={{ ...inputStyle, width: 90 }} placeholder="e.g. 1" />
+              </Field>
+              <Field label="to">
+                <input type="number" min="1" max={bayPipeBound || undefined} value={r.pipeTo} onChange={(e) => updateZoneRow(i, { pipeTo: e.target.value })} style={{ ...inputStyle, width: 90 }} placeholder="e.g. 15" />
+              </Field>
               <Field label="Cwt/pipe (optional)"><input type="number" value={r.cwtPerPipe} onChange={(e) => updateZoneRow(i, { cwtPerPipe: e.target.value })} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 3200" /></Field>
               <Button variant="ghost" onClick={() => removeZoneRow(i)} style={{ marginBottom: 10 }}>Remove</Button>
             </div>
@@ -2371,8 +2540,9 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
           <div key={z.id} style={{ paddingLeft: 20, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12 }}>
             <ColorDot color={getVarietyColor(z.variety)} size={7} /><ColorDot color={getCustomerColor(z.customer)} size={7} />
             <EditableInline value={z.name} disabled={readOnly} onSave={(v) => onUpdateZoneMeta(bay.id, z.id, { name: v })} width={130} />
-            <span style={{ color: "#6f7890" }}>pipe</span>
-            <EditableInline value={z.pipeCount} type="number" disabled={readOnly} onSave={(v) => onUpdateZoneMeta(bay.id, z.id, { pipeCount: v })} width={70} />
+            <span style={{ color: "#6f7890" }}>
+              pipe {formatPipeRanges(z.pipeRanges)} ({zonePipeCount(z)})
+            </span>
             <span style={{ color: "#6f7890" }}>{z.variety} · {z.customer}</span>
           </div>
         ))}
@@ -2384,7 +2554,7 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
         adding ? (
           <div style={{ marginLeft: 20, marginTop: 8 }}>
             <AddZoneForm
-              varieties={varieties} customers={customers}
+              bay={bay} varieties={varieties} customers={customers}
               nextName={`Field ${bay.zones.length + 1}`}
               onAdd={(z) => { onAddZoneToBay(bay.id, z); setAdding(false); }}
             />
@@ -2721,8 +2891,36 @@ export default function PotatoStorage() {
   }, [isReadOnly]);
 
   const onAddPipeCheck = useCallback((bayId, zoneId, entry) => {
+    if (isReadOnly) return;
+    const bay = bays.find((b) => b.id === bayId);
+    const zone = bay?.zones.find((z) => z.id === zoneId);
+    if (!bay || !zone) return;
+    const bayPipeBound = bay.pipeCount || bay.zones.reduce((s, z) => s + zonePipeCount(z), 0) || null;
+    const rangesOk = (entry.ranges || []).every((r) => rangeFitsBay(r, bayPipeBound));
+    if (!rangesOk) return; // defensive — the Log Pipe form already validates this before calling in
+
     updateZoneData(bayId, zoneId, (zd) => ({ ...zd, pipeChecks: [...(zd.pipeChecks || []), entry] }));
-  }, [updateZoneData]);
+
+    if (entry.type === "fill") {
+      // Filling can grow a field's footprint into pipe it didn't cover
+      // before — extend pipeRanges and refresh the cached pipeCount.
+      setBays((prev) => {
+        const next = prev.map((b) => {
+          if (b.id !== bayId) return b;
+          return {
+            ...b,
+            zones: b.zones.map((z) => {
+              if (z.id !== zoneId) return z;
+              const merged = new Set([...pipeRangeSet(z.pipeRanges), ...pipeRangeSet(entry.ranges)]);
+              return { ...z, pipeRanges: [...(z.pipeRanges || []), ...entry.ranges], pipeCount: merged.size };
+            }),
+          };
+        });
+        saveJSON(CONFIG_KEY, next);
+        return next;
+      });
+    }
+  }, [updateZoneData, isReadOnly, bays]);
 
   const onAddCwtRun = useCallback((bayId, zoneId, entry) => {
     updateZoneData(bayId, zoneId, (zd) => ({ ...zd, cwtRuns: [...(zd.cwtRuns || []), entry] }));
