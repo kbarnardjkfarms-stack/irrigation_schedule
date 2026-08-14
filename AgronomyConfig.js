@@ -29,10 +29,24 @@ export const METRICS_BY_TYPE = {
   ]
 }
 
+// Dark values (fg) are the app's own tokens from styles.css - #3c5a3f is
+// the same green as .topbar/button.active, #A32D2D is the same red as
+// .mode-bar-actions .apply.danger, #854F0B is the same amber as
+// .status.offline. Light values (bg) are new tints in the same hue,
+// since styles.css doesn't define pastel backgrounds for these yet.
 export const STATUS_COLOR = {
-  deficient: { bg: '#FCEBEB', fg: '#501313' },
-  optimal: { bg: '#EAF3DE', fg: '#173404' },
-  excess: { bg: '#FAEEDA', fg: '#412402' }
+  deficient: { bg: '#F5DCDA', fg: '#A32D2D' },
+  optimal: { bg: '#DEEAD2', fg: '#3c5a3f' },
+  excess: { bg: '#F7E8D2', fg: '#854F0B' }
+}
+
+// Reused verbatim from CROP_COLOR in PublicScheduleView.jsx (mint, alfalfa,
+// onions, corn) rather than inventing a new palette for sample types.
+export const SAMPLE_TYPE_BADGE_COLOR = {
+  soil: { bg: '#9FE1CB', fg: '#04342C' },
+  petiole: { bg: '#C0DD97', fg: '#173404' },
+  nematode: { bg: '#F4C0D1', fg: '#4B1528' },
+  compost: { bg: '#FCE9A8', fg: '#7A5C02' }
 }
 
 // Returns 'deficient' | 'optimal' | 'excess' | null (null when there's no
