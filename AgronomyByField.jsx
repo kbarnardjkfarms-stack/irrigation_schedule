@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
-import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR } from './agronomyConfig.js'
+import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR } from './agronomyConfig.js'
 
 function fmtDate(ts) {
   if (!ts) return ''
@@ -167,7 +167,14 @@ export default function AgronomyByField({ fields }) {
           {[...samples].reverse().map((s) => (
             <tr key={s.id}>
               <td>{fmtDate(s.receivedDt)}</td>
-              <td><span className="agronomy-type-badge">{SAMPLE_TYPE_LABEL[s.type]}</span></td>
+              <td>
+                <span
+                  className="agronomy-type-badge"
+                  style={{ background: SAMPLE_TYPE_BADGE_COLOR[s.type]?.bg, color: SAMPLE_TYPE_BADGE_COLOR[s.type]?.fg }}
+                >
+                  {SAMPLE_TYPE_LABEL[s.type]}
+                </span>
+              </td>
               <td>{Object.entries(s.values || {}).map(([k, v]) => `${k}: ${v}`).join(' \u00b7 ')}</td>
             </tr>
           ))}
