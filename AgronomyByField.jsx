@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
-import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR } from './agronomyConfig.js'
+import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR } from './AgronomyConfig.js'
 
 function fmtDate(ts) {
   if (!ts) return ''
