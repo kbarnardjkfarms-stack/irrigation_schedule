@@ -188,6 +188,7 @@ async function syncFields() {
             cropName: primaryCrop ? primaryCrop.crop_name : null,
             varietyName: primaryCrop ? primaryCrop.variety_name : null,
             cropUse: primaryCrop ? primaryCrop.crop_use : null,
+            plantDate: primaryCrop ? (primaryCrop.planting_date || primaryCrop.plant_date || null) : null,
             acres: parseAreaToAcres(f.attributes.area),
             irrigationMethod: f.attributes.irrigation || null,
             croppingMethod: f.attributes.cropping_method || null,
@@ -491,3 +492,205 @@ exports.setUserDisabled = onCall(async (request) => {
   await admin.firestore().doc(`users/${uid}`).set({ disabled }, { merge: true });
   return { ok: true };
 });
+
+// --- Stukenholtz Results sync -------------------------------------------
+//
+// Reuses admin, onSchedule, onRequest, and defineSecret already required
+// at the top of this file.
+//
+// Set the key once with: firebase functions:secrets:set STUKENHOLTZ_API_KEY
+//
+// IMPORTANT - unverified response shape: Stukenholtz's docs
+// (https://stukenholtz.readme.io) document the *request* body for
+// /results but not the shape of an individual result object. The field
+// names guessed at in mapResultToSample() below (sampleType, field,
+// receivedDt, values) are based on common API conventions and the shape
+// of the /contacts example - not confirmed. After deploying, hit
+// backfillStukenholtzSamplesNow once with a short date range and check
+// the Cloud Functions log for "Unmapped Stukenholtz sample" entries -
+// those print the full raw object so you can see what's actually coming
+// back and adjust the extraction below.
+
+const STUKENHOLTZ_API_KEY = defineSecret('STUKENHOLTZ_API_KEY');
+const STUKENHOLTZ_BASE_URL = 'https://results.stukenholtz.com/api';
+
+async function stukenholtzGet(path, apikey) {
+  const url = `${STUKENHOLTZ_BASE_URL}${path}?apikey=${apikey}`;
+  const res = await fetch(url, { headers: { accept: 'application/json' } });
+  if (!res.ok) throw new Error(`Stukenholtz API error ${res.status} on ${path}: ${await res.text()}`);
+  return res.json();
+}
+
+async function stukenholtzPost(path, body, apikey) {
+  const url = `${STUKENHOLTZ_BASE_URL}${path}?apikey=${apikey}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`Stukenholtz API error ${res.status} on ${path}: ${await res.text()}`);
+  return res.json();
+}
+
+// Matches a Stukenholtz field/location label against our own `fields`
+// collection by name - the same loose, lowercase/punctuation-stripped
+// approach slugifyFarmName() uses elsewhere in this app, since the two
+// systems were never guaranteed to agree on exact capitalization/spacing.
+function normalizeFieldLabel(label) {
+  return (label || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function buildFieldLookup(fieldDocs) {
+  const byNormalizedName = {};
+  fieldDocs.forEach((doc) => {
+    const data = doc.data();
+    if (data.name) byNormalizedName[normalizeFieldLabel(data.name)] = doc.id;
+  });
+  return byNormalizedName;
+}
+
+// Best-guess extraction of a usable sample doc from one raw Stukenholtz
+// result - see the file-level note above. Candidate property names are
+// checked in order; adjust once you've seen a real response.
+function mapResultToSample(result, fieldLookup) {
+  const sourceId = result._id || result.id || null;
+  if (!sourceId) return null; // can't upsert safely without a stable id
+
+  // Stukenholtz confirmed these short codes by email (2026): SO = soil,
+  // PL = plant/petiole tissue, NEMA = nematode, CM = compost/manure,
+  // ANY = all types (used as the query sampleType, not a returned value).
+  // Checked first since they're the confirmed real values; the substring
+  // fallback below stays as a safety net in case a result ever comes back
+  // with a full word instead of the short code.
+  const rawTypeRaw = result.sampleType || result.sample_type || result.type || '';
+  const rawTypeCode = rawTypeRaw.toUpperCase().trim();
+  const rawType = rawTypeRaw.toLowerCase();
+  let type = null;
+  if (rawTypeCode === 'SO') type = 'soil';
+  else if (rawTypeCode === 'PL') type = 'petiole';
+  else if (rawTypeCode === 'NEMA') type = 'nematode';
+  else if (rawTypeCode === 'CM') type = 'compost';
+  else if (rawType.includes('soil')) type = 'soil';
+  else if (rawType.includes('petiole') || rawType.includes('plant')) type = 'petiole';
+  else if (rawType.includes('nematode')) type = 'nematode';
+  else if (rawType.includes('compost') || rawType.includes('manure')) type = 'compost';
+
+  const fieldLabel = result.field || result.fieldName || result.location || result.sampleLocation || null;
+  const fieldId = fieldLabel ? fieldLookup[normalizeFieldLabel(fieldLabel)] || null : null;
+
+  const receivedDtRaw = result.receivedDt || result.received_dt || result.receivedDate || null;
+  const receivedDate = receivedDtRaw ? new Date(receivedDtRaw) : null;
+
+  return {
+    sourceId: String(sourceId),
+    type,
+    fieldId,
+    // Kept only when unmatched, so unmatched samples are easy to find and
+    // fix later without having lost the original label.
+    rawFieldLabel: fieldId ? null : fieldLabel,
+    receivedDt: receivedDate && !Number.isNaN(receivedDate.getTime())
+      ? admin.firestore.Timestamp.fromDate(receivedDate)
+      : null,
+    values: result.values || result.measurements || {},
+    raw: result, // kept until the mapping above is confirmed against real data
+    syncedAt: admin.firestore.FieldValue.serverTimestamp()
+  };
+}
+
+async function fetchAllContactIds(apikey) {
+  const json = await stukenholtzGet('/contacts', apikey);
+  return (json.contacts || []).map((c) => c._id);
+}
+
+async function fetchResultsSince(startingReceivedDt, contactIds, apikey) {
+  const json = await stukenholtzPost(
+    '/results',
+    { sampleType: 'ANY', contacts: contactIds, startingReceivedDt },
+    apikey
+  );
+  // Docs don't confirm whether this is a bare array or wrapped in a key -
+  // handle both rather than assuming.
+  return Array.isArray(json) ? json : json.results || [];
+}
+
+async function syncStukenholtzSamples(startingReceivedDt) {
+  const apikey = STUKENHOLTZ_API_KEY.value();
+  const db = admin.firestore();
+
+  const [contactIds, fieldDocsSnap] = await Promise.all([
+    fetchAllContactIds(apikey),
+    db.collection('fields').get()
+  ]);
+  const fieldLookup = buildFieldLookup(fieldDocsSnap.docs);
+  const results = await fetchResultsSince(startingReceivedDt, contactIds, apikey);
+
+  let written = 0;
+  let unmapped = 0;
+  for (let i = 0; i < results.length; i += 400) {
+    const chunk = results.slice(i, i + 400);
+    const batch = db.batch();
+    chunk.forEach((raw) => {
+      const sample = mapResultToSample(raw, fieldLookup);
+      if (!sample) return;
+      if (!sample.type || !sample.fieldId) {
+        unmapped++;
+        console.warn('Unmapped Stukenholtz sample, needs manual review:', JSON.stringify(raw));
+      }
+      batch.set(db.collection('samples').doc(sample.sourceId), sample, { merge: true });
+    });
+    await batch.commit();
+    written += chunk.length;
+  }
+
+  await db.collection('syncState').doc('stukenholtz').set(
+    { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+
+  return { fetched: results.length, written, unmapped };
+}
+
+// Runs hourly, resuming from wherever the last successful sync left off -
+// not a rolling "last N hours" window - so a slow run or a missed
+// invocation never creates a gap. First run ever falls back to the last
+// 24 hours.
+exports.syncStukenholtzSamplesHourly = onSchedule(
+  {
+    schedule: 'every 1 hours',
+    timeZone: 'America/Denver',
+    secrets: [STUKENHOLTZ_API_KEY],
+    timeoutSeconds: 540,
+    memory: '512MiB'
+  },
+  async () => {
+    const db = admin.firestore();
+    const stateDoc = await db.collection('syncState').doc('stukenholtz').get();
+    const lastSyncedAt = stateDoc.exists && stateDoc.data().lastSyncedAt
+      ? stateDoc.data().lastSyncedAt.toDate().toISOString()
+      : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const result = await syncStukenholtzSamples(lastSyncedAt);
+    console.log(`Stukenholtz sync: fetched ${result.fetched}, wrote ${result.written}, ${result.unmapped} unmapped.`);
+  }
+);
+
+// One-time (or re-runnable) history backfill. Visit the deployed URL with
+// ?since=2020-01-01 to bound it, or with no query param for everything
+// Stukenholtz will return in one call. Same upsert-by-sourceId logic as
+// the hourly sync, so it's always safe to run again - and worth running
+// in date-bounded chunks first, since the docs don't state a max range or
+// whether large responses paginate.
+exports.backfillStukenholtzSamplesNow = onRequest(
+  { secrets: [STUKENHOLTZ_API_KEY], timeoutSeconds: 540, memory: '1GiB' },
+  async (req, res) => {
+    try {
+      const since = req.query.since || '2015-01-01T00:00:00.000Z';
+      const result = await syncStukenholtzSamples(since);
+      res.status(200).send(
+        `Backfilled from ${since}: fetched ${result.fetched}, wrote ${result.written}, ${result.unmapped} unmapped (check logs for details).`
+      );
+    } catch (err) {
+      console.error(err);
+      res.status(500).send(err.message);
+    }
+  }
+);
