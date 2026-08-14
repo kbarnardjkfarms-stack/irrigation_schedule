@@ -1,92 +1,80 @@
-/* Merge into styles.css, or import this file directly from Agronomy.jsx. */
+/* Agronomy module additions - append to styles.css.
+   Composes with the existing button, table, and .table-scroll rules
+   rather than re-declaring them (button.active is already styled
+   globally, so the view/type toggles need no button CSS of their own -
+   only layout for the row that holds them). */
 
 .agronomy-view-toggle,
 .agronomy-type-toggle {
   display: flex;
-  gap: 4px;
-  margin-bottom: 1rem;
-}
-
-.agronomy-view-toggle button,
-.agronomy-type-toggle button {
-  padding: 6px 14px;
-  border: 1px solid #D3D1C7;
-  background: #fff;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.agronomy-view-toggle button.active,
-.agronomy-type-toggle button.active {
-  background: #185FA5;
-  color: #fff;
-  border-color: #185FA5;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 
 .agronomy-kpi-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
-  margin-bottom: 1.5rem;
+  gap: 10px;
+  margin-bottom: 16px;
 }
 
 .agronomy-kpi-card {
   background: #f4f2ec;
-  border-radius: 8px;
-  padding: 1rem;
+  border-radius: 10px;
+  padding: 12px 14px;
 }
 
-.agronomy-kpi-label { font-size: 13px; color: #888; margin: 0 0 4px; }
-.agronomy-kpi-value { font-size: 24px; font-weight: 600; margin: 0; }
-.agronomy-kpi-unit { font-size: 13px; font-weight: 400; color: #888; }
+.agronomy-kpi-label { font-size: 11px; color: #888; margin: 0 0 4px; }
+.agronomy-kpi-value { font-size: 20px; font-weight: 600; margin: 0; color: #2b2b26; }
+.agronomy-kpi-unit { font-size: 11px; font-weight: 400; color: #888; }
 
 .agronomy-status-badge {
   display: inline-block;
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
   margin-top: 6px;
   text-transform: capitalize;
 }
 
-.agronomy-status-none { background: #E4E1D8; color: #5A574C; }
+.agronomy-status-none { background: #eee; color: #888; }
 
 .agronomy-charts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 12px;
-  margin-bottom: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
 }
 
-.agronomy-chart-card { background: #f4f2ec; border-radius: 8px; padding: 1rem; }
-.agronomy-chart-title { font-size: 13px; color: #888; margin: 0 0 8px; }
-.agronomy-chart-empty { font-size: 13px; color: #888; padding: 1rem 0; }
+.agronomy-chart-card { background: #f4f2ec; border-radius: 10px; padding: 12px 14px; }
+.agronomy-chart-title { font-size: 11px; color: #888; margin: 0 0 8px; }
+.agronomy-chart-empty { font-size: 11px; color: #888; padding: 1rem 0; }
 
-.agronomy-section-label { font-size: 13px; color: #888; margin: 0 0 8px; }
+.agronomy-section-label { font-size: 11px; color: #888; margin: 12px 0 6px; }
 
+/* Override the global table selector's min-width: 1180px (meant for the
+   wide irrigation schedule grid) the same way .watch-table already does -
+   these are simple, narrow tables. */
 .agronomy-sample-table,
 .agronomy-criteria-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
+  min-width: 0;
+  table-layout: fixed;
+  font-size: 11px;
 }
 
-.agronomy-sample-table th,
-.agronomy-sample-table td,
-.agronomy-criteria-table th,
-.agronomy-criteria-table td {
-  padding: 8px 12px;
-  border-bottom: 1px solid #D3D1C7;
+.agronomy-sample-table td, .agronomy-sample-table th,
+.agronomy-criteria-table td, .agronomy-criteria-table th {
   text-align: left;
+  border-bottom: 0.5px solid #ddd8cc;
 }
 
 .agronomy-table-empty { color: #888; text-align: center; padding: 2rem; }
 .agronomy-target-cell { color: #888; }
 
 .agronomy-type-badge {
-  background: #E1F5EE;
-  color: #04342C;
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 12px;
+  font-size: 9px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 4px;
 }
