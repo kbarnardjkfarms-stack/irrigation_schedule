@@ -1,0 +1,92 @@
+/* Merge into styles.css, or import this file directly from Agronomy.jsx. */
+
+.agronomy-view-toggle,
+.agronomy-type-toggle {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 1rem;
+}
+
+.agronomy-view-toggle button,
+.agronomy-type-toggle button {
+  padding: 6px 14px;
+  border: 1px solid #D3D1C7;
+  background: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.agronomy-view-toggle button.active,
+.agronomy-type-toggle button.active {
+  background: #185FA5;
+  color: #fff;
+  border-color: #185FA5;
+}
+
+.agronomy-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 1.5rem;
+}
+
+.agronomy-kpi-card {
+  background: #f4f2ec;
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.agronomy-kpi-label { font-size: 13px; color: #888; margin: 0 0 4px; }
+.agronomy-kpi-value { font-size: 24px; font-weight: 600; margin: 0; }
+.agronomy-kpi-unit { font-size: 13px; font-weight: 400; color: #888; }
+
+.agronomy-status-badge {
+  display: inline-block;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  margin-top: 6px;
+  text-transform: capitalize;
+}
+
+.agronomy-status-none { background: #E4E1D8; color: #5A574C; }
+
+.agronomy-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-bottom: 1.5rem;
+}
+
+.agronomy-chart-card { background: #f4f2ec; border-radius: 8px; padding: 1rem; }
+.agronomy-chart-title { font-size: 13px; color: #888; margin: 0 0 8px; }
+.agronomy-chart-empty { font-size: 13px; color: #888; padding: 1rem 0; }
+
+.agronomy-section-label { font-size: 13px; color: #888; margin: 0 0 8px; }
+
+.agronomy-sample-table,
+.agronomy-criteria-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.agronomy-sample-table th,
+.agronomy-sample-table td,
+.agronomy-criteria-table th,
+.agronomy-criteria-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #D3D1C7;
+  text-align: left;
+}
+
+.agronomy-table-empty { color: #888; text-align: center; padding: 2rem; }
+.agronomy-target-cell { color: #888; }
+
+.agronomy-type-badge {
+  background: #E1F5EE;
+  color: #04342C;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
