@@ -16,6 +16,7 @@ import Login from './Login.jsx'
 
 import PotatoStorage from './PotatoStorage.jsx'
 import Users from './Users.jsx'
+import Agronomy from './Agronomy.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
 
@@ -161,7 +162,7 @@ export default function App() {
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
   const [userProfile, setUserProfile] = useState(null)
-  const [page, setPage] = useState('home') // 'home', 'irrigation', or 'potato-storage' — more modules join this list later
+  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', or 'agronomy' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
   const [online, setOnline] = useState(navigator.onLine)
@@ -336,6 +337,11 @@ export default function App() {
     if (userRole === 'irrigator') return !!(userProfile && userProfile.canEditSchedule) && farmMatch
     return false
   }
+
+  // Mirrors firestore.rules' canViewAgronomy() — Admin, Owner, or Farm
+  // manager only. Deliberately excludes Irrigation manager and Irrigator,
+  // unlike canEditField()'s farm-scoped roles above.
+  const canSeeAgronomy = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager'
 
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
@@ -678,10 +684,33 @@ export default function App() {
             <img src={potatoStorageLogo} alt="Potato Storage" style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover' }} />
             <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato storage</div>
           </div>
+          {canSeeAgronomy && (
+            <div
+              onClick={() => setPage('agronomy')}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            >
+              <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#DEEAD2', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="56" height="56" viewBox="0 0 48 48">
+                  <defs>
+                    <linearGradient id="agronomySproutGradient" x1="10%" y1="0%" x2="90%" y2="100%">
+                      <stop offset="0%" stopColor="#DCEFC0" />
+                      <stop offset="55%" stopColor="#7FAE4E" />
+                      <stop offset="100%" stopColor="#3c5a3f" />
+                    </linearGradient>
+                  </defs>
+                  <path d="M24 42V24" stroke="#3c5a3f" strokeWidth="2.4" strokeLinecap="round" fill="none" />
+                  <path d="M24 26c0-9 -9-14 -16-13 -1 9 6 16 16 13z" fill="url(#agronomySproutGradient)" />
+                  <path d="M24 30c0-9 9-14 16-13 1 9-6 16-16 13z" fill="url(#agronomySproutGradient)" />
+                </svg>
+              </div>
+              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Agronomy</div>
+            </div>
+          )}
         </div>
       )}
       {page === 'potato-storage' && <PotatoStorage />}
       {page === 'users' && <Users />}
+      {page === 'agronomy' && canSeeAgronomy && <Agronomy />}
       {page === 'irrigation' && (
         <>
           {view === 'live-data' && <LiveData />}
