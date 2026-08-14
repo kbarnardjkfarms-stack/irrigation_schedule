@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
-import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, distanceFromTarget, STATUS_COLOR } from './agronomyConfig.js'
+import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, distanceFromTarget, STATUS_COLOR } from './AgronomyConfig.js'
 
 const SAMPLE_TYPES = Object.keys(METRICS_BY_TYPE)
 
