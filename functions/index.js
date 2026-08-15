@@ -567,29 +567,33 @@ function mapResultToSample(result, fieldLookup) {
   const sourceId = result._id || result.id || null;
   if (!sourceId) return null; // can't upsert safely without a stable id
 
-  // Stukenholtz confirmed these short codes by email (2026): SO = soil,
-  // PL = plant/petiole tissue, NEMA = nematode, CM = compost/manure,
-  // ANY = all types (used as the query sampleType, not a returned value).
-  // Checked first since they're the confirmed real values; the substring
-  // fallback below stays as a safety net in case a result ever comes back
-  // with a full word instead of the short code.
-  const rawTypeRaw = result.sampleType || result.sample_type || result.type || '';
-  const rawTypeCode = rawTypeRaw.toUpperCase().trim();
-  const rawType = rawTypeRaw.toLowerCase();
+  // Confirmed via a live API response (Aug 2026): the short code lives in
+  // ProdType (e.g. "PL"), matching the codes Stukenholtz emailed (SO/PL/
+  // NEMA/CM). Type carries the human-readable category (e.g. "Plant
+  // Tissue") as a fallback in case ProdType is ever missing.
+  const prodTypeCode = (result.ProdType || '').toUpperCase().trim();
+  const typeDescription = (result.Type || result.sampleType || result.sample_type || result.type || '').toLowerCase();
   let type = null;
-  if (rawTypeCode === 'SO') type = 'soil';
-  else if (rawTypeCode === 'PL') type = 'petiole';
-  else if (rawTypeCode === 'NEMA') type = 'nematode';
-  else if (rawTypeCode === 'CM') type = 'compost';
-  else if (rawType.includes('soil')) type = 'soil';
-  else if (rawType.includes('petiole') || rawType.includes('plant')) type = 'petiole';
-  else if (rawType.includes('nematode')) type = 'nematode';
-  else if (rawType.includes('compost') || rawType.includes('manure')) type = 'compost';
+  if (prodTypeCode === 'SO') type = 'soil';
+  else if (prodTypeCode === 'PL') type = 'petiole';
+  else if (prodTypeCode === 'NEMA') type = 'nematode';
+  else if (prodTypeCode === 'CM') type = 'compost';
+  else if (typeDescription.includes('soil')) type = 'soil';
+  else if (typeDescription.includes('petiole') || typeDescription.includes('plant')) type = 'petiole';
+  else if (typeDescription.includes('nematode')) type = 'nematode';
+  else if (typeDescription.includes('compost') || typeDescription.includes('manure')) type = 'compost';
 
-  const fieldLabel = result.field || result.fieldName || result.location || result.sampleLocation || null;
+  // Stukenholtz's own /results response labels "Sample" as "Sample ID" in
+  // its column metadata - the closest match to a field/location name
+  // (e.g. "SHOP S"). FieldID is Stukenholtz's own internal number (won't
+  // match Agworld-sourced field docs), and Grower is the farm/company
+  // name, not a specific field - both kept only as fallbacks.
+  const fieldLabel = result.Sample || result.field || result.fieldName || result.FieldID || result.Grower || null;
   const fieldId = fieldLabel ? fieldLookup[normalizeFieldLabel(fieldLabel)] || null : null;
 
-  const receivedDtRaw = result.receivedDt || result.received_dt || result.receivedDate || null;
+  // Confirmed field name: ReceivedDt (matches Stukenholtz's own
+  // "Date Sampled" column label).
+  const receivedDtRaw = result.ReceivedDt || result.receivedDt || result.received_dt || null;
   const receivedDate = receivedDtRaw ? new Date(receivedDtRaw) : null;
 
   return {
@@ -602,7 +606,12 @@ function mapResultToSample(result, fieldLookup) {
     receivedDt: receivedDate && !Number.isNaN(receivedDate.getTime())
       ? admin.firestore.Timestamp.fromDate(receivedDate)
       : null,
-    values: result.values || result.measurements || {},
+    // Confirmed key: Results (came back as an empty {} on the one live
+    // sample we saw, which may just mean that particular report hadn't
+    // had lab values entered yet - if populated samples turn out to
+    // nest numbers differently than a flat object, this needs another
+    // look once we see one with actual data in it).
+    values: result.Results || result.values || result.measurements || {},
     raw: result, // kept until the mapping above is confirmed against real data
     syncedAt: admin.firestore.FieldValue.serverTimestamp()
   };
@@ -610,7 +619,16 @@ function mapResultToSample(result, fieldLookup) {
 
 async function fetchAllContactIds(apikey) {
   const json = await stukenholtzGet('/contacts', apikey);
-  return (json.contacts || []).map((c) => c._id);
+  const contacts = json.contacts || json.data || (Array.isArray(json) ? json : null);
+  if (!contacts) {
+    // Nothing matched the shapes we know how to handle - log the actual
+    // top-level keys so this is debuggable from the logs alone, rather
+    // than silently returning zero contacts (which is what caused an
+    // earlier "fetched 0, wrote 0" run to look like a dead end).
+    console.warn('Unexpected /contacts response shape, top-level keys:', Object.keys(json));
+    return [];
+  }
+  return contacts.map((c) => c._id || c.id).filter(Boolean);
 }
 
 async function fetchResultsSince(startingReceivedDt, contactIds, apikey) {
@@ -619,9 +637,13 @@ async function fetchResultsSince(startingReceivedDt, contactIds, apikey) {
     { sampleType: 'ANY', contacts: contactIds, startingReceivedDt },
     apikey
   );
-  // Docs don't confirm whether this is a bare array or wrapped in a key -
-  // handle both rather than assuming.
-  return Array.isArray(json) ? json : json.results || [];
+  if (Array.isArray(json)) return json;
+  if (Array.isArray(json.results)) return json.results;
+  if (Array.isArray(json.data)) return json.data;
+  // Same reasoning as fetchAllContactIds - log what we actually got back
+  // rather than silently returning zero results.
+  console.warn('Unexpected /results response shape, top-level keys:', Object.keys(json));
+  return [];
 }
 
 async function syncStukenholtzSamples(startingReceivedDt) {
