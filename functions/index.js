@@ -395,6 +395,19 @@ async function requireAdminOrOwner(auth) {
   }
 }
 
+// Mirrors canViewAgronomy() in firestore.rules - Admin, Owner, or Farm
+// manager only.
+async function requireAgronomyAccess(auth) {
+  if (!auth) {
+    throw new HttpsError('unauthenticated', 'Sign in required.');
+  }
+  const snap = await admin.firestore().doc(`users/${auth.uid}`).get();
+  const role = snap.exists ? snap.data().role : null;
+  if (role !== 'admin' && role !== 'owner' && role !== 'farm_manager') {
+    throw new HttpsError('permission-denied', 'Only Admin, Owner, or Farm manager can edit agronomy sample matches.');
+  }
+}
+
 // Creates a team member's login and their permissions profile together.
 // Done server-side (Admin SDK) on purpose: the client SDK's own
 // "create account" call automatically signs the browser into the new
@@ -560,6 +573,52 @@ function buildFieldLookup(fieldDocs) {
   return byNormalizedName;
 }
 
+// Standard edit-distance calculation - how many single-character
+// insertions/deletions/substitutions turn one string into the other.
+function levenshteinDistance(a, b) {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const temp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
+      prev = temp;
+    }
+  }
+  return dp[n];
+}
+
+// Fallback for when the exact normalized match fails. Deliberately
+// conservative: a wrong fuzzy match silently corrupts a field's sample
+// history, which is worse than leaving a sample unmapped for manual
+// review, so this only accepts a match that's both close (within ~20% of
+// the label's own length) AND unambiguous (no other field tied for
+// closest). Anything shorter than 3 characters is skipped entirely - too
+// short for edit distance to mean much.
+function findFuzzyFieldMatch(normalizedLabel, byNormalizedName) {
+  if (normalizedLabel.length < 3) return null;
+  const maxDistance = Math.max(1, Math.floor(normalizedLabel.length * 0.2));
+  let bestFieldId = null;
+  let bestDistance = Infinity;
+  let tied = false;
+  for (const [name, fieldId] of Object.entries(byNormalizedName)) {
+    const distance = levenshteinDistance(normalizedLabel, name);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestFieldId = fieldId;
+      tied = false;
+    } else if (distance === bestDistance) {
+      tied = true;
+    }
+  }
+  return bestFieldId && bestDistance <= maxDistance && !tied ? bestFieldId : null;
+}
+
 // Best-guess extraction of a usable sample doc from one raw Stukenholtz
 // result - see the file-level note above. Candidate property names are
 // checked in order; adjust once you've seen a real response.
@@ -589,7 +648,19 @@ function mapResultToSample(result, fieldLookup) {
   // match Agworld-sourced field docs), and Grower is the farm/company
   // name, not a specific field - both kept only as fallbacks.
   const fieldLabel = result.Sample || result.field || result.fieldName || result.FieldID || result.Grower || null;
-  const fieldId = fieldLabel ? fieldLookup[normalizeFieldLabel(fieldLabel)] || null : null;
+  const normalizedLabel = fieldLabel ? normalizeFieldLabel(fieldLabel) : null;
+  let fieldId = normalizedLabel ? fieldLookup[normalizedLabel] || null : null;
+  // fieldMatchType lets the cleanup tool distinguish a confident exact
+  // match from an auto-corrected guess worth a human glance, from
+  // nothing found at all.
+  let fieldMatchType = fieldId ? 'exact' : null;
+  if (!fieldId && normalizedLabel) {
+    const fuzzyMatch = findFuzzyFieldMatch(normalizedLabel, fieldLookup);
+    if (fuzzyMatch) {
+      fieldId = fuzzyMatch;
+      fieldMatchType = 'fuzzy';
+    }
+  }
 
   // Confirmed field name: ReceivedDt (matches Stukenholtz's own
   // "Date Sampled" column label).
@@ -600,9 +671,11 @@ function mapResultToSample(result, fieldLookup) {
     sourceId: String(sourceId),
     type,
     fieldId,
-    // Kept only when unmatched, so unmatched samples are easy to find and
-    // fix later without having lost the original label.
-    rawFieldLabel: fieldId ? null : fieldLabel,
+    fieldMatchType,
+    // Kept regardless of match outcome, so there's always a record of
+    // exactly what label Stukenholtz sent, even for a confirmed match -
+    // useful audit trail if a fuzzy guess ever turns out wrong later.
+    rawFieldLabel: fieldLabel,
     receivedDt: receivedDate && !Number.isNaN(receivedDate.getTime())
       ? admin.firestore.Timestamp.fromDate(receivedDate)
       : null,
@@ -871,3 +944,35 @@ exports.backfillStukenholtzSamplesNow = onRequest(
     }
   }
 );
+
+
+// Saves a manual field reassignment from the Agronomy cleanup tool -
+// confirming a fuzzy guess, correcting a wrong one, or assigning a
+// previously unmapped sample. Writes go through here rather than
+// directly from the client (samples/{id} is write:false in
+// firestore.rules, same pattern as the sync itself) so every correction
+// is server-verified against the caller's real role and stamped with who
+// made it and when.
+exports.reassignSampleField = onCall(async (request) => {
+  await requireAgronomyAccess(request.auth);
+
+  const { sampleId, fieldId } = request.data || {};
+  if (!sampleId) {
+    throw new HttpsError('invalid-argument', 'sampleId is required.');
+  }
+
+  await admin.firestore().doc(`samples/${sampleId}`).set(
+    {
+      fieldId: fieldId || null,
+      // 'manual' marks this as human-confirmed from here on, so it won't
+      // show up in the cleanup tool's fuzzy-match review list again even
+      // if a future sync re-touches this document.
+      fieldMatchType: fieldId ? 'manual' : null,
+      reviewedBy: request.auth.uid,
+      reviewedAt: admin.firestore.FieldValue.serverTimestamp()
+    },
+    { merge: true }
+  );
+
+  return { ok: true };
+});
