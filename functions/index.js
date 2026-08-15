@@ -517,7 +517,13 @@ exports.setUserDisabled = onCall(async (request) => {
 // back and adjust the extraction below.
 
 const STUKENHOLTZ_API_KEY = defineSecret('STUKENHOLTZ_API_KEY');
-const STUKENHOLTZ_BASE_URL = 'https://results.stukenholtz.com/api';
+const STUKENHOLTZ_BASE_URL = 'https://reporting.stukenholtz.com/api';
+// NOTE: Stukenholtz's docs (stukenholtz.readme.io) still reference
+// results.stukenholtz.com, but that domain now 301-redirects here as of
+// August 2026. Pointing directly at the real address rather than relying
+// on the redirect - a POST hitting a 301 can silently get converted into
+// a GET by some HTTP clients (including Node's fetch), which is what
+// caused the "405 Method Not Allowed" on /results before this fix.
 
 async function stukenholtzGet(path, apikey) {
   const url = `${STUKENHOLTZ_BASE_URL}${path}?apikey=${apikey}`;
