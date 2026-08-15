@@ -646,7 +646,17 @@ async function fetchResultsSince(startingReceivedDt, contactIds, apikey) {
   return [];
 }
 
-async function syncStukenholtzSamples(startingReceivedDt) {
+// Stukenholtz caps /results at 1000 records per call and exposes no page
+// number - Kent has hit this limit before with this API. The only way to
+// advance is to push the date cursor forward ourselves, using the latest
+// ReceivedDt actually returned in each batch.
+const STUKENHOLTZ_PAGE_SIZE = 1000;
+
+// Fetches, maps, and writes ONE batch (up to the cap above) starting at
+// startingReceivedDt. Shared by both the hourly sync (small windows,
+// always well under the cap) and the backfill endpoint (which calls this
+// repeatedly, advancing its own cursor between calls).
+async function syncOneStukenholtzBatch(startingReceivedDt) {
   const apikey = STUKENHOLTZ_API_KEY.value();
   const db = admin.firestore();
 
@@ -659,6 +669,8 @@ async function syncStukenholtzSamples(startingReceivedDt) {
 
   let written = 0;
   let unmapped = 0;
+  let maxReceivedDt = null;
+
   for (let i = 0; i < results.length; i += 400) {
     const chunk = results.slice(i, i + 400);
     const batch = db.batch();
@@ -669,24 +681,27 @@ async function syncStukenholtzSamples(startingReceivedDt) {
         unmapped++;
         console.warn('Unmapped Stukenholtz sample, needs manual review:', JSON.stringify(raw));
       }
+      if (sample.receivedDt) {
+        const d = sample.receivedDt.toDate();
+        if (!maxReceivedDt || d > maxReceivedDt) maxReceivedDt = d;
+      }
       batch.set(db.collection('samples').doc(sample.sourceId), sample, { merge: true });
     });
     await batch.commit();
     written += chunk.length;
   }
 
-  await db.collection('syncState').doc('stukenholtz').set(
-    { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp() },
-    { merge: true }
-  );
-
-  return { fetched: results.length, written, unmapped };
+  return { fetched: results.length, written, unmapped, maxReceivedDt };
 }
 
 // Runs hourly, resuming from wherever the last successful sync left off -
 // not a rolling "last N hours" window - so a slow run or a missed
 // invocation never creates a gap. First run ever falls back to the last
-// 24 hours.
+// 24 hours. NOTE: this doesn't paginate - if a single hour ever genuinely
+// produced 1000+ new samples (essentially impossible at real-world
+// volumes), anything past the cap would be silently missed until the
+// following hour's run happened to catch it via an overlapping window.
+// Not handled here since it's not a realistic hourly volume.
 exports.syncStukenholtzSamplesHourly = onSchedule(
   {
     schedule: 'every 1 hours',
@@ -701,29 +716,89 @@ exports.syncStukenholtzSamplesHourly = onSchedule(
     const lastSyncedAt = stateDoc.exists && stateDoc.data().lastSyncedAt
       ? stateDoc.data().lastSyncedAt.toDate().toISOString()
       : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const result = await syncStukenholtzSamples(lastSyncedAt);
+    const result = await syncOneStukenholtzBatch(lastSyncedAt);
+    await db.collection('syncState').doc('stukenholtz').set(
+      { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
     console.log(`Stukenholtz sync: fetched ${result.fetched}, wrote ${result.written}, ${result.unmapped} unmapped.`);
   }
 );
 
-// One-time (or re-runnable) history backfill. Visit the deployed URL with
-// ?since=2020-01-01 to bound it, or with no query param for everything
-// Stukenholtz will return in one call. Same upsert-by-sourceId logic as
-// the hourly sync, so it's always safe to run again - and worth running
-// in date-bounded chunks first, since the docs don't state a max range or
-// whether large responses paginate.
+// Resumable full-history backfill. Call this same URL repeatedly (no
+// query params needed after the first time) - each call fetches one
+// batch of up to STUKENHOLTZ_PAGE_SIZE, writes it, and saves where it
+// left off in syncState/stukenholtzBackfill. Returns JSON with a "done"
+// field: keep calling until that's true. Once done, it also bumps
+// syncState/stukenholtz's lastSyncedAt so the hourly job picks up
+// seamlessly from where the backfill stopped, with no gap in between.
+//
+// First-ever call: pass ?since=2015-01-01 (or any date) to set the
+// starting point - defaults to 2015-01-01 if omitted. Add ?reset=true to
+// restart from scratch (e.g. if you want to redo it with an earlier
+// start date after it's already marked done).
 exports.backfillStukenholtzSamplesNow = onRequest(
   { secrets: [STUKENHOLTZ_API_KEY], timeoutSeconds: 540, memory: '1GiB' },
   async (req, res) => {
     try {
-      const since = req.query.since || '2015-01-01T00:00:00.000Z';
-      const result = await syncStukenholtzSamples(since);
-      res.status(200).send(
-        `Backfilled from ${since}: fetched ${result.fetched}, wrote ${result.written}, ${result.unmapped} unmapped (check logs for details).`
-      );
+      const db = admin.firestore();
+      const stateRef = db.collection('syncState').doc('stukenholtzBackfill');
+      const stateSnap = await stateRef.get();
+      const forceReset = req.query.reset === 'true';
+
+      let cursor;
+      if (forceReset || !stateSnap.exists) {
+        cursor = req.query.since || '2015-01-01T00:00:00.000Z';
+      } else if (stateSnap.data().done) {
+        res.status(200).json({
+          done: true,
+          message: `Backfill already completed as of ${stateSnap.data().cursor}. Add ?reset=true to run again from scratch.`
+        });
+        return;
+      } else {
+        cursor = stateSnap.data().cursor;
+      }
+
+      const result = await syncOneStukenholtzBatch(cursor);
+
+      // A partial batch (fewer than the page size) is the only signal
+      // Stukenholtz gives us that we've caught up to the present - a
+      // full-size batch might mean there's more waiting.
+      const done = result.fetched < STUKENHOLTZ_PAGE_SIZE;
+      // Advance 1ms past the latest record seen, so the next call doesn't
+      // just refetch the same boundary record forever. Harmless if a
+      // handful of records share that exact millisecond and get
+      // refetched - the upsert-by-sourceId is idempotent either way.
+      const nextCursor = result.maxReceivedDt
+        ? new Date(result.maxReceivedDt.getTime() + 1).toISOString()
+        : cursor;
+
+      await stateRef.set({
+        cursor: nextCursor,
+        done,
+        lastRunAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      if (done) {
+        await db.collection('syncState').doc('stukenholtz').set(
+          { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
+      }
+
+      res.status(200).json({
+        done,
+        fetchedThisBatch: result.fetched,
+        writtenThisBatch: result.written,
+        unmappedThisBatch: result.unmapped,
+        nextCursor,
+        message: done
+          ? 'Backfill complete - the hourly sync will take over from here.'
+          : `Fetched ${result.fetched} (cap is ${STUKENHOLTZ_PAGE_SIZE} per call) - call this same URL again to continue from ${nextCursor}.`
+      });
     } catch (err) {
       console.error(err);
-      res.status(500).send(err.message);
+      res.status(500).json({ error: err.message });
     }
   }
 );
