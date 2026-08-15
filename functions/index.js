@@ -704,8 +704,14 @@ async function fetchAllContactIds(apikey) {
   return contacts.map((c) => c._id || c.id).filter(Boolean);
 }
 
-async function fetchResultsSince(startingReceivedDt, contactIds, apikey, endingReceivedDt) {
-  const body = { sampleType: 'ANY', contacts: contactIds, startingReceivedDt };
+// Queries one specific sample type code (SO/PL/NEMA/CM) rather than ANY -
+// Kent confirmed the working Power BI integration queried each type
+// separately, and every ANY-based sample pulled so far has come back
+// with an empty Results object even on months-old, fully-processed
+// reports. Worth testing whether a type-specific query returns full
+// detail that ANY doesn't.
+async function fetchResultsSince(startingReceivedDt, contactIds, apikey, endingReceivedDt, sampleTypeCode) {
+  const body = { sampleType: sampleTypeCode, contacts: contactIds, startingReceivedDt };
   // Not in Stukenholtz's public docs (only startingReceivedDt is
   // documented), but worth testing - Kent recalls date-range filtering
   // being possible when interacting with this data elsewhere. Only sent
@@ -721,15 +727,22 @@ async function fetchResultsSince(startingReceivedDt, contactIds, apikey, endingR
   return [];
 }
 
+// The four real sample type codes, confirmed by Stukenholtz's own email.
+// 'ANY' is no longer used for the actual sync - queried one at a time
+// instead, per Kent's recollection of how the working Power BI
+// integration called this API.
+const STUKENHOLTZ_SAMPLE_TYPE_CODES = ['SO', 'PL', 'NEMA', 'CM'];
+
 // TEMPORARY diagnostic - remove once the date-range question below is
 // settled. Checks whether Stukenholtz's /results API actually respects an
 // upper bound on the date range (their docs only document
 // startingReceivedDt, a floor - no ceiling param is documented, but Kent
-// recalls range filtering being possible elsewhere). Doesn't write
-// anything to Firestore - just reports back what came back, so this is
-// safe to call as many times as needed while testing.
+// recalls range filtering being possible elsewhere). Also reports how
+// many of the fetched results have a populated Results object, and shows
+// one as an example - doesn't write anything to Firestore, just reports
+// back what came back, so this is safe to call as many times as needed.
 //
-// Usage: ?since=2015-01-01&until=2020-01-01
+// Usage: ?since=2015-01-01&until=2020-01-01&type=SO
 exports.testStukenholtzDateRange = onRequest(
   { secrets: [STUKENHOLTZ_API_KEY], timeoutSeconds: 120 },
   async (req, res) => {
@@ -739,16 +752,21 @@ exports.testStukenholtzDateRange = onRequest(
       // normalize to a full datetime before sending it.
       const since = new Date(req.query.since || '2015-01-01T00:00:00.000Z').toISOString();
       const until = req.query.until ? new Date(req.query.until).toISOString() : null;
+      const sampleTypeCode = req.query.type || 'SO';
       const apikey = STUKENHOLTZ_API_KEY.value();
       const contactIds = await fetchAllContactIds(apikey);
-      const results = await fetchResultsSince(since, contactIds, apikey, until);
+      const results = await fetchResultsSince(since, contactIds, apikey, until, sampleTypeCode);
       const dates = results.map((r) => r.ReceivedDt).filter(Boolean).sort();
+      const withResults = results.filter((r) => r.Results && Object.keys(r.Results).length > 0);
       res.status(200).json({
         requestedSince: since,
         requestedUntil: until,
+        requestedType: sampleTypeCode,
         fetchedCount: results.length,
         earliestReceivedDt: dates[0] || null,
-        latestReceivedDt: dates[dates.length - 1] || null
+        latestReceivedDt: dates[dates.length - 1] || null,
+        samplesWithPopulatedResults: withResults.length,
+        exampleResults: withResults[0]?.Results || results[0]?.Results || null
       });
     } catch (err) {
       console.error(err);
@@ -766,7 +784,9 @@ const STUKENHOLTZ_PAGE_SIZE = 1000;
 // Fetches, maps, and writes ONE batch (up to the cap above) starting at
 // startingReceivedDt. Shared by both the hourly sync (small windows,
 // always well under the cap) and the backfill endpoint (which calls this
-// repeatedly, walking forward through bounded date windows).
+// repeatedly, walking forward through bounded date windows). Queries all
+// four sample type codes separately rather than ANY in one call - see
+// the note on fetchResultsSince for why.
 async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
   const apikey = STUKENHOLTZ_API_KEY.value();
   const db = admin.firestore();
@@ -776,28 +796,39 @@ async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
     db.collection('fields').get()
   ]);
   const fieldLookup = buildFieldLookup(fieldDocsSnap.docs);
-  const results = await fetchResultsSince(startingReceivedDt, contactIds, apikey, endingReceivedDt);
 
+  let totalFetched = 0;
   let written = 0;
   let unmapped = 0;
+  // The cap is per sample-type-code call, not on the combined total
+  // across all four - tracked separately so the backfill's "did we hit
+  // the cap and need to shrink the window" check looks at the right
+  // number (see windowTruncated below).
+  let maxFetchedForAnyType = 0;
 
-  for (let i = 0; i < results.length; i += 400) {
-    const chunk = results.slice(i, i + 400);
-    const batch = db.batch();
-    chunk.forEach((raw) => {
-      const sample = mapResultToSample(raw, fieldLookup);
-      if (!sample) return;
-      if (!sample.type || !sample.fieldId) {
-        unmapped++;
-        console.warn('Unmapped Stukenholtz sample, needs manual review:', JSON.stringify(raw));
-      }
-      batch.set(db.collection('samples').doc(sample.sourceId), sample, { merge: true });
-    });
-    await batch.commit();
-    written += chunk.length;
+  for (const sampleTypeCode of STUKENHOLTZ_SAMPLE_TYPE_CODES) {
+    const results = await fetchResultsSince(startingReceivedDt, contactIds, apikey, endingReceivedDt, sampleTypeCode);
+    totalFetched += results.length;
+    maxFetchedForAnyType = Math.max(maxFetchedForAnyType, results.length);
+
+    for (let i = 0; i < results.length; i += 400) {
+      const chunk = results.slice(i, i + 400);
+      const batch = db.batch();
+      chunk.forEach((raw) => {
+        const sample = mapResultToSample(raw, fieldLookup);
+        if (!sample) return;
+        if (!sample.type || !sample.fieldId) {
+          unmapped++;
+          console.warn('Unmapped Stukenholtz sample, needs manual review:', JSON.stringify(raw));
+        }
+        batch.set(db.collection('samples').doc(sample.sourceId), sample, { merge: true });
+      });
+      await batch.commit();
+      written += chunk.length;
+    }
   }
 
-  return { fetched: results.length, written, unmapped };
+  return { fetched: totalFetched, written, unmapped, maxFetchedForAnyType };
 }
 
 // Runs hourly, resuming from wherever the last successful sync left off -
@@ -887,7 +918,10 @@ exports.backfillStukenholtzSamplesNow = onRequest(
 
       const windowEnd = new Date(Math.min(cursorDate.getTime() + windowSizeMs, now.getTime()));
       const result = await syncOneStukenholtzBatch(rangeCursor, windowEnd.toISOString());
-      const windowTruncated = result.fetched >= STUKENHOLTZ_PAGE_SIZE;
+      // maxFetchedForAnyType, not result.fetched - fetched is now a sum
+      // across all four type codes, so it can legitimately exceed 1000
+      // without any single type having actually hit its own cap.
+      const windowTruncated = result.maxFetchedForAnyType >= STUKENHOLTZ_PAGE_SIZE;
 
       let nextCursor = rangeCursor;
       let nextWindowSizeMs = windowSizeMs;
