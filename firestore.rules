@@ -23,6 +23,12 @@ service cloud.firestore {
     function isAdminOrOwner() {
       return myRole() == 'admin' || myRole() == 'owner';
     }
+    // Agronomy module - Admin, Owner, or Farm manager only. Narrower than
+    // isAdminOrOwner() alone, and deliberately excludes Irrigation manager
+    // and Irrigator, unlike the farm-scoped functions below.
+    function canViewAgronomy() {
+      return isAdminOrOwner() || myRole() == 'farm_manager';
+    }
     function myFarmIds() {
       return myData().farmIds;
     }
@@ -106,6 +112,19 @@ service cloud.firestore {
     }
     match /pivotFieldMapping/{mappingId} {
       allow read: if signedIn();
+      allow write: if false;
+    }
+    // Soil/petiole/nematode/compost sample data, synced hourly from
+    // Stukenholtz by a Cloud Function using an Admin key (bypasses these
+    // rules for writes). Read access is scoped to canViewAgronomy(),
+    // unlike the read-everything pattern above - this is the Agronomy
+    // module's own access boundary.
+    match /samples/{sampleId} {
+      allow read: if signedIn() && canViewAgronomy();
+      allow write: if false;
+    }
+    match /syncState/{document} {
+      allow read: if signedIn() && canViewAgronomy();
       allow write: if false;
     }
     // The actual irrigation schedule. Everyone signed in can view it (read
