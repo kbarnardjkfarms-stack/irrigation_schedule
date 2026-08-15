@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { collection, doc, onSnapshot, orderBy, query, where } from 'firebase/firestore'
+import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
-import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR } from './AgronomyConfig.js'
+import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR, CROP_COLOR } from './AgronomyConfig.js'
 
 function fmtDate(ts) {
   if (!ts) return ''
@@ -39,38 +39,10 @@ function Sparkline({ points, color }) {
 export default function AgronomyByField({ fields }) {
   const [fieldId, setFieldId] = useState(null)
   const [samples, setSamples] = useState([])
-  const [seasons, setSeasons] = useState([])
-  const [seasonData, setSeasonData] = useState(null)
 
   useEffect(() => {
     if (fields.length && !fieldId) setFieldId(fields[0].id)
   }, [fields, fieldId])
-
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'seasons'), (snap) => {
-      const list = []
-      snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
-      setSeasons(list)
-    })
-    return () => unsub()
-  }, [])
-
-  // Same "does this season's name match the current year" logic used on
-  // PublicScheduleView.jsx - falls back to whatever season comes first if
-  // nothing matches the current year.
-  const currentSeasonId = useMemo(() => {
-    const currentYear = String(new Date().getFullYear())
-    const match = seasons.find((s) => String(s.name) === currentYear)
-    return match ? match.id : (seasons[0] ? seasons[0].id : null)
-  }, [seasons])
-
-  useEffect(() => {
-    if (!fieldId || !currentSeasonId) { setSeasonData(null); return }
-    const unsub = onSnapshot(doc(db, 'fields', fieldId, 'seasons', currentSeasonId), (snap) => {
-      setSeasonData(snap.exists() ? snap.data() : null)
-    })
-    return () => unsub()
-  }, [fieldId, currentSeasonId])
 
   useEffect(() => {
     if (!fieldId) return
@@ -83,13 +55,13 @@ export default function AgronomyByField({ fields }) {
     return () => unsub()
   }, [fieldId])
 
-  // seasonData.plantDate comes from Agworld's field_crops.planting_date via
-  // syncFields() in functions/index.js - see the file-level note there if
-  // this ever comes back null for a field you know has a plant date.
-  const plantDate = useMemo(() => {
-    return seasonData?.plantDate ? new Date(seasonData.plantDate) : null
-  }, [seasonData])
+  const field = fields.find((f) => f.id === fieldId)
 
+  // plantDate/cropName/acres now come straight from the season- and
+  // farm-aware fields list built in Agronomy.jsx, instead of this
+  // component fetching its own season data - keeps the season-selection
+  // logic in one place rather than duplicated per tab.
+  const plantDate = useMemo(() => (field?.plantDate ? new Date(field.plantDate) : null), [field])
   const weeksSinceEmergence = useMemo(() => weeksBetween(new Date(), plantDate), [plantDate])
 
   const latestByType = useMemo(() => {
@@ -98,13 +70,21 @@ export default function AgronomyByField({ fields }) {
     return next
   }, [samples])
 
-  const field = fields.find((f) => f.id === fieldId)
+  const cropColor = field?.cropName ? (CROP_COLOR[field.cropName] || { bg: '#D3D1C7', fg: '#2C2C2A' }) : null
 
   return (
     <div className="agronomy-by-field">
-      <select value={fieldId || ''} onChange={(e) => setFieldId(e.target.value)}>
-        {fields.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-      </select>
+      <div className="agronomy-field-picker">
+        <select value={fieldId || ''} onChange={(e) => setFieldId(e.target.value)}>
+          {fields.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+        </select>
+        {field?.cropName && (
+          <span className="crop-badge" style={{ background: cropColor.bg, color: cropColor.fg }}>
+            {field.cropName}
+          </span>
+        )}
+        {field?.acres != null && <span className="acres-tag"> {'\u00b7'} {field.acres.toFixed(1)} ac</span>}
+      </div>
 
       <div className="agronomy-kpi-grid">
         <div className="agronomy-kpi-card">
