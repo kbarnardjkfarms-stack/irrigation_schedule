@@ -173,11 +173,14 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .stepper { display: flex; align-items: center; justify-content: center; gap: 16px; margin: 4px 0 16px; }
 .stepper span { font-size: 20px; font-weight: 500; min-width: 80px; text-align: center; }
 .stepper button { width: 36px; height: 36px; border-radius: 50%; padding: 0; font-size: 16px; }
-/* Agronomy module additions - append to styles.css.
-   Composes with the existing button, table, and .table-scroll rules
-   rather than re-declaring them (button.active is already styled
-   globally, so the view/type toggles need no button CSS of their own -
-   only layout for the row that holds them). */
+
+/* ------------------------------------------------------------------
+   Agronomy module additions below.
+   Composes with the button/table/.table-scroll rules above rather than
+   re-declaring them (button.active is already styled above, so the
+   view/type toggles need no button CSS of their own - only layout for
+   the row that holds them).
+   ------------------------------------------------------------------ */
 
 .agronomy-view-toggle,
 .agronomy-type-toggle {
@@ -232,16 +235,24 @@ thead th.sticky-col { top: 0; z-index: 4; }
    wide irrigation schedule grid) the same way .watch-table already does -
    these are simple, narrow tables. */
 .agronomy-sample-table,
-.agronomy-criteria-table {
+.agronomy-criteria-table,
+.agronomy-cleanup-table {
   min-width: 0;
   table-layout: fixed;
   font-size: 11px;
 }
 
 .agronomy-sample-table td, .agronomy-sample-table th,
-.agronomy-criteria-table td, .agronomy-criteria-table th {
+.agronomy-criteria-table td, .agronomy-criteria-table th,
+.agronomy-cleanup-table td, .agronomy-cleanup-table th {
   text-align: left;
   border-bottom: 0.5px solid #ddd8cc;
+}
+
+.agronomy-cleanup-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }
 
 .agronomy-table-empty { color: #888; text-align: center; padding: 2rem; }
