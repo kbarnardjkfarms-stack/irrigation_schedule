@@ -693,8 +693,8 @@ const STUKENHOLTZ_PAGE_SIZE = 1000;
 // Fetches, maps, and writes ONE batch (up to the cap above) starting at
 // startingReceivedDt. Shared by both the hourly sync (small windows,
 // always well under the cap) and the backfill endpoint (which calls this
-// repeatedly, advancing its own cursor between calls).
-async function syncOneStukenholtzBatch(startingReceivedDt) {
+// repeatedly, walking forward through bounded date windows).
+async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
   const apikey = STUKENHOLTZ_API_KEY.value();
   const db = admin.firestore();
 
@@ -703,11 +703,10 @@ async function syncOneStukenholtzBatch(startingReceivedDt) {
     db.collection('fields').get()
   ]);
   const fieldLookup = buildFieldLookup(fieldDocsSnap.docs);
-  const results = await fetchResultsSince(startingReceivedDt, contactIds, apikey);
+  const results = await fetchResultsSince(startingReceivedDt, contactIds, apikey, endingReceivedDt);
 
   let written = 0;
   let unmapped = 0;
-  let maxReceivedDt = null;
 
   for (let i = 0; i < results.length; i += 400) {
     const chunk = results.slice(i, i + 400);
@@ -719,27 +718,24 @@ async function syncOneStukenholtzBatch(startingReceivedDt) {
         unmapped++;
         console.warn('Unmapped Stukenholtz sample, needs manual review:', JSON.stringify(raw));
       }
-      if (sample.receivedDt) {
-        const d = sample.receivedDt.toDate();
-        if (!maxReceivedDt || d > maxReceivedDt) maxReceivedDt = d;
-      }
       batch.set(db.collection('samples').doc(sample.sourceId), sample, { merge: true });
     });
     await batch.commit();
     written += chunk.length;
   }
 
-  return { fetched: results.length, written, unmapped, maxReceivedDt };
+  return { fetched: results.length, written, unmapped };
 }
 
 // Runs hourly, resuming from wherever the last successful sync left off -
 // not a rolling "last N hours" window - so a slow run or a missed
 // invocation never creates a gap. First run ever falls back to the last
-// 24 hours. NOTE: this doesn't paginate - if a single hour ever genuinely
-// produced 1000+ new samples (essentially impossible at real-world
-// volumes), anything past the cap would be silently missed until the
-// following hour's run happened to catch it via an overlapping window.
-// Not handled here since it's not a realistic hourly volume.
+// 24 hours. NOTE: no ending bound is passed (open-ended to "now"), and
+// this doesn't paginate - if a single hour ever genuinely produced 1000+
+// new samples (essentially impossible at real-world volumes), anything
+// past the cap would be silently missed until the following hour's run
+// happened to catch it via an overlapping window. Not handled here since
+// it's not a realistic hourly volume.
 exports.syncStukenholtzSamplesHourly = onSchedule(
   {
     schedule: 'every 1 hours',
@@ -763,18 +759,29 @@ exports.syncStukenholtzSamplesHourly = onSchedule(
   }
 );
 
-// Resumable full-history backfill. Call this same URL repeatedly (no
-// query params needed after the first time) - each call fetches one
-// batch of up to STUKENHOLTZ_PAGE_SIZE, writes it, and saves where it
-// left off in syncState/stukenholtzBackfill. Returns JSON with a "done"
-// field: keep calling until that's true. Once done, it also bumps
-// syncState/stukenholtz's lastSyncedAt so the hourly job picks up
-// seamlessly from where the backfill stopped, with no gap in between.
+// Resumable full-history backfill, walking forward through adaptive date
+// windows rather than an open-ended cursor - confirmed via
+// testStukenholtzDateRange that endingReceivedDt is a real, working
+// ceiling parameter (just undocumented). Sample density is uneven across
+// years, so the window size self-adjusts: if a window comes back at the
+// 1000 cap (likely truncated), it's halved and the same start point is
+// retried; if a window comes back comfortably under the cap, the window
+// grows for the next call, so sparse older periods don't need as many
+// round trips as dense recent ones.
+//
+// Call this same URL repeatedly (no query params needed after the first
+// time) - each call handles one window and saves progress in
+// syncState/stukenholtzBackfill. Returns JSON with a "done" field: keep
+// calling until that's true. Once done, it bumps syncState/stukenholtz's
+// lastSyncedAt so the hourly job picks up seamlessly from there.
 //
 // First-ever call: pass ?since=2015-01-01 (or any date) to set the
 // starting point - defaults to 2015-01-01 if omitted. Add ?reset=true to
-// restart from scratch (e.g. if you want to redo it with an earlier
-// start date after it's already marked done).
+// restart from scratch.
+const STUKENHOLTZ_INITIAL_WINDOW_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+const STUKENHOLTZ_MIN_WINDOW_MS = 24 * 60 * 60 * 1000; // 1 day floor - avoids shrinking forever
+const STUKENHOLTZ_MAX_WINDOW_MS = 2 * 365 * 24 * 60 * 60 * 1000; // 2 years ceiling
+
 exports.backfillStukenholtzSamplesNow = onRequest(
   { secrets: [STUKENHOLTZ_API_KEY], timeoutSeconds: 540, memory: '1GiB' },
   async (req, res) => {
@@ -784,38 +791,53 @@ exports.backfillStukenholtzSamplesNow = onRequest(
       const stateSnap = await stateRef.get();
       const forceReset = req.query.reset === 'true';
 
-      let cursor;
+      let rangeCursor, windowSizeMs;
       if (forceReset || !stateSnap.exists) {
         // Same normalization as testStukenholtzDateRange - a bare date
         // like "2015-01-01" gets rejected by Stukenholtz's API, which
         // wants a full ISO datetime.
-        cursor = new Date(req.query.since || '2015-01-01T00:00:00.000Z').toISOString();
+        rangeCursor = new Date(req.query.since || '2015-01-01T00:00:00.000Z').toISOString();
+        windowSizeMs = STUKENHOLTZ_INITIAL_WINDOW_MS;
       } else if (stateSnap.data().done) {
         res.status(200).json({
           done: true,
-          message: `Backfill already completed as of ${stateSnap.data().cursor}. Add ?reset=true to run again from scratch.`
+          message: `Backfill already completed as of ${stateSnap.data().rangeCursor}. Add ?reset=true to run again from scratch.`
         });
         return;
       } else {
-        cursor = stateSnap.data().cursor;
+        rangeCursor = stateSnap.data().rangeCursor;
+        windowSizeMs = stateSnap.data().windowSizeMs || STUKENHOLTZ_INITIAL_WINDOW_MS;
       }
 
-      const result = await syncOneStukenholtzBatch(cursor);
+      const cursorDate = new Date(rangeCursor);
+      const now = new Date();
 
-      // A partial batch (fewer than the page size) is the only signal
-      // Stukenholtz gives us that we've caught up to the present - a
-      // full-size batch might mean there's more waiting.
-      const done = result.fetched < STUKENHOLTZ_PAGE_SIZE;
-      // Advance 1ms past the latest record seen, so the next call doesn't
-      // just refetch the same boundary record forever. Harmless if a
-      // handful of records share that exact millisecond and get
-      // refetched - the upsert-by-sourceId is idempotent either way.
-      const nextCursor = result.maxReceivedDt
-        ? new Date(result.maxReceivedDt.getTime() + 1).toISOString()
-        : cursor;
+      const windowEnd = new Date(Math.min(cursorDate.getTime() + windowSizeMs, now.getTime()));
+      const result = await syncOneStukenholtzBatch(rangeCursor, windowEnd.toISOString());
+      const windowTruncated = result.fetched >= STUKENHOLTZ_PAGE_SIZE;
+
+      let nextCursor = rangeCursor;
+      let nextWindowSizeMs = windowSizeMs;
+
+      if (windowTruncated && windowSizeMs > STUKENHOLTZ_MIN_WINDOW_MS) {
+        // Likely truncated at the cap - shrink the window and retry the
+        // same starting point next call, rather than advancing past data
+        // that wasn't fully captured.
+        nextWindowSizeMs = Math.max(STUKENHOLTZ_MIN_WINDOW_MS, Math.floor(windowSizeMs / 2));
+      } else {
+        // Fully captured (or already at the minimum window and still
+        // hitting the cap - extremely unlikely, but proceed rather than
+        // loop forever). Advance past this window, and grow the window a
+        // bit in case the next period is sparser.
+        nextCursor = windowEnd.toISOString();
+        nextWindowSizeMs = Math.min(STUKENHOLTZ_MAX_WINDOW_MS, Math.floor(windowSizeMs * 1.5));
+      }
+
+      const done = new Date(nextCursor).getTime() >= now.getTime() && !windowTruncated;
 
       await stateRef.set({
-        cursor: nextCursor,
+        rangeCursor: nextCursor,
+        windowSizeMs: nextWindowSizeMs,
         done,
         lastRunAt: admin.firestore.FieldValue.serverTimestamp()
       });
@@ -829,13 +851,19 @@ exports.backfillStukenholtzSamplesNow = onRequest(
 
       res.status(200).json({
         done,
+        windowStart: rangeCursor,
+        windowEnd: windowEnd.toISOString(),
         fetchedThisBatch: result.fetched,
         writtenThisBatch: result.written,
         unmappedThisBatch: result.unmapped,
+        windowTruncated,
         nextCursor,
+        nextWindowSizeDays: Math.round(nextWindowSizeMs / (24 * 60 * 60 * 1000)),
         message: done
           ? 'Backfill complete - the hourly sync will take over from here.'
-          : `Fetched ${result.fetched} (cap is ${STUKENHOLTZ_PAGE_SIZE} per call) - call this same URL again to continue from ${nextCursor}.`
+          : windowTruncated
+          ? `Window ${rangeCursor} to ${windowEnd.toISOString()} hit the ${STUKENHOLTZ_PAGE_SIZE} cap - shrinking window and retrying the same start point.`
+          : `Captured ${result.fetched} records from ${rangeCursor} to ${windowEnd.toISOString()} - call this same URL again to continue from ${nextCursor}.`
       });
     } catch (err) {
       console.error(err);
