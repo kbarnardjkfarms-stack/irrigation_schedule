@@ -202,12 +202,6 @@ async function syncFields() {
           { merge: true }
         );
         totalFieldSeasonDocs++;
-        // TEMPORARY - remove once plantDate is confirmed working in
-        // Firestore. Confirms the fix against the same known field as
-        // before.
-        if (f.attributes.name === '27A') {
-          console.log('DEBUG f.attributes.planting_date for field 27A:', f.attributes.planting_date);
-        }
       });
       await batch.commit();
     }
