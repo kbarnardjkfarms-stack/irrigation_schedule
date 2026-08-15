@@ -631,12 +631,14 @@ async function fetchAllContactIds(apikey) {
   return contacts.map((c) => c._id || c.id).filter(Boolean);
 }
 
-async function fetchResultsSince(startingReceivedDt, contactIds, apikey) {
-  const json = await stukenholtzPost(
-    '/results',
-    { sampleType: 'ANY', contacts: contactIds, startingReceivedDt },
-    apikey
-  );
+async function fetchResultsSince(startingReceivedDt, contactIds, apikey, endingReceivedDt) {
+  const body = { sampleType: 'ANY', contacts: contactIds, startingReceivedDt };
+  // Not in Stukenholtz's public docs (only startingReceivedDt is
+  // documented), but worth testing - Kent recalls date-range filtering
+  // being possible when interacting with this data elsewhere. Only sent
+  // when provided, so this has zero effect on existing callers.
+  if (endingReceivedDt) body.endingReceivedDt = endingReceivedDt;
+  const json = await stukenholtzPost('/results', body, apikey);
   if (Array.isArray(json)) return json;
   if (Array.isArray(json.results)) return json.results;
   if (Array.isArray(json.data)) return json.data;
@@ -645,6 +647,39 @@ async function fetchResultsSince(startingReceivedDt, contactIds, apikey) {
   console.warn('Unexpected /results response shape, top-level keys:', Object.keys(json));
   return [];
 }
+
+// TEMPORARY diagnostic - remove once the date-range question below is
+// settled. Checks whether Stukenholtz's /results API actually respects an
+// upper bound on the date range (their docs only document
+// startingReceivedDt, a floor - no ceiling param is documented, but Kent
+// recalls range filtering being possible elsewhere). Doesn't write
+// anything to Firestore - just reports back what came back, so this is
+// safe to call as many times as needed while testing.
+//
+// Usage: ?since=2015-01-01&until=2020-01-01
+exports.testStukenholtzDateRange = onRequest(
+  { secrets: [STUKENHOLTZ_API_KEY], timeoutSeconds: 120 },
+  async (req, res) => {
+    try {
+      const since = req.query.since || '2015-01-01T00:00:00.000Z';
+      const until = req.query.until || null;
+      const apikey = STUKENHOLTZ_API_KEY.value();
+      const contactIds = await fetchAllContactIds(apikey);
+      const results = await fetchResultsSince(since, contactIds, apikey, until);
+      const dates = results.map((r) => r.ReceivedDt).filter(Boolean).sort();
+      res.status(200).json({
+        requestedSince: since,
+        requestedUntil: until,
+        fetchedCount: results.length,
+        earliestReceivedDt: dates[0] || null,
+        latestReceivedDt: dates[dates.length - 1] || null
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
 
 // Stukenholtz caps /results at 1000 records per call and exposes no page
 // number - Kent has hit this limit before with this API. The only way to
