@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
-import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, distanceFromTarget, STATUS_COLOR } from './AgronomyConfig.js'
+import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, distanceFromTarget, STATUS_COLOR, CROP_COLOR } from './AgronomyConfig.js'
 
 const SAMPLE_TYPES = Object.keys(METRICS_BY_TYPE)
 
@@ -58,6 +58,7 @@ export default function AgronomyByCriteria({ fields }) {
         <thead>
           <tr>
             <th>Field</th>
+            <th>Crop</th>
             <th>{metric.label} ({metric.unit})</th>
             <th>Target</th>
             <th>Status</th>
@@ -65,13 +66,21 @@ export default function AgronomyByCriteria({ fields }) {
         </thead>
         <tbody>
           {rows.length === 0 && (
-            <tr><td colSpan={4} className="agronomy-table-empty">No fields to show yet.</td></tr>
+            <tr><td colSpan={5} className="agronomy-table-empty">No fields to show yet.</td></tr>
           )}
           {rows.map(({ field, value, status }) => {
             const color = status ? STATUS_COLOR[status] : null
+            const cropColor = field.cropName ? (CROP_COLOR[field.cropName] || { bg: '#D3D1C7', fg: '#2C2C2A' }) : null
             return (
               <tr key={field.id}>
                 <td>{field.name}</td>
+                <td>
+                  {field.cropName && (
+                    <span className="crop-badge" style={{ background: cropColor.bg, color: cropColor.fg }}>
+                      {field.cropName}
+                    </span>
+                  )}
+                </td>
                 <td>{value != null ? value : '\u2014'}</td>
                 <td className="agronomy-target-cell">{metric.target[0]}{'\u2013'}{metric.target[1]}</td>
                 <td>
