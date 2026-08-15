@@ -173,6 +173,13 @@ async function syncFields() {
         // rather than assuming there's only one.
         const crops = f.attributes.crops || [];
         const primaryCrop = crops.find((c) => c.crop_blend === 'primary') || crops[0] || null;
+        // TEMPORARY - remove once plantDate is confirmed working. Logs the
+        // full raw crop object for one known field (259040, RANGER RUSSET)
+        // so we can see Agworld's actual attribute name for planting date,
+        // since it came back null under planting_date/plant_date.
+        if (String(f.id) === '259040') {
+          console.log('DEBUG primaryCrop for field 259040:', JSON.stringify(primaryCrop));
+        }
         // Per-season crop/acreage data lives in a subcollection keyed by
         // season id, so the app can switch years without losing history.
         const seasonRef = db
