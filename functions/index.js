@@ -1010,3 +1010,281 @@ exports.reassignSampleField = onCall(async (request) => {
 
   return { ok: true };
 });
+
+// ---------------------------------------------------------------------
+// Agri-Stor sync — PHASE 1 (READ-ONLY)
+//
+// Polls the Agri-Stor monitoring panel (https://agristor-companies.com)
+// roughly every hour and writes one normalized reading doc per bin into
+// Firestore, under agristorReadings/{binId}. PotatoStorage.jsx listens to
+// that same collection (see useAgristorReading / agristorDocId in that
+// file) and shows it as a "Live conditions" card on any bay whose
+// "Agri-Stor bin name" field matches a bin name here exactly.
+//
+// This function never writes anything back to Agri-Stor — it only reads.
+//
+// STATUS: everything below is confirmed against live data (captured from
+// an authenticated browser tab, with a redacted request/response monitor
+// that never surfaced actual credential/token/cookie values) — data
+// shape, sensor field mapping, account scoping, and the login mechanism.
+// One caveat: whether a CSRF header is actually required on the login
+// POST wasn't directly observable (only body shape + status codes were
+// captured, on purpose). agristorAuthenticate() below sends one
+// defensively if it finds a csrftoken cookie; if the first real deploy's
+// test run fails at the auth step, that's the first thing to check.
+// ---------------------------------------------------------------------
+
+// Set these once with:
+//   firebase functions:secrets:set AGRISTOR_USERNAME
+//   firebase functions:secrets:set AGRISTOR_PASSWORD
+const AGRISTOR_USERNAME = defineSecret('AGRISTOR_USERNAME');
+const AGRISTOR_PASSWORD = defineSecret('AGRISTOR_PASSWORD');
+
+const AGRISTOR_BASE_URL = 'https://agristor-companies.com';
+
+// Confirmed: at the domain root, NOT under /api/.
+const AGRISTOR_LOGIN_PATH = '/login/';
+
+// Bare GET returns a JSON array of every iot-client the logged-in account
+// can see (~23 entries for this account — NOT all of them belong to this
+// account, see AGRISTOR_SITES_PATH below), each shaped like:
+//   { id, name, is_active, time_stamp, front_matter: { main: [...], misc: [...], AlarmData: [...] }, ... }
+const AGRISTOR_DATA_PATH = '/api/iot-clients/';
+
+// Returns this account's own sites, each with an iot_devices[] array of
+// device IDs that belong to it — used to filter AGRISTOR_DATA_PATH's list
+// down to just this account's own bins (see agristorFetchAllowedDeviceIds).
+const AGRISTOR_SITES_PATH = '/api/usersites/my_sites/';
+
+// Pulls every Set-Cookie the response sent (Node 18.14+/20+ fetch exposes
+// getSetCookie() for this; older runtimes only expose one combined
+// "set-cookie" header via .get(), so fall back to that as a single-entry
+// array).
+function agristorParseSetCookies(res) {
+  const raw =
+    typeof res.headers.getSetCookie === 'function'
+      ? res.headers.getSetCookie()
+      : [res.headers.get('set-cookie')].filter(Boolean);
+  const jar = {};
+  for (const line of raw) {
+    const pair = line.split(';')[0];
+    const idx = pair.indexOf('=');
+    if (idx > -1) jar[pair.slice(0, idx).trim()] = pair.slice(idx + 1).trim();
+  }
+  return jar;
+}
+function agristorCookieHeader(jar) {
+  return Object.entries(jar)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('; ');
+}
+
+/**
+ * Cookie-based session login (confirmed live — no token comes back in the
+ * response body; the whole "session" is the cookie jar built up here).
+ */
+async function agristorAuthenticate() {
+  const username = AGRISTOR_USERNAME.value();
+  const password = AGRISTOR_PASSWORD.value();
+
+  // Step 1: prime cookies. Not confirmed whether this GET actually issues a
+  // csrftoken cookie (request headers weren't captured, on purpose), but
+  // it's a cheap, harmless first step if Django expects one before a POST.
+  const primeRes = await fetch(`${AGRISTOR_BASE_URL}${AGRISTOR_LOGIN_PATH}`, { method: 'GET' });
+  let jar = agristorParseSetCookies(primeRes);
+
+  // Step 2: submit credentials. Forward any csrftoken picked up as both the
+  // cookie and the X-CSRFToken header, the standard Django pattern — if
+  // it's not actually required here, sending it is a no-op.
+  const loginRes = await fetch(`${AGRISTOR_BASE_URL}${AGRISTOR_LOGIN_PATH}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(jar.csrftoken ? { 'X-CSRFToken': jar.csrftoken, Cookie: agristorCookieHeader(jar) } : {})
+    },
+    body: JSON.stringify({ username, password })
+  });
+  if (!loginRes.ok) {
+    throw new Error(`Agri-Stor login failed: ${loginRes.status} ${await loginRes.text()}`);
+  }
+  jar = { ...jar, ...agristorParseSetCookies(loginRes) };
+
+  if (!Object.keys(jar).length) {
+    throw new Error("Agri-Stor login didn't return a session cookie — check for a CSRF rejection or a changed login flow.");
+  }
+  return { Cookie: agristorCookieHeader(jar) };
+}
+
+async function agristorGet(path, authHeaders) {
+  const res = await fetch(`${AGRISTOR_BASE_URL}${path}`, { headers: authHeaders });
+  if (!res.ok) throw new Error(`Agri-Stor API error ${res.status} on ${path}: ${await res.text()}`);
+  return res.json();
+}
+
+/**
+ * Returns the Set of iot-client device IDs that actually belong to this
+ * account, so AGRISTOR_DATA_PATH's list (which includes bins from other
+ * accounts, e.g. "Elliot 1") can be filtered down before writing anything.
+ */
+async function agristorFetchAllowedDeviceIds(authHeaders) {
+  const sites = await agristorGet(AGRISTOR_SITES_PATH, authHeaders);
+  const ids = new Set();
+  for (const site of Array.isArray(sites) ? sites : []) {
+    for (const deviceId of site.iot_devices || []) ids.add(deviceId);
+  }
+  return ids;
+}
+
+// Firestore doc IDs can't contain "/" and this must produce the exact same
+// id PotatoStorage.jsx's agristorDocId() produces for the same bin name —
+// keep these two functions in sync if either one changes.
+function agristorNormalizeBinName(binName) {
+  return (binName || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * The payload has no named fields for sensor values — everything lives in
+ * a positional array at front_matter.main[index]. Confirmed directly
+ * against live data, cross-checked across four bins (Hidden Valley 1-2,
+ * 3-4, 5, and 6):
+ *
+ *   2/3   -> plenum temp #1/#2 (°F)      5/6  -> plenum RH #1/#2 (%)
+ *   7/8   -> outside air temp/RH         9/10 -> return air temp/RH
+ *           (index 10 can be the string "dis" when that sensor is disabled)
+ *   13    -> pile avg temp (°F)          17   -> CO2 (ppm)
+ *   14    -> Fan % ("Off" when idle, a number when running)
+ *   15    -> Cooling/Refrigeration % (same shape as Fan — "Off", "--" when
+ *            the bin has no such equipment, or a number). The dashboard
+ *            label ("Cooling" vs "Refrigeration") differs per bin, but
+ *            it's the same array slot — both fields below read from it.
+ *
+ * "Return vs Plenum" on the dashboard is computed, not raw: returnAirTemp
+ * minus plenum temp #1.
+ *
+ * Indices 11, 12, 26, 27, 28 are confirmed to be static site-wide config
+ * (identical across all four bins checked, despite very different live
+ * temps/CO2) — almost certainly alarm setpoints, deliberately left out
+ * since they'd just duplicate the same numbers on every bin.
+ */
+function agristorNormalizeBinReading(raw) {
+  const main = raw?.front_matter?.main || [];
+  const misc = raw?.front_matter?.misc || [];
+  const num = (v) => {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  // Fan/Cooling read as "Off" (idle, still valid — treat as 0%), "--" (no
+  // such equipment on this bin — treat as not-applicable/null), or a plain
+  // number string when actively running.
+  const pctOrFlag = (v) => {
+    if (v == null || v === '--') return null;
+    if (v === 'Off' || v === 'off') return 0;
+    return num(v);
+  };
+  const plenumTempF = num(main[2]);
+  const returnAirTempF = num(main[9]);
+  return {
+    binName: raw.name ?? null,
+    status: raw?.is_active === false ? 'network_error' : 'ok',
+    firmwareVersion: misc[2] ?? null,
+    plenumTempF,
+    plenumTemp2F: num(main[3]),
+    plenumRH: num(main[5]),
+    plenumRH2: num(main[6]),
+    fanPct: pctOrFlag(main[14]),
+    coolingPct: pctOrFlag(main[15]),
+    refrigerationPct: pctOrFlag(main[15]),
+    returnAirTempF,
+    returnAirRH: main[10] === 'dis' ? null : num(main[10]),
+    outsideAirTempF: num(main[7]),
+    outsideAirRH: num(main[8]),
+    co2Ppm: num(main[17]),
+    returnVsPlenumF: returnAirTempF != null && plenumTempF != null ? returnAirTempF - plenumTempF : null,
+    pileAvgTempF: num(main[13]),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  };
+}
+
+async function syncAgristorReadingsOnce() {
+  const db = admin.firestore();
+  const authHeaders = await agristorAuthenticate();
+
+  const allowedIds = await agristorFetchAllowedDeviceIds(authHeaders);
+
+  const payload = await agristorGet(AGRISTOR_DATA_PATH, authHeaders);
+  const allBins = Array.isArray(payload) ? payload : [];
+  // Confirmed live: iot-clients/ includes bins from other accounts (e.g.
+  // "Elliot 1") — only keep the ones this account's own sites claim.
+  const bins = allBins.filter((b) => allowedIds.has(b.id));
+
+  if (allBins.length && !bins.length) {
+    console.warn(
+      `Agri-Stor sync: got ${allBins.length} bin(s) but none matched this account's own sites — check AGRISTOR_SITES_PATH scoping before trusting this.`
+    );
+    return { written: 0, total: allBins.length, inScope: 0 };
+  }
+  if (bins.length === 0) {
+    console.warn('Agri-Stor sync: response contained no bins — check AGRISTOR_DATA_PATH and the payload shape.');
+    return { written: 0, total: allBins.length, inScope: 0 };
+  }
+
+  const batch = db.batch();
+  let written = 0;
+  for (const raw of bins) {
+    const reading = agristorNormalizeBinReading(raw);
+    if (!reading.binName) continue;
+    const ref = db.collection('agristorReadings').doc(agristorNormalizeBinName(reading.binName));
+    batch.set(ref, reading, { merge: true });
+    written++;
+  }
+  await batch.commit();
+  return { written, total: allBins.length, inScope: bins.length };
+}
+
+// Runs automatically every hour so bay "Live conditions" cards stay
+// current without anyone having to refresh anything by hand.
+exports.syncAgristorReadings = onSchedule(
+  {
+    schedule: 'every 60 minutes',
+    secrets: [AGRISTOR_USERNAME, AGRISTOR_PASSWORD],
+    // Keep failures visible rather than silently retrying forever — an
+    // hourly job that quietly stops working is worse than one that alerts.
+    retryCount: 1,
+    timeoutSeconds: 60,
+    memory: '256MiB'
+  },
+  async () => {
+    try {
+      const result = await syncAgristorReadingsOnce();
+      console.log(
+        `Agri-Stor sync: wrote ${result.written} of ${result.inScope} in-scope bin reading(s) (${result.total} total returned, ${result.total - result.inScope} filtered out as not belonging to this account).`
+      );
+    } catch (err) {
+      console.error('Agri-Stor sync failed:', err);
+    }
+  }
+);
+
+// A manual trigger, useful for testing right after deploy or forcing an
+// on-demand refresh. Visiting this URL in a browser (once deployed) runs
+// the same sync immediately.
+exports.syncAgristorReadingsNow = onRequest(
+  { secrets: [AGRISTOR_USERNAME, AGRISTOR_PASSWORD], timeoutSeconds: 60, memory: '256MiB' },
+  async (req, res) => {
+    try {
+      const result = await syncAgristorReadingsOnce();
+      res
+        .status(200)
+        .send(
+          `Agri-Stor sync: wrote ${result.written} of ${result.inScope} in-scope bin reading(s) (${result.total} total returned, ${result.total - result.inScope} filtered out as not belonging to this account).`
+        );
+    } catch (err) {
+      console.error(err);
+      res.status(500).send(err.message);
+    }
+  }
+);
