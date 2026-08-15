@@ -3,6 +3,7 @@ import { collection, onSnapshot } from 'firebase/firestore'
 import { db } from './firebase.js'
 import AgronomyByField from './AgronomyByField.jsx'
 import AgronomyByCriteria from './AgronomyByCriteria.jsx'
+import AgronomyCleanup from './AgronomyCleanup.jsx'
 
 export default function Agronomy() {
   const [view, setView] = useState('field')
@@ -27,10 +28,13 @@ export default function Agronomy() {
         <button className={view === 'criteria' ? 'active' : ''} onClick={() => setView('criteria')}>
           By criteria
         </button>
+        <button className={view === 'cleanup' ? 'active' : ''} onClick={() => setView('cleanup')}>
+          Cleanup
+        </button>
       </div>
-      {view === 'field'
-        ? <AgronomyByField fields={fields} />
-        : <AgronomyByCriteria fields={fields} />}
+      {view === 'field' && <AgronomyByField fields={fields} />}
+      {view === 'criteria' && <AgronomyByCriteria fields={fields} />}
+      {view === 'cleanup' && <AgronomyCleanup fields={fields} />}
     </div>
   )
 }
