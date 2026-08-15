@@ -49,6 +49,21 @@ export const SAMPLE_TYPE_BADGE_COLOR = {
   compost: { bg: '#FCE9A8', fg: '#7A5C02' }
 }
 
+// Duplicated from CROP_COLOR in App.jsx/PublicScheduleView.jsx so the
+// Agronomy module can show the same crop badge colors as the irrigation
+// schedule. Kept in sync manually for now - if a crop is ever added or
+// recolored in one place, update the other too, or consider extracting
+// this to one shared file both import from.
+export const CROP_COLOR = {
+  POTATO: { bg: '#D6B48C', fg: '#4A2E12' }, POTATOES: { bg: '#D6B48C', fg: '#4A2E12' },
+  CORN: { bg: '#FCE9A8', fg: '#7A5C02' }, 'SWEET CORN': { bg: '#FCE9A8', fg: '#7A5C02' },
+  ALFALFA: { bg: '#C0DD97', fg: '#173404' }, HAY: { bg: '#C0DD97', fg: '#173404' },
+  'SUGAR BEET': { bg: '#E0D6F5', fg: '#3D2B6B' }, BEETS: { bg: '#E0D6F5', fg: '#3D2B6B' },
+  FALLOW: { bg: '#E4E1D8', fg: '#5A574C' }, ONIONS: { bg: '#F4C0D1', fg: '#4B1528' },
+  MINT: { bg: '#9FE1CB', fg: '#04342C' }, CARROTS: { bg: '#FAD9BB', fg: '#7A3E0A' },
+  SQUASH: { bg: '#F5C98A', fg: '#6B3D02' }
+}
+
 // Returns 'deficient' | 'optimal' | 'excess' | null (null when there's no
 // reading yet, so callers can render a "no data" state rather than a
 // misleading status badge).
