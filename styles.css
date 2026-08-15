@@ -189,6 +189,20 @@ thead th.sticky-col { top: 0; z-index: 4; }
   margin-bottom: 10px;
 }
 
+.agronomy-filter-bar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.agronomy-field-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
 .agronomy-kpi-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
