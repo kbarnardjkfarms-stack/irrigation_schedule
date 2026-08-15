@@ -661,8 +661,11 @@ exports.testStukenholtzDateRange = onRequest(
   { secrets: [STUKENHOLTZ_API_KEY], timeoutSeconds: 120 },
   async (req, res) => {
     try {
-      const since = req.query.since || '2015-01-01T00:00:00.000Z';
-      const until = req.query.until || null;
+      // Accept either a bare date ("2015-01-01") or a full ISO datetime -
+      // Stukenholtz's API rejects the bare-date form outright, so always
+      // normalize to a full datetime before sending it.
+      const since = new Date(req.query.since || '2015-01-01T00:00:00.000Z').toISOString();
+      const until = req.query.until ? new Date(req.query.until).toISOString() : null;
       const apikey = STUKENHOLTZ_API_KEY.value();
       const contactIds = await fetchAllContactIds(apikey);
       const results = await fetchResultsSince(since, contactIds, apikey, until);
@@ -783,7 +786,10 @@ exports.backfillStukenholtzSamplesNow = onRequest(
 
       let cursor;
       if (forceReset || !stateSnap.exists) {
-        cursor = req.query.since || '2015-01-01T00:00:00.000Z';
+        // Same normalization as testStukenholtzDateRange - a bare date
+        // like "2015-01-01" gets rejected by Stukenholtz's API, which
+        // wants a full ISO datetime.
+        cursor = new Date(req.query.since || '2015-01-01T00:00:00.000Z').toISOString();
       } else if (stateSnap.data().done) {
         res.status(200).json({
           done: true,
