@@ -9,6 +9,7 @@ export default function AgronomyByCriteria({ fields }) {
   const [type, setType] = useState('soil')
   const [metricKey, setMetricKey] = useState(METRICS_BY_TYPE.soil[0].key)
   const [samples, setSamples] = useState([])
+  const [error, setError] = useState(null)
 
   // Some types (nematode especially, with 19 species) have many possible
   // metrics - picking a type resets to that type's first metric, and a
@@ -20,11 +21,24 @@ export default function AgronomyByCriteria({ fields }) {
 
   useEffect(() => {
     const q = query(collection(db, 'samples'), where('type', '==', type), orderBy('receivedDt', 'desc'))
-    const unsub = onSnapshot(q, (snap) => {
-      const list = []
-      snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
-      setSamples(list)
-    })
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = []
+        snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
+        setSamples(list)
+        setError(null)
+      },
+      (err) => {
+        // Without this, a failed query (missing composite index,
+        // permissions issue, etc.) looks identical to "genuinely no
+        // fields have data yet" - surface it instead. Check the browser
+        // console too - Firestore prints a clickable link that
+        // auto-creates a missing index.
+        console.error('AgronomyByCriteria samples query failed:', err)
+        setError(err.message)
+      }
+    )
     return () => unsub()
   }, [type])
 
@@ -69,6 +83,13 @@ export default function AgronomyByCriteria({ fields }) {
             <option key={m.key} value={m.key}>{m.label}</option>
           ))}
         </select>
+      )}
+
+      {error && (
+        <p className="agronomy-error-banner">
+          Couldn't load samples: {error}. Check the browser console for a Firestore error - it may include a
+          link to create a missing index automatically.
+        </p>
       )}
 
       <table className="agronomy-criteria-table">
