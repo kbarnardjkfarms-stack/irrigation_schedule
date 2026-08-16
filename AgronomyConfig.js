@@ -11,18 +11,56 @@ export const SAMPLE_TYPE_LABEL = {
 }
 
 export const METRICS_BY_TYPE = {
+  // Confirmed exact keys via a live SO query (Aug 2026): {"NO3":21,"Salts":1.2}.
+  // Case-sensitive - JS object lookups won't match 'no3' against a real
+  // key named 'NO3', so this has to be exact, not just readable.
   soil: [
-    { key: 'no3', label: 'NO3', unit: 'ppm', target: [15, 25] },
-    { key: 'salts', label: 'Salts', unit: 'mmhos/cm', target: [0, 2] }
+    { key: 'NO3', label: 'NO3', unit: 'ppm', target: [15, 25] },
+    { key: 'Salts', label: 'Salts', unit: 'mmhos/cm', target: [0, 2] }
   ],
+  // NOT yet confirmed - same placeholder keys as before, still lowercase.
+  // These need the same treatment as soil above: run
+  // testStukenholtzDateRange with type=PL, type=NEMA, and type=CM to see
+  // the real Results shape for each, then fix these keys to match exactly
+  // (both spelling and case) before they'll actually populate in the UI.
   petiole: [
     { key: 'no3', label: 'NO3', unit: 'ppm', target: [18000, 28000] },
     { key: 'p', label: '%P', unit: '%', target: [0.25, 0.4] },
     { key: 'k', label: '%K', unit: '%', target: [8, 11] },
     { key: 'sulfur', label: 'Sulfur', unit: '%', target: [0.25, 0.4] }
   ],
+  // Confirmed via a live NEMA query (Aug 2026): 19 distinct species counts,
+  // not one generic number - COLMB RK/NORTHRK/root-knot species, several
+  // free-living plant-parasitic types, and cyst nematode egg/larvae/
+  // viability breakdowns for two species (BT = likely Beet cyst nematode,
+  // relevant given sugar beet rotation; CER = likely Cereal cyst nematode -
+  // both inferred from the abbreviation, not confirmed, so double-check
+  // labels if either looks wrong). No target set on any of these - Kent
+  // wants the raw counts brought in first and will set his own thresholds
+  // for what should be highlighted, rather than guessed-at pest-count
+  // targets (which don't fit the deficient/optimal/excess framing used
+  // for nutrients anyway - a count has no "too low" concern).
   nematode: [
-    { key: 'count', label: 'Count', unit: '/250g', target: [0, 100] }
+    { key: 'COLMB RK', label: 'Columbia Root-Knot', unit: '/250g', target: null },
+    { key: 'NORTHRK', label: 'Northern Root-Knot', unit: '/250g', target: null },
+    { key: 'ROOT LESION', label: 'Root Lesion', unit: '/250g', target: null },
+    { key: 'PENROOTLES', label: 'Root Lesion (P. penetrans)', unit: '/250g', target: null },
+    { key: 'PIN', label: 'Pin', unit: '/250g', target: null },
+    { key: 'RING', label: 'Ring', unit: '/250g', target: null },
+    { key: 'DAGGER', label: 'Dagger', unit: '/250g', target: null },
+    { key: 'SHEATH', label: 'Sheath', unit: '/250g', target: null },
+    { key: 'SPIRAL', label: 'Spiral', unit: '/250g', target: null },
+    { key: 'STEM', label: 'Stem', unit: '/250g', target: null },
+    { key: 'STUBBY', label: 'Stubby Root', unit: '/250g', target: null },
+    { key: 'STUNT', label: 'Stunt', unit: '/250g', target: null },
+    { key: 'BTCYSTEGG', label: 'Beet Cyst - Eggs', unit: '/250g', target: null },
+    { key: 'BTCYSTEM', label: 'Beet Cyst - Empty Cysts', unit: '/250g', target: null },
+    { key: 'BTCYSTLARV', label: 'Beet Cyst - Larvae', unit: '/250g', target: null },
+    { key: 'BTCYSTVIAB', label: 'Beet Cyst - Viable', unit: '/250g', target: null },
+    { key: 'CERCYSTEGG', label: 'Cereal Cyst - Eggs', unit: '/250g', target: null },
+    { key: 'CERCYSTEMPT', label: 'Cereal Cyst - Empty Cysts', unit: '/250g', target: null },
+    { key: 'CERCYSTLARV', label: 'Cereal Cyst - Larvae', unit: '/250g', target: null },
+    { key: 'CERCYSTVIA', label: 'Cereal Cyst - Viable', unit: '/250g', target: null }
   ],
   compost: [
     { key: 'n', label: 'N', unit: '%', target: [1, 2] }
