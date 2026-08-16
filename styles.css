@@ -196,6 +196,15 @@ thead th.sticky-col { top: 0; z-index: 4; }
   margin-bottom: 10px;
 }
 
+.agronomy-error-banner {
+  background: #F5DCDA;
+  color: #A32D2D;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
 .agronomy-field-picker {
   display: flex;
   align-items: center;
