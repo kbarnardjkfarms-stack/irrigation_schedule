@@ -39,6 +39,7 @@ function Sparkline({ points, color }) {
 export default function AgronomyByField({ fields }) {
   const [fieldId, setFieldId] = useState(null)
   const [samples, setSamples] = useState([])
+  const [samplesError, setSamplesError] = useState(null)
 
   useEffect(() => {
     if (fields.length && !fieldId) setFieldId(fields[0].id)
@@ -47,11 +48,24 @@ export default function AgronomyByField({ fields }) {
   useEffect(() => {
     if (!fieldId) return
     const q = query(collection(db, 'samples'), where('fieldId', '==', fieldId), orderBy('receivedDt', 'asc'))
-    const unsub = onSnapshot(q, (snap) => {
-      const list = []
-      snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
-      setSamples(list)
-    })
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = []
+        snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
+        setSamples(list)
+        setSamplesError(null)
+      },
+      (err) => {
+        // Without this, a failed query (missing composite index,
+        // permissions issue, etc.) looks identical to "genuinely no
+        // samples for this field" - surface it instead. Check the
+        // browser console too - Firestore prints a clickable link that
+        // auto-creates a missing index.
+        console.error('AgronomyByField samples query failed:', err)
+        setSamplesError(err.message)
+      }
+    )
     return () => unsub()
   }, [fieldId])
 
@@ -85,6 +99,13 @@ export default function AgronomyByField({ fields }) {
         )}
         {field?.acres != null && <span className="acres-tag"> {'\u00b7'} {field.acres.toFixed(1)} ac</span>}
       </div>
+
+      {samplesError && (
+        <p className="agronomy-error-banner">
+          Couldn't load samples: {samplesError}. Check the browser console for a Firestore error - it may include
+          a link to create a missing index automatically.
+        </p>
+      )}
 
       <div className="agronomy-kpi-grid">
         <div className="agronomy-kpi-card">
