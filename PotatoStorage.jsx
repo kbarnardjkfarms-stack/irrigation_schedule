@@ -4,6 +4,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import {
   Warehouse, Thermometer, ClipboardCheck, Package, TrendingDown, Map as MapIcon,
   Plus, ChevronRight, MapPin, Gauge, BarChart3, AlertTriangle, Check, Layers, Users, Sprout, Building2, FlaskConical, Trash2,
+  Fan, Snowflake, Power,
 } from "lucide-react";
 import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, query, where, getDocs, onSnapshot } from "firebase/firestore";
 import { db } from "./firebase.js"; // AIO's existing Firebase project — same login, no second sign-in
@@ -1343,6 +1344,64 @@ function useAgristorReading(binName) {
   }, [binName]);
   return reading;
 }
+// Historical Agri-Stor points for this bin (plenum/return-air temp, panel
+// Δ T), written hourly by the sync function's PHASE 2 history subcollection
+// (agristorReadings/{binId}/history) — separate from the single "latest
+// reading" doc useAgristorReading listens to above. Returns [] while
+// loading/unlinked/no data yet; each item is the raw history doc plus its
+// `date` field. Only starts accumulating from whenever that Cloud Function
+// update was deployed — there's no retroactive backfill.
+function useAgristorHistory(binName) {
+  const [points, setPoints] = useState([]);
+  useEffect(() => {
+    if (!binName) { setPoints([]); return; }
+    const ref = collection(db, "agristorReadings", agristorDocId(binName), "history");
+    const unsub = onSnapshot(ref, (snap) => {
+      setPoints(snap.docs.map((d) => d.data()));
+    }, (err) => {
+      console.error("Agri-Stor history listen failed:", err);
+      setPoints([]);
+    });
+    return () => unsub();
+  }, [binName]);
+  return points;
+}
+// Same aggregation approach as buildBayDaySeries (see below): the sync runs
+// hourly, so a given date can have several history points — average them
+// per day rather than requiring exactly one, then recompute panel Δ T from
+// the day's averaged plenum/return (rather than averaging the already-
+// computed per-point deltas), matching how the physical Δ T is derived
+// from averaged Top/Bottom below.
+function buildAgristorDaySeries(points) {
+  const dayMap = new Map();
+  points.forEach((p) => {
+    if (!p.date) return;
+    if (!dayMap.has(p.date)) dayMap.set(p.date, { plenumSum: 0, plenumCount: 0, returnSum: 0, returnCount: 0 });
+    const d = dayMap.get(p.date);
+    if (p.plenumTempF != null) { d.plenumSum += p.plenumTempF; d.plenumCount += 1; }
+    if (p.returnAirTempF != null) { d.returnSum += p.returnAirTempF; d.returnCount += 1; }
+  });
+  return Array.from(dayMap.entries())
+    .map(([date, d]) => {
+      const plenum = d.plenumCount ? Math.round((d.plenumSum / d.plenumCount) * 10) / 10 : null;
+      const returnAir = d.returnCount ? Math.round((d.returnSum / d.returnCount) * 10) / 10 : null;
+      const panelDelta = plenum != null && returnAir != null ? Math.round((returnAir - plenum) * 10) / 10 : null;
+      return { date, plenum, returnAir, panelDelta };
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+// Merges the physical pipe-check day series with the Agri-Stor day series
+// on date, so both plot against one shared x-axis — the union of every
+// date either side has data for, not just days with both.
+function mergeDaySeries(physical, agristor) {
+  const byDate = new Map();
+  physical.forEach((r) => byDate.set(r.date, { date: r.date, top: r.top, bottom: r.bottom, actualDelta: r.delta }));
+  agristor.forEach((r) => {
+    const existing = byDate.get(r.date) || { date: r.date };
+    byDate.set(r.date, { ...existing, plenum: r.plenum, returnAir: r.returnAir, panelDelta: r.panelDelta });
+  });
+  return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+}
 function formatAgristorAge(ts) {
   if (!ts) return "—";
   const ms = typeof ts?.toDate === "function" ? ts.toDate().getTime() : new Date(ts).getTime();
@@ -1411,6 +1470,79 @@ function LiveConditionsCard({ bay }) {
             .map((v) => (v != null ? `${v}%` : "—"))
             .join(" / ")}
         />
+      </div>
+    </div>
+  );
+}
+// Small "equipment status" panel overlaid on the interior 3D view — styled
+// like a physical control-panel display (dark bezel, rounded corners)
+// rather than blending into the rest of the app chrome, since it's meant
+// to read at a glance like the actual Agri-Stor touchscreen does. Purely
+// read-only, same as everything else Agri-Stor-related in this app — it
+// never sends anything back, it just mirrors the synced Fan %/Cooling %.
+// Per how this bay's equipment is actually described day to day: Fan % and
+// Refer(/Cooling) % are always shown live as numbers; "STOPPED" is the one
+// plain-word state, shown only when both read 0/off. There's no attempt to
+// collapse "fan-only" vs "refrigerating" into separate single-word states
+// beyond that — the two live numbers already say which is which.
+function EquipmentStatusPanel({ bay }) {
+  const reading = useAgristorReading(bay.agristorBinName);
+  if (!bay.agristorBinName || reading === null) return null;
+  const loading = reading === undefined;
+  const fanPct = reading?.fanPct ?? null;
+  const coolPct = reading?.coolingPct ?? reading?.refrigerationPct ?? null;
+  const stopped = !loading && (fanPct == null || fanPct <= 0) && (coolPct == null || coolPct <= 0);
+  const fanSpinning = !loading && fanPct != null && fanPct > 0;
+  const coolActive = !loading && coolPct != null && coolPct > 0;
+  return (
+    <div
+      style={{
+        position: "absolute", top: 10, right: 10, width: 190,
+        background: "linear-gradient(180deg, #232c3d 0%, #161c28 100%)",
+        border: "1px solid #3a4358", borderRadius: 12, padding: 3,
+        boxShadow: "0 4px 14px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06)",
+      }}
+    >
+      <style>{`@keyframes agristorFanSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      <div style={{ background: "#0a0f18", borderRadius: 9, padding: "9px 10px", border: "1px solid #1c2434" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: "#8790a3", letterSpacing: 0.4, textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {bay.agristorBinName}
+          </div>
+          {!loading && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700,
+              color: stopped ? "#8790a3" : "#8fd19e",
+            }}>
+              <Power size={11} color={stopped ? "#8790a3" : "#8fd19e"} />
+              {stopped ? "STOPPED" : "RUNNING"}
+            </div>
+          )}
+        </div>
+        {loading ? (
+          <div style={{ fontSize: 11, color: "#5b6478" }}>Loading…</div>
+        ) : (
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7 }}>
+              <Fan
+                size={20}
+                color={fanSpinning ? "#f2c14e" : "#4a5468"}
+                style={fanSpinning ? { animation: "agristorFanSpin 1.6s linear infinite" } : undefined}
+              />
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#eef1f6" }}>{fanPct != null ? `${fanPct}%` : "—"}</div>
+                <div style={{ fontSize: 9.5, color: "#6f7890", letterSpacing: 0.3 }}>FAN</div>
+              </div>
+            </div>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7 }}>
+              <Snowflake size={18} color={coolActive ? "#5fd1e6" : "#4a5468"} />
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#eef1f6" }}>{coolPct != null ? `${coolPct}%` : "—"}</div>
+                <div style={{ fontSize: 9.5, color: "#6f7890", letterSpacing: 0.3 }}>REFER</div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1532,8 +1664,9 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
         <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
           <Layers size={13} /> INTERIOR VIEW — FIELD DIVISION
         </div>
-        <div style={{ height: 300, background: "#0e1420", border: "1px solid #232d40", borderRadius: 10, overflow: "hidden" }}>
+        <div style={{ position: "relative", height: 300, background: "#0e1420", border: "1px solid #232d40", borderRadius: 10, overflow: "hidden" }}>
           <Scene3D bays={[bay]} statsById={{ [bay.id]: stats }} mode="interior" onSelect={() => {}} />
+          <EquipmentStatusPanel bay={bay} />
         </div>
         <div style={{ marginTop: 8 }}><Legend bays={[bay]} /></div>
       </div>
@@ -1755,6 +1888,14 @@ function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
   const allDeltas = series.map((r) => r.delta).filter((d) => d != null);
   const avgDelta = allDeltas.length ? Math.round((allDeltas.reduce((s, d) => s + d, 0) / allDeltas.length) * 10) / 10 : null;
   const avgStatus = avgDelta != null ? deltaStatus(avgDelta, daysSince(bay?.fillDate, latestRow?.date)) : null;
+  // Agri-Stor side — live reading for the "right now" panel Δ T stat, plus
+  // the hourly history (see agristorSync.js PHASE 2) for the trend chart.
+  // Both are no-ops (empty/null) on a bay that isn't linked to a bin yet.
+  const agristorReading = useAgristorReading(bay?.agristorBinName);
+  const agristorHistory = useAgristorHistory(bay?.agristorBinName);
+  const agristorSeries = useMemo(() => buildAgristorDaySeries(agristorHistory), [agristorHistory]);
+  const combinedSeries = useMemo(() => mergeDaySeries(series, agristorSeries), [series, agristorSeries]);
+  const livePanelDelta = agristorReading?.returnVsPlenumF ?? null;
   const submit = () => {
     if (temp === "" || isNaN(Number(temp))) return;
     onAddTemp(bayId, { date, pipeNumber, position, temp: Number(temp) });
@@ -1791,36 +1932,72 @@ function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
       </div>
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <StatBlock label={`${bay?.name} · all pipes`} value={series.length ? `${series.length} day${series.length === 1 ? "" : "s"} logged` : "no data"} sub="top vs. bottom across every pipe in this bay" />
-        <StatBlock label="Current Δ T (top − bottom)" value={latestDelta != null ? `${latestDelta > 0 ? "+" : ""}${latestDelta}°F` : "—"}
+        <StatBlock label="Current actual Δ T (top − bottom)" value={latestDelta != null ? `${latestDelta > 0 ? "+" : ""}${latestDelta}°F` : "—"}
           sub={latestStatus ? latestStatus.note : "need a Top and a Bottom reading on the same date"}
           accent={latestStatus ? latestStatus.color : undefined} />
-        <StatBlock label="Average Δ T (all days)" value={avgDelta != null ? `${avgDelta > 0 ? "+" : ""}${avgDelta}°F` : "—"}
+        <StatBlock label="Average actual Δ T (all days)" value={avgDelta != null ? `${avgDelta > 0 ? "+" : ""}${avgDelta}°F` : "—"}
           sub={avgDelta != null ? `across ${allDeltas.length} day${allDeltas.length === 1 ? "" : "s"} of readings` : "need a Top and a Bottom reading on the same date"}
           accent={avgStatus ? avgStatus.color : undefined} />
+        <StatBlock label="Live panel Δ T (Agri-Stor)" value={livePanelDelta != null ? `${livePanelDelta > 0 ? "+" : ""}${livePanelDelta}°F` : "—"}
+          sub={bay?.agristorBinName ? "return air − plenum, right now" : "bay isn't linked to an Agri-Stor bin"} accent="#d9722e" />
       </div>
       <div style={{ fontSize: 11.5, color: "#6f7890" }}>
         Every reading in this bay counts, from any pipe. Same-day readings of the same position are averaged first;
-        Δ T comes from that day's average Top and average Bottom — it doesn't matter which pipes they were taken at, only that they share a date.
+        actual Δ T comes from that day's average Top and average Bottom — it doesn't matter which pipes they were taken at, only that they share a date.
         Target Δ T is ~1.5°F once cured. Flagged amber under ~0.5°F (too tight — check airflow), red over 3°F (too wide).
         In the first {CURING_DAYS} days after fill, up to ~5°F is normal and won't be flagged.
+        Panel Δ T (return air − plenum) comes from the Agri-Stor sync instead of a physical check — it updates hourly on its own.
       </div>
-      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16, height: 320 }}>
-        <div style={{ fontWeight: 700, marginBottom: 8, color: "#eef1f6" }}>{bay?.name} — all pipes, top vs. bottom over time</div>
-        {series.length === 0 ? (
+      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 2, color: "#eef1f6" }}>{bay?.name} — temperatures over time</div>
+        <div style={{ fontSize: 11, color: "#6f7890", marginBottom: 8 }}>
+          Top/Bottom are your physical pipe checks (dots mark a logged day); Plenum/Return air are the Agri-Stor sync (hourly, averaged per day).
+        </div>
+        {combinedSeries.length === 0 ? (
           <div style={{ color: "#5b6478", fontSize: 13 }}>No readings yet for this bay.</div>
         ) : (
-          <ResponsiveContainer width="100%" height="88%">
-            <LineChart data={series} margin={{ right: 8 }}>
-              <CartesianGrid stroke="#232d40" strokeDasharray="3 3" />
-              <XAxis dataKey="date" stroke="#8790a3" fontSize={11} />
-              <YAxis yAxisId="temp" stroke="#8790a3" fontSize={11} domain={["dataMin - 2", "dataMax + 2"]} label={{ value: "°F", angle: -90, position: "insideLeft", fill: "#8790a3", fontSize: 11 }} />
-              <YAxis yAxisId="delta" orientation="right" stroke="#a06bd6" fontSize={11} domain={["dataMin - 1", "dataMax + 1"]} label={{ value: "Δ T °F", angle: 90, position: "insideRight", fill: "#a06bd6", fontSize: 11 }} />
-              <Tooltip contentStyle={{ background: "#0e1420", border: "1px solid #2b3549", fontSize: 12 }} labelStyle={{ color: "#eef1f6" }} />
-              <Line yAxisId="temp" type="monotone" dataKey="top" stroke="#f2c14e" strokeWidth={2} dot={{ r: 3 }} name="Top °F (avg)" connectNulls />
-              <Line yAxisId="temp" type="monotone" dataKey="bottom" stroke="#5fb0d6" strokeWidth={2} dot={{ r: 3 }} name="Bottom °F (avg)" connectNulls />
-              <Line yAxisId="delta" type="monotone" dataKey="delta" stroke="#a06bd6" strokeWidth={1.5} strokeDasharray="4 3" dot={{ r: 2 }} name="Δ T" connectNulls />
-            </LineChart>
-          </ResponsiveContainer>
+          <>
+            <div style={{ height: 260 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={combinedSeries} margin={{ right: 8 }}>
+                  <CartesianGrid stroke="#232d40" strokeDasharray="3 3" />
+                  <XAxis dataKey="date" stroke="#8790a3" fontSize={11} />
+                  <YAxis stroke="#8790a3" fontSize={11} domain={["dataMin - 2", "dataMax + 2"]} label={{ value: "°F", angle: -90, position: "insideLeft", fill: "#8790a3", fontSize: 11 }} />
+                  <Tooltip contentStyle={{ background: "#0e1420", border: "1px solid #2b3549", fontSize: 12 }} labelStyle={{ color: "#eef1f6" }} />
+                  <Line type="monotone" dataKey="top" stroke="#f2c14e" strokeWidth={2} dot={{ r: 3 }} name="Top °F (avg)" connectNulls />
+                  <Line type="monotone" dataKey="bottom" stroke="#3ba8e8" strokeWidth={2} dot={{ r: 3 }} name="Bottom °F (avg)" connectNulls />
+                  <Line type="monotone" dataKey="plenum" stroke="#2cd4b5" strokeWidth={1.5} dot={false} name="Plenum °F" connectNulls />
+                  <Line type="monotone" dataKey="returnAir" stroke="#e56bc0" strokeWidth={1.5} dot={false} name="Return air °F" connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 11.5, color: "#c7cede", margin: "6px 0 14px" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#f2c14e" /> Top (physical)</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#3ba8e8" /> Bottom (physical)</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#2cd4b5" /> Plenum (Agri-Stor)</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#e56bc0" /> Return air (Agri-Stor)</span>
+            </div>
+            <div style={{ fontWeight: 700, marginBottom: 2, color: "#eef1f6" }}>{bay?.name} — Δ T over time</div>
+            <div style={{ fontSize: 11, color: "#6f7890", marginBottom: 8 }}>
+              Actual Δ T (top − bottom, from your checks) vs. panel Δ T (return air − plenum, from Agri-Stor) — same dates as the chart above.
+            </div>
+            <div style={{ height: 180 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={combinedSeries} margin={{ right: 8 }}>
+                  <CartesianGrid stroke="#232d40" strokeDasharray="3 3" />
+                  <XAxis dataKey="date" stroke="#8790a3" fontSize={11} />
+                  <YAxis stroke="#8790a3" fontSize={11} domain={["dataMin - 1", "dataMax + 1"]} label={{ value: "Δ T °F", angle: -90, position: "insideLeft", fill: "#8790a3", fontSize: 11 }} />
+                  <Tooltip contentStyle={{ background: "#0e1420", border: "1px solid #2b3549", fontSize: 12 }} labelStyle={{ color: "#eef1f6" }} />
+                  <Line type="monotone" dataKey="actualDelta" stroke="#a06bd6" strokeWidth={1.5} strokeDasharray="4 3" dot={{ r: 2 }} name="Actual Δ T" connectNulls />
+                  <Line type="monotone" dataKey="panelDelta" stroke="#d9722e" strokeWidth={1.5} dot={false} name="Panel Δ T" connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 11.5, color: "#c7cede", marginTop: 6 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#a06bd6" /> Actual Δ T (physical)</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#d9722e" /> Panel Δ T (Agri-Stor)</span>
+            </div>
+          </>
         )}
       </div>
       <div>
@@ -1846,7 +2023,7 @@ function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
                   <tr key={r.pipeNumber} style={{ borderTop: "1px solid #232d40" }}>
                     <td style={tdStyle}><b style={{ color: "#eef1f6" }}>{r.pipeNumber}</b></td>
                     <td style={{ ...tdStyle, color: "#f2c14e" }}>{r.top ? `${r.top.temp}°F` : "—"}</td>
-                    <td style={{ ...tdStyle, color: "#5fb0d6" }}>{r.bottom ? `${r.bottom.temp}°F` : "—"}</td>
+                    <td style={{ ...tdStyle, color: "#3ba8e8" }}>{r.bottom ? `${r.bottom.temp}°F` : "—"}</td>
                     <td style={{ ...tdStyle, color: status ? status.color : "#c7cede" }}>
                       {r.delta != null ? `${r.delta > 0 ? "+" : ""}${r.delta}°F` : "—"}
                     </td>
