@@ -16,13 +16,10 @@ export default function AgronomySampleDatabase({ fields }) {
   const [fieldFilter, setFieldFilter] = useState('all')
   const [samples, setSamples] = useState([])
   const [lastDoc, setLastDoc] = useState(null)
-  const [hasMore, setHasMore] = useState(true)
+  const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [error, setError] = useState(null)
 
-  // Same where(type) + orderBy(receivedDt) shape already used in
-  // AgronomyByCriteria.jsx, so no new Firestore composite index is
-  // needed - reusing a query pattern already proven to work.
-  //
   // Only the first page stays live (onSnapshot) - new samples of this
   // type appear automatically. Pages beyond that are a manual one-time
   // fetch (loadMore/getDocs) rather than more live listeners, since
@@ -31,20 +28,33 @@ export default function AgronomySampleDatabase({ fields }) {
   useEffect(() => {
     setSamples([])
     setLastDoc(null)
-    setHasMore(true)
+    setHasMore(false)
+    setError(null)
     const q = query(
       collection(db, 'samples'),
       where('type', '==', type),
       orderBy('receivedDt', 'desc'),
       limit(PAGE_SIZE)
     )
-    const unsub = onSnapshot(q, (snap) => {
-      const list = []
-      snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
-      setSamples(list)
-      setLastDoc(snap.docs[snap.docs.length - 1] || null)
-      setHasMore(snap.docs.length === PAGE_SIZE)
-    })
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = []
+        snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
+        setSamples(list)
+        setLastDoc(snap.docs[snap.docs.length - 1] || null)
+        setHasMore(snap.docs.length === PAGE_SIZE)
+      },
+      (err) => {
+        // Without this, a failed query (most commonly a missing Firestore
+        // composite index, or a permissions issue) silently looks
+        // identical to "genuinely zero samples" - this surfaces the real
+        // reason instead. Check the browser console too - Firestore
+        // prints a clickable link that auto-creates a missing index.
+        console.error('AgronomySampleDatabase samples query failed:', err)
+        setError(err.message)
+      }
+    )
     return () => unsub()
   }, [type])
 
@@ -96,12 +106,19 @@ export default function AgronomySampleDatabase({ fields }) {
         {fields.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
       </select>
 
+      {error && (
+        <p className="agronomy-error-banner">
+          Couldn't load samples: {error}. Check the browser console for a Firestore error - it may include a
+          link to create a missing index automatically.
+        </p>
+      )}
+
       <table className="agronomy-sample-table">
         <thead>
           <tr><th>Date</th><th>Field</th><th>Crop</th><th>Values</th></tr>
         </thead>
         <tbody>
-          {visibleSamples.length === 0 && (
+          {!error && visibleSamples.length === 0 && (
             <tr><td colSpan={4} className="agronomy-table-empty">
               No {SAMPLE_TYPE_LABEL[type].toLowerCase()} samples {fieldFilter === 'all' ? 'yet' : 'for this field yet'}.
             </td></tr>
