@@ -5,9 +5,8 @@ import {
   Warehouse, Thermometer, ClipboardCheck, Package, TrendingDown, Map as MapIcon,
   Plus, ChevronRight, MapPin, Gauge, BarChart3, AlertTriangle, Check, Layers, Users, Sprout, Building2, FlaskConical, Trash2,
 } from "lucide-react";
-import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, query, where, getDocs } from "firebase/firestore";
+import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, query, where, getDocs, onSnapshot } from "firebase/firestore";
 import { db } from "./firebase.js"; // AIO's existing Firebase project — same login, no second sign-in
-
 /* =================================================================
    NORLAND CELLARS — seed data (pulled from the 2025 storage workbook)
    1200 N. Meridian, Rupert, ID
@@ -60,7 +59,6 @@ function allCustomers(bays) {
   bays.forEach((b) => b.zones.forEach((z) => set.set(z.customer, getCustomerColor(z.customer))));
   return Array.from(set.entries()).sort((a, b) => naturalCompare(a[0], b[0]));
 }
-
 /* ---------------------------------------------------------------
    Site hierarchy: Location (complex) > Building > Bay > Zone (field)
 ----------------------------------------------------------------*/
@@ -70,7 +68,6 @@ const DEFAULT_LOCATIONS = [
   { id: "watco", name: "Watco-Dutchman", address: "Rupert, ID (address TBD)", lat: 42.5900, lng: -113.7300 },
   { id: "paul", name: "Paul", address: "Paul, ID 83347", lat: 42.6053, lng: -113.7847 },
 ];
-
 const DEFAULT_BUILDINGS = [
   { id: "bldg-n89", name: "Norland 8–9 Building", locationId: "norland" },
   { id: "bldg-n1011", name: "Norland 10–11 Building", locationId: "norland" },
@@ -83,7 +80,6 @@ const DEFAULT_BUILDINGS = [
   { id: "bldg-p12", name: "Paul 1–2 Building", locationId: "paul" },
   { id: "bldg-p34", name: "Paul 3–4 Building", locationId: "paul" },
 ];
-
 // Helper: a placeholder single-field bay for complexes where we only have a
 // total capacity figure from the workbook, not pipe-level detail yet. Pipe
 // count of 30 is nominal — cwt/pipe is derived so the capacity stays accurate
@@ -91,7 +87,6 @@ const DEFAULT_BUILDINGS = [
 function placeholderZone(id, capacity, pipes = 30) {
   return [{ id, name: "Field 1", variety: "Burbank", customer: "Unassigned", pipeCount: pipes, cwtPerPipe: Math.round((capacity / pipes) * 100) / 100 }];
 }
-
 const DEFAULT_BAYS = [
   {
     id: "n8", name: "Norland #8", buildingId: "bldg-n89",
@@ -142,13 +137,11 @@ const DEFAULT_BAYS = [
   { id: "watco5", name: "Watco #5", buildingId: "bldg-w56", fillDate: "", cwtPerPipe: null, zones: placeholderZone("watco5z1", 96192) },
   { id: "watco6", name: "Watco #6", buildingId: "bldg-w56", fillDate: "", cwtPerPipe: null, zones: placeholderZone("watco6z1", 96192) },
 ];
-
 // Seed a couple of real historical loads on Norland #9 so shrink math has something to show.
 const SEED_RUNS = {
   n9z1: [{ date: "2026-02-10", dest: "Simplot", cwt: 17809 }],
   n9z2: [{ date: "2026-02-14", dest: "Unassigned", cwt: 19241.15 }],
 };
-
 const LOCATIONS_KEY = "storage-locations-v3";
 const SEASONS_KEY = "storage-seasons-v1";
 const DEFAULT_SEASONS = [{ id: "season-2025-26", label: "2025–2026", snapshot: null }];
@@ -171,7 +164,6 @@ const PRODUCTS_KEY = "norland-products-v1";
 const DEFAULT_PRODUCTS = [{ id: "prod-sproutnip", name: "Sprout Nip", restrictedCustomers: [] }];
 const APPLICATORS_KEY = "norland-applicators-v1";
 const DEFAULT_APPLICATORS = [];
-
 const emptyZoneData = (zoneId) => ({
   pipeChecks: [], cwtRuns: SEED_RUNS[zoneId] ? [...SEED_RUNS[zoneId]] : [], sproutApplications: [],
 });
@@ -179,12 +171,10 @@ const emptyBayData = (bay) => ({
   zones: Object.fromEntries(bay.zones.map((z) => [z.id, emptyZoneData(z.id)])),
   tempLogs: [],
 });
-
 const fmt = (n, d = 0) => (n ?? 0).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const slugify = (s) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 const uid = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-
 // Default list ordering, everywhere: alphabetical, with embedded numbers
 // compared numerically rather than digit-by-digit — so "Norland #9" sorts
 // before "Norland #10" instead of after it.
@@ -194,7 +184,6 @@ function naturalCompare(a, b) {
 function sortByNatural(arr, keyFn = (x) => x) {
   return [...arr].sort((a, b) => naturalCompare(keyFn(a), keyFn(b)));
 }
-
 /* ---------------------------------------------------------------
    Storage helpers
 ----------------------------------------------------------------*/
@@ -223,7 +212,6 @@ async function deleteJSON(key) {
   try { await deleteDoc(doc(db, "potatoStorage", key)); }
   catch (e) { console.error("storage delete failed", key, e); }
 }
-
 /* ---------------------------------------------------------------
    Derived stats — per zone (field), then rolled up per bay
 ----------------------------------------------------------------*/
@@ -243,7 +231,6 @@ function pipeRangeSet(ranges) {
   });
   return set;
 }
-
 // A pipe range is only valid if every pipe number in it actually exists in
 // the bay — you can't log or assign pipe 278 in a 273-pipe bay.
 function rangeFitsBay(range, bayPipeCount) {
@@ -252,11 +239,9 @@ function rangeFitsBay(range, bayPipeCount) {
   const hi = Math.max(Number(range.from), Number(range.to));
   return Number.isFinite(lo) && Number.isFinite(hi) && lo >= 1 && hi <= bayPipeCount;
 }
-
 function zonePipeCount(zone) {
   return pipeRangeSet(zone.pipeRanges).size;
 }
-
 // "1–5, 36–40" style summary of a set of pipe ranges, for the Log Pipe form's
 // live preview and the logged history list.
 function formatPipeRanges(ranges) {
@@ -265,7 +250,6 @@ function formatPipeRanges(ranges) {
     .map(({ from, to }) => (Number(from) === Number(to) ? `${from}` : `${Math.min(from, to)}–${Math.max(from, to)}`))
     .join(", ");
 }
-
 // Every cwt/pipe number on record (bay or field) was calibrated against an
 // 18' pile — that's been the assumption everywhere up to now. A bay can now
 // be marked as a 9' pile instead, which holds roughly half as much potato
@@ -277,7 +261,6 @@ const PILE_HEIGHT_OPTIONS = [18, 9];
 function pileHeightRatio(bay) {
   return (bay?.pileHeight || 18) / 18;
 }
-
 function computeZoneStats(bay, zone, zoneData) {
   const footprint = pipeRangeSet(zone.pipeRanges);
   const pipeCount = footprint.size;
@@ -304,20 +287,17 @@ function computeZoneStats(bay, zone, zoneData) {
   const currentCwt = pipesFilled * cwtPerPipe;
   const capacityCwt = pipeCount * cwtPerPipe;
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
-
   const runs = zoneData?.cwtRuns || [];
   const totalRun = runs.reduce((s, r) => s + Number(r.cwt || 0), 0);
   const initialCwt = zone.initialFillCwt ?? capacityCwt;
   const shrinkCwt = initialCwt - (totalRun + currentCwt);
   const shrinkPct = initialCwt > 0 ? shrinkCwt / initialCwt : 0;
-
   return {
     pipeCount, pipesEmpty, pipesFilled, fullMap, cwtPerPipe, currentCwt, capacityCwt, fillPct,
     totalRun, initialCwt, shrinkCwt, shrinkPct, runs,
     lastCheckDate: pipeLog.length ? pipeLog[pipeLog.length - 1].date : null,
   };
 }
-
 function computeBayStats(bay, bayData) {
   const zoneStats = {};
   let currentCwt = 0, zoneCapacityCwt = 0, totalRun = 0, initialCwt = 0, shrinkCwt = 0;
@@ -339,7 +319,6 @@ function computeBayStats(bay, bayData) {
   const shrinkPct = initialCwt > 0 ? shrinkCwt / initialCwt : 0;
   return { zoneStats, currentCwt, capacityCwt, fillPct, totalRun, initialCwt, shrinkCwt, shrinkPct };
 }
-
 /* =================================================================
    3D — shared bay-group builder (used by both the yard view and the
    single-bay interior viewer). Buildings are open-frame/cutaway by
@@ -355,7 +334,6 @@ function quadMesh(p0, p1, p2, p3, material) {
   geo.computeVertexNormals();
   return new THREE.Mesh(geo, material);
 }
-
 // A thin structural member connecting two arbitrary points (used for the
 // slanted corner posts) — oriented via quaternion so the lean is always right
 // regardless of which corner it's for.
@@ -368,7 +346,6 @@ function strutMesh(p0, p1, material, thickness = 0.22) {
   mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
   return mesh;
 }
-
 // Frustum pile geometry: full width top-to-bottom (no taper across the bay),
 // but the two lengthwise ends slope inward as it rises — like a real potato
 // pile's natural angle of repose. Spans Y from 0 (floor) to 1 (scaled later
@@ -393,17 +370,13 @@ function buildPileFrustumGeometry(widthBottom, widthTop, depthBottom, depthTop) 
   geo.computeVertexNormals();
   return geo;
 }
-
 const PILE_TAPER = 0.62; // shared by the building's wall lean and the pile's natural end slope
-
 function buildBayGroup(bay, dims) {
   const { W, H, L } = dims;
   const g = new THREE.Group();
-
   // Building tapers inward as it rises — widest at the floor, narrower at the eave.
   const TOP_RATIO = PILE_TAPER;
   const baseHalfW = W / 2, topHalfW = (W * TOP_RATIO) / 2;
-
   const postMat = new THREE.MeshStandardMaterial({ color: "#7c8794", roughness: 0.5, metalness: 0.4 });
   [-L / 2, L / 2].forEach((z) => {
     [-1, 1].forEach((side) => {
@@ -426,12 +399,10 @@ function buildBayGroup(bay, dims) {
     const rb = new THREE.Mesh(bottomRailX, postMat); rb.position.set(side * baseHalfW, 0, 0); g.add(rb);
     const rt = new THREE.Mesh(topRailX, postMat); rt.position.set(side * topHalfW, H, 0); g.add(rt);
   });
-
   const skinMat = new THREE.MeshStandardMaterial({ color: "#c7ccd4", roughness: 0.7, transparent: true, opacity: 0.14, side: THREE.DoubleSide });
   const roof = new THREE.Mesh(new THREE.BoxGeometry(W * TOP_RATIO + 0.4, 0.12, L + 0.4), skinMat);
   roof.position.set(0, H, 0);
   g.add(roof);
-
   // back (gable) wall — a trapezoid, wide at the floor, narrow at the eave
   const backWall = quadMesh(
     new THREE.Vector3(-baseHalfW, 0, -L / 2), new THREE.Vector3(baseHalfW, 0, -L / 2),
@@ -439,7 +410,6 @@ function buildBayGroup(bay, dims) {
     skinMat
   );
   g.add(backWall);
-
   // side walls — lean inward uniformly along their full length
   const sideMat = new THREE.MeshStandardMaterial({ color: "#c7ccd4", roughness: 0.7, transparent: true, opacity: 0.07, side: THREE.DoubleSide });
   [-1, 1].forEach((side) => {
@@ -450,13 +420,11 @@ function buildBayGroup(bay, dims) {
     );
     g.add(wall);
   });
-
   const floorMat = new THREE.MeshStandardMaterial({ color: "#5a5346", roughness: 1 });
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, L), floorMat);
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
   g.add(floor);
-
   // Pipe numbers are GLOBAL across the whole bay (1..totalPipes) — every
   // field's pipeRanges reference this same numbering, so "pipe 12" always
   // means the same physical slot regardless of which field owns it. Falling
@@ -466,7 +434,6 @@ function buildBayGroup(bay, dims) {
   const innerW = W * 0.86;
   const pipeWidth = L / totalPipes;
   const zStart = -L / 2;
-
   // One indicator cylinder per physical pipe, positioned by its actual
   // global pipe number — independent of which field (if any) currently
   // owns it. Ownership/fill state gets applied in applyZoneFill.
@@ -480,7 +447,6 @@ function buildBayGroup(bay, dims) {
     pipeMesh.userData = { pipeNumber: p + 1 };
   }
   g.add(stripGroup);
-
   // Pile/cap mounds and the field-boundary dividers are all (re)built in
   // applyZoneFill, not here — which pipes are full, and which field owns
   // which stretch, can change with every log entry, so there's no fixed set
@@ -489,10 +455,8 @@ function buildBayGroup(bay, dims) {
   g.add(pileGroup);
   const dividerGroup = new THREE.Group();
   g.add(dividerGroup);
-
   return { group: g, pileGroup, dividerGroup, stripGroup, totalPipes, pipeWidth, zStart, innerW, maxH: H * 0.82 };
 }
-
 // Maps every pipe slot (1..totalPipes) to whichever zone currently owns it
 // (via that zone's pipeRanges footprint) and whether it's presently full —
 // the single source of truth the pile mounds, dividers, and pipe strip all
@@ -512,7 +476,6 @@ function buildPipeSlotOwnership(bay, zoneStatsById, totalPipes) {
   });
   return { owner, full };
 }
-
 function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
   const { pileGroup, dividerGroup, stripGroup, totalPipes, pipeWidth, zStart, innerW } = bayMesh;
   const { owner, full } = buildPipeSlotOwnership(bay, zoneStatsById, totalPipes);
@@ -520,7 +483,6 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
   // pile bay isn't a shorter building, it just doesn't get filled as high.
   // So only the pile mounds themselves get scaled down.
   const pileH = maxH * pileHeightRatio(bay);
-
   // Rebuild the mounds from scratch every update — which pipes are full (and
   // therefore how many separate mounds exist) changes with every log entry,
   // so there's no fixed mesh to just resize in place.
@@ -543,14 +505,12 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
     const segTopDepth = segDepth * PILE_TAPER;
     const topWidth = innerW * PILE_TAPER;
     const segCenterZ = zStart + (p - 1 + (q - p + 1) / 2) * pipeWidth;
-
     const mat = new THREE.MeshStandardMaterial({ color: getVarietyColor(zone.variety), roughness: 0.95, side: THREE.DoubleSide });
     const pile = new THREE.Mesh(buildPileFrustumGeometry(innerW, topWidth, segDepth, segTopDepth), mat);
     pile.scale.set(1, pileH, 1);
     pile.position.set(0, 0, segCenterZ);
     pile.castShadow = true;
     pileGroup.add(pile);
-
     // customer cap — thin colored slab riding the top of each mound, so
     // variety (mound color) and customer (cap color) both read at a glance
     const capMat = new THREE.MeshStandardMaterial({ color: getCustomerColor(zone.customer), roughness: 0.6, metalness: 0.1 });
@@ -558,10 +518,8 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
     cap.position.set(0, pileH + 0.14, segCenterZ);
     cap.castShadow = true;
     pileGroup.add(cap);
-
     p = q + 1;
   }
-
   // Field-boundary dividers — rebuilt alongside the mounds since ownership
   // can shift (a field's footprint growing via a fill log entry) just like
   // fill state can.
@@ -578,14 +536,12 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
       dividerGroup.add(divider);
     }
   }
-
   // Recolor each pipe indicator to match its actual state: dark/buried when
   // full, light/exposed metal when empty or not yet claimed by any field.
   stripGroup.children.forEach((pipeMesh, idx) => {
     pipeMesh.material.color.set(full[idx + 1] ? "#4a4238" : "#c7ccd4");
   });
 }
-
 /* ---------------------------------------------------------------
    Generic orbiting 3D canvas (used for both yard + interior modes)
 ----------------------------------------------------------------*/
@@ -593,33 +549,27 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
   const mountRef = useRef(null);
   const stateRef = useRef({});
   const [labels, setLabels] = useState([]);
-
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
-
     const scene = new THREE.Scene();
     scene.background = new THREE.Color("#0e1420");
     scene.fog = new THREE.Fog("#0e1420", 60, 240);
-
     const camera = new THREE.PerspectiveCamera(42, mount.clientWidth / mount.clientHeight, 0.1, 1000);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.shadowMap.enabled = true;
     mount.appendChild(renderer.domElement);
-
     scene.add(new THREE.AmbientLight("#8892a8", 0.85));
     const sun = new THREE.DirectionalLight("#fff3da", 1.0);
     sun.position.set(20, 40, 25);
     sun.castShadow = true;
     scene.add(sun);
-
     const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ color: "#54503f", roughness: 1 }));
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     scene.add(ground);
-
     const DIMS = { W: 12.5, H: 8.5, L: 24 };
     const TIGHT_GAP = 14, BUILDING_GAP = 9;
     let xPositions = [0];
@@ -635,17 +585,14 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     } else {
       xPositions = bays.map(() => 0);
     }
-
     const buildingGroup = new THREE.Group();
     scene.add(buildingGroup);
-
     const bayMeshes = {};
     bays.forEach((bay, i) => {
       const built = buildBayGroup(bay, DIMS);
       built.group.position.x = xPositions[i];
       buildingGroup.add(built.group);
       bayMeshes[bay.id] = built;
-
       const ringMat = new THREE.MeshBasicMaterial({ color: "#f2c14e", transparent: true, opacity: 0.85 });
       const ring = new THREE.Mesh(new THREE.RingGeometry(DIMS.W * 0.7, DIMS.W * 0.78, 32), ringMat);
       ring.rotation.x = -Math.PI / 2;
@@ -654,13 +601,11 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       scene.add(ring);
       bayMeshes[bay.id].ring = ring;
     });
-
     const target = new THREE.Vector3(0, mode === "interior" ? 3.5 : 3, 0);
     let radius = mode === "interior" ? 26 : 58;
     let theta = mode === "interior" ? 1.15 : Math.PI / 2 - 0.5;
     let phi = mode === "interior" ? 0.85 : 1.02;
     const clampPhi = (p) => Math.max(0.3, Math.min(1.4, p));
-
     function updateCamera() {
       camera.position.x = target.x + radius * Math.sin(phi) * Math.cos(theta);
       camera.position.y = target.y + radius * Math.cos(phi);
@@ -668,10 +613,8 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       camera.lookAt(target);
     }
     updateCamera();
-
     const onSelectRef = { current: onSelect };
     stateRef.current.onSelectRef = onSelectRef;
-
     let dragging = false, lastX = 0, lastY = 0, moved = 0;
     const onDown = (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; moved = 0; };
     const onMove = (e) => {
@@ -710,18 +653,15 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       radius = Math.max(min, Math.min(max, radius + e.deltaY * 0.03));
       updateCamera();
     };
-
     renderer.domElement.style.touchAction = "none";
     renderer.domElement.addEventListener("pointerdown", onDown);
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
-
     let raf;
     const animate = () => {
       raf = requestAnimationFrame(animate);
       renderer.render(scene, camera);
-
       const newLabels = [];
       bays.forEach((bay) => {
         const m = bayMeshes[bay.id];
@@ -740,7 +680,6 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
             visible: p.z < 1,
           });
         });
-
         // Pipe number markers along the floor at the bottom of the bay —
         // thinned out on bays with lots of pipe so it stays readable instead
         // of a wall of overlapping numbers. Always includes pipe 1 and the
@@ -758,7 +697,6 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
             visible: pp.z < 1,
           });
         }
-
         if (mode === "yard") {
           const p2 = new THREE.Vector3(0, m.maxH + 3.4, 0).add(m.group.position);
           p2.project(camera);
@@ -795,16 +733,13 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       setLabels(newLabels);
     };
     animate();
-
     const ro = new ResizeObserver(() => {
       camera.aspect = mount.clientWidth / mount.clientHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(mount.clientWidth, mount.clientHeight);
     });
     ro.observe(mount);
-
     stateRef.current = { ...stateRef.current, bayMeshes };
-
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
@@ -817,11 +752,9 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bays.map((b) => b.id).join(","), mode]);
-
   useEffect(() => {
     if (stateRef.current.onSelectRef) stateRef.current.onSelectRef.current = onSelect;
   }, [onSelect]);
-
   useEffect(() => {
     const bm = stateRef.current.bayMeshes;
     if (!bm) return;
@@ -833,7 +766,6 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       if (m.ring) m.ring.visible = mode === "yard" && bay.id === selectedId;
     });
   }, [bays, statsById, selectedId, mode]);
-
   return (
     <div ref={mountRef} style={{ position: "relative", width: "100%", height: "100%", cursor: "grab" }}>
       {labels.map((l) => {
@@ -899,7 +831,6 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     </div>
   );
 }
-
 /* =================================================================
    Map tab — Leaflet + Esri World Imagery (no API key required)
 ==================================================================*/
@@ -925,7 +856,6 @@ function loadLeaflet() {
     document.head.appendChild(script);
   });
 }
-
 // One pin per complex (location), placed at the lat/lng entered for it in
 // Manage Sites. Clicking a pin's popup link jumps into that complex's 3D
 // yard (all of its bays) — the map is a way to get to a complex, not a
@@ -934,18 +864,14 @@ function MapTab({ locations, bays, buildingsById, statsById, onSelectLocation })
   const mountRef = useRef(null);
   const mapRef = useRef(null);
   const [ready, setReady] = useState(false);
-
   const withCoords = locations.filter((l) => Number.isFinite(l.lat) && Number.isFinite(l.lng));
-
   useEffect(() => {
     let cancelled = false;
     loadLeaflet().then((L) => {
       if (cancelled || !mountRef.current || mapRef.current) return;
       if (mountRef.current._leaflet_id) delete mountRef.current._leaflet_id; // guard against a stray re-init on a reused container
-
       const center = withCoords[0] ? [withCoords[0].lat, withCoords[0].lng] : [42.62, -113.70];
       const map = L.map(mountRef.current, { zoomControl: true }).setView(center, 12);
-
       const imagery = L.tileLayer(
         "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
         { attribution: "Tiles &copy; Esri", maxZoom: 20 }
@@ -954,14 +880,12 @@ function MapTab({ locations, bays, buildingsById, statsById, onSelectLocation })
         attribution: "&copy; OpenStreetMap contributors", maxZoom: 19,
       });
       L.control.layers({ "Satellite (Esri)": imagery, "Streets (OSM)": streets }, {}, { position: "topright" }).addTo(map);
-
       withCoords.forEach((loc) => {
         const locBays = bays.filter((b) => buildingsById[b.buildingId]?.locationId === loc.id);
         const agg = locBays.reduce((acc, b) => {
           const s = statsById[b.id] || {};
           return { cwt: acc.cwt + (s.currentCwt || 0), capacity: acc.capacity + (s.capacityCwt || 0) };
         }, { cwt: 0, capacity: 0 });
-
         const icon = L.divIcon({
           className: "",
           html: `<div style="width:24px;height:24px;border-radius:50% 50% 50% 0;background:#e0a63e;border:2px solid #0e1420;transform:rotate(-45deg);box-shadow:0 0 0 1px rgba(255,255,255,0.4)"></div>`,
@@ -983,19 +907,16 @@ function MapTab({ locations, bays, buildingsById, statsById, onSelectLocation })
           if (link) link.onclick = (e) => { e.preventDefault(); onSelectLocation(loc.id); };
         });
       });
-
       if (withCoords.length > 1) {
         const bounds = L.latLngBounds(withCoords.map((l) => [l.lat, l.lng]));
         map.fitBounds(bounds, { padding: [60, 60], maxZoom: 13 });
       }
-
       mapRef.current = map;
       setReady(true);
     });
     return () => { cancelled = true; if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; } };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [withCoords.map((l) => `${l.id}:${l.lat}:${l.lng}`).join(",")]);
-
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <div ref={mountRef} style={{ width: "100%", height: "100%", background: "#141b28" }} />
@@ -1010,7 +931,6 @@ function MapTab({ locations, bays, buildingsById, statsById, onSelectLocation })
     </div>
   );
 }
-
 /* ---------------------------------------------------------------
    Small UI atoms
 ----------------------------------------------------------------*/
@@ -1041,17 +961,14 @@ function customerOptions(customers, currentValue) {
   const rest = currentValue && !customers.includes(currentValue) ? [...customers, currentValue] : customers;
   return ["Unassigned", ...sortByNatural(rest)];
 }
-
 function varietyOptions(varieties, currentValue) {
   const rest = currentValue && !varieties.includes(currentValue) ? [...varieties, currentValue] : varieties;
   return sortByNatural(rest);
 }
-
 function applicatorOptions(applicators, currentValue) {
   const rest = currentValue && !applicators.includes(currentValue) ? [...applicators, currentValue] : applicators;
   return ["Unassigned", ...sortByNatural(rest)];
 }
-
 // --- Agworld field lookup -----------------------------------------------
 // The syncAgworldFieldsNow / syncAgworldFields cloud functions (in this same
 // Firebase project's functions/index.js) mirror Agworld into Firestore:
@@ -1059,7 +976,6 @@ function applicatorOptions(applicators, currentValue) {
 // per-season crop data at fields/{fieldId}/seasons/{seasonId} (cropName,
 // varietyName, acres). There's no "is this a potato field" flag in Agworld
 // itself, so potato fields are picked out here by matching cropName.
-
 function useAgworldSeasons() {
   const [seasons, setSeasons] = useState(null); // null = still loading
   useEffect(() => {
@@ -1079,7 +995,6 @@ function useAgworldSeasons() {
   }, []);
   return seasons;
 }
-
 // Defaults the Agworld season picker to whichever synced season covers the
 // current calendar year (matched against its start/end date or name), so
 // users don't have to manually reselect it every year — falls back to the
@@ -1094,7 +1009,6 @@ function pickDefaultSeasonId(seasons) {
   );
   return (match || seasons[0]).id;
 }
-
 // Collection-group query across every field's "seasons" subcollection,
 // narrowed to one seasonId, then joined back to each field's parent doc for
 // its name/farm. Filtered client-side to fields whose synced crop looks like
@@ -1137,7 +1051,6 @@ function useAgworldFields(seasonId) {
   }, [seasonId]);
   return fields;
 }
-
 function agworldTabStyle(active) {
   return {
     border: `1px solid ${active ? "#e0a63e" : "#2b3549"}`,
@@ -1146,7 +1059,6 @@ function agworldTabStyle(active) {
     borderRadius: 6, padding: "5px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600,
   };
 }
-
 function AgworldFieldPicker({ onPick }) {
   const seasons = useAgworldSeasons();
   const [seasonId, setSeasonId] = useState("");
@@ -1156,7 +1068,6 @@ function AgworldFieldPicker({ onPick }) {
   const fields = useAgworldFields(seasonId);
   const [search, setSearch] = useState("");
   const filtered = (fields || []).filter((f) => !search || (f.name || "").toLowerCase().includes(search.toLowerCase()));
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1197,7 +1108,6 @@ function AgworldFieldPicker({ onPick }) {
     </div>
   );
 }
-
 // Shared "add one product/field to a bay" mini-form. Used both in Bay Detail
 // (add product to the bay you're looking at) and in Manage Sites (add product
 // to any existing bay from the structure tree). A bay can exist with zero
@@ -1216,20 +1126,17 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
   const [cwtPerPipe, setCwtPerPipe] = useState("");
   const [error, setError] = useState("");
   const [fromAgworld, setFromAgworld] = useState(false);
-
   // A bay without its own total yet falls back to whatever's already
   // assigned to other fields — so validation still catches an obviously
   // out-of-range pipe number even before someone's entered the bay's total.
   const bayPipeBound = bay.pipeCount || bay.zones.reduce((s, z) => s + zonePipeCount(z), 0) || null;
   const takenPipes = pipeRangeSet(bay.zones.flatMap((z) => z.pipeRanges || []));
-
   const applyAgworldField = (f) => {
     setName(f.name || nextName);
     if (f.varietyName) setVariety(f.varietyName);
     setFromAgworld(true);
     setError("");
   };
-
   const submit = () => {
     const trimmed = name.trim();
     if (!trimmed || !variety || pipeFrom === "" || pipeTo === "") {
@@ -1249,20 +1156,16 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
     setName(nextName); setVariety(varieties[0] || ""); setCustomer("Unassigned");
     setPipeFrom(""); setPipeTo(""); setCwtPerPipe(""); setError(""); setFromAgworld(false);
   };
-
   const overlap = pipeFrom !== "" && pipeTo !== ""
     ? Array.from(pipeRangeSet([{ from: pipeFrom, to: pipeTo }])).filter((p) => takenPipes.has(p))
     : [];
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, background: "#0e1420", border: "1px solid #232d40", borderRadius: 8, padding: 10, width: "100%" }}>
       <div style={{ display: "flex", gap: 6 }}>
         <button type="button" onClick={() => setSource("agworld")} style={agworldTabStyle(source === "agworld")}>From Agworld</button>
         <button type="button" onClick={() => setSource("manual")} style={agworldTabStyle(source === "manual")}>Enter manually</button>
       </div>
-
       {source === "agworld" && <AgworldFieldPicker onPick={applyAgworldField} />}
-
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
         <Field label="Field name">
           <input value={name} onChange={(e) => { setName(e.target.value); setFromAgworld(false); }} style={{ ...inputStyle, width: 140 }} />
@@ -1294,7 +1197,6 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
     </div>
   );
 }
-
 function NewSeasonPrompt({ activeSeasonLabel, onCancel, onConfirm }) {
   const [label, setLabel] = useState("");
   return (
@@ -1317,7 +1219,6 @@ function NewSeasonPrompt({ activeSeasonLabel, onCancel, onConfirm }) {
     </div>
   );
 }
-
 function EmptySiteNotice({ onManage }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 10, padding: 24, color: "#8790a3" }}>
@@ -1326,7 +1227,6 @@ function EmptySiteNotice({ onManage }) {
     </div>
   );
 }
-
 function ColorDot({ color, size = 8 }) {
   return <span style={{ display: "inline-block", width: size, height: size, borderRadius: "50%", background: color, border: "1px solid rgba(255,255,255,0.25)", flexShrink: 0 }} />;
 }
@@ -1362,7 +1262,6 @@ function Button({ children, onClick, variant = "primary", style, disabled }) {
   };
   return <button disabled={disabled} onClick={onClick} style={{ ...base, ...variants[variant], ...style }}>{children}</button>;
 }
-
 // Small red icon-only delete affordance used throughout Manage Sites —
 // confirms with a plain `window.confirm` (the caller supplies the message,
 // since what's actually at stake varies a lot by level: a field vs. an
@@ -1383,7 +1282,6 @@ function DeleteButton({ onConfirm, confirmMessage, title = "Delete", disabled, s
     </button>
   );
 }
-
 // Uncontrolled inline-editable field — saves on blur (or Enter), and resets
 // its displayed value whenever the underlying prop changes (e.g. after a
 // successful save round-trip), via the `key`.
@@ -1411,7 +1309,121 @@ function EditableInline({ value, onSave, type = "text", width, disabled, placeho
     />
   );
 }
-
+/* ---------------------------------------------------------------
+   Agri-Stor live conditions — read-only listener on the readings the
+   syncAgristorReadings / syncAgristorReadingsNow cloud functions (same
+   Firebase project's functions/index.js) write hourly into
+   agristorReadings/{agristorDocId(binName)}. This component never talks
+   to Agri-Stor directly — it only listens to that Firestore doc. A bay
+   opts in by having its "Agri-Stor bin" field (set in Manage Sites) match
+   a bin name over there exactly.
+----------------------------------------------------------------*/
+// Must stay byte-for-byte in sync with agristorNormalizeBinName() in
+// functions/index.js — same bin name has to produce the same doc id on
+// both sides.
+function agristorDocId(binName) {
+  return (binName || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+function useAgristorReading(binName) {
+  const [reading, setReading] = useState(undefined); // undefined = loading, null = no doc yet
+  useEffect(() => {
+    if (!binName) { setReading(null); return; }
+    setReading(undefined);
+    const ref = doc(db, "agristorReadings", agristorDocId(binName));
+    const unsub = onSnapshot(
+      ref,
+      (snap) => setReading(snap.exists() ? snap.data() : null),
+      (err) => { console.error("Agri-Stor reading listener failed:", err); setReading(null); }
+    );
+    return () => unsub();
+  }, [binName]);
+  return reading;
+}
+function formatAgristorAge(ts) {
+  if (!ts) return "—";
+  const ms = typeof ts?.toDate === "function" ? ts.toDate().getTime() : new Date(ts).getTime();
+  if (!Number.isFinite(ms)) return "—";
+  const mins = Math.round((Date.now() - ms) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+// Read-only card showing this bay's latest Agri-Stor sensor reading, synced
+// in by a separate scheduled Cloud Function (see agristorSync in the
+// functions project) — this component never talks to Agri-Stor itself, it
+// only listens to the Firestore doc that job writes.
+function LiveConditionsCard({ bay }) {
+  const reading = useAgristorReading(bay.agristorBinName);
+  if (!bay.agristorBinName) {
+    return (
+      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 14, fontSize: 12.5, color: "#6f7890" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Thermometer size={14} color="#5b6478" /> <b style={{ color: "#8790a3" }}>Live conditions</b>
+        </div>
+        Not linked to an Agri-Stor bin yet — set "Agri-Stor bin name" for this bay in Manage Sites to see live temperature/CO2 readings here.
+      </div>
+    );
+  }
+  if (reading === undefined) {
+    return (
+      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 14, fontSize: 12.5, color: "#6f7890" }}>
+        Loading live conditions for "{bay.agristorBinName}"…
+      </div>
+    );
+  }
+  if (reading === null) {
+    return (
+      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 14, fontSize: 12.5, color: "#6f7890" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Thermometer size={14} color="#5b6478" /> <b style={{ color: "#8790a3" }}>Live conditions</b>
+        </div>
+        No reading yet for "{bay.agristorBinName}" — check the name matches the Agri-Stor panel exactly, or wait for the next hourly sync.
+      </div>
+    );
+  }
+  const isError = reading.status === "network_error";
+  return (
+    <div style={{ background: isError ? "#1c1414" : "#141b28", border: `1px solid ${isError ? "#4a2b2b" : "#232d40"}`, borderRadius: 10, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, color: "#eef1f6" }}>
+          <Thermometer size={15} color="#f2c14e" /> Live conditions — {bay.agristorBinName}
+        </div>
+        <div style={{ fontSize: 11.5, color: isError ? "#e08787" : "#8790a3", display: "flex", alignItems: "center", gap: 5 }}>
+          {isError && <AlertTriangle size={12} />}
+          {isError ? "Network error at sensor" : "OK"} · updated {formatAgristorAge(reading.updatedAt)}
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, fontSize: 12.5, color: "#c7cede" }}>
+        <LiveStat label="Plenum" value={reading.plenumTempF != null ? `${reading.plenumTempF}°F` : "—"} sub={reading.plenumRH != null ? `${reading.plenumRH}% RH` : ""} />
+        <LiveStat label="Return air" value={reading.returnAirTempF != null ? `${reading.returnAirTempF}°F` : "—"} sub={reading.returnAirRH != null ? `${reading.returnAirRH}% RH` : ""} />
+        <LiveStat label="Outside air" value={reading.outsideAirTempF != null ? `${reading.outsideAirTempF}°F` : "—"} sub={reading.outsideAirRH != null ? `${reading.outsideAirRH}% RH` : ""} />
+        <LiveStat label="Pile avg" value={reading.pileAvgTempF != null ? `${reading.pileAvgTempF}°F` : "—"} />
+        <LiveStat label="CO2" value={reading.co2Ppm != null ? `${reading.co2Ppm} ppm` : "—"} />
+        <LiveStat
+          label="Fan / Cooling-Refrig"
+          value={[reading.fanPct, reading.coolingPct ?? reading.refrigerationPct]
+            .map((v) => (v != null ? `${v}%` : "—"))
+            .join(" / ")}
+        />
+      </div>
+    </div>
+  );
+}
+function LiveStat({ label, value, sub }) {
+  return (
+    <div>
+      <div style={{ fontSize: 10.5, letterSpacing: 0.5, textTransform: "uppercase", color: "#6f7890" }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: "#eef1f6" }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: "#8790a3" }}>{sub}</div>}
+    </div>
+  );
+}
 /* ---------------------------------------------------------------
    Bay detail panel (per-zone pipe checks + cwt runs) + interior 3D
 ----------------------------------------------------------------*/
@@ -1423,7 +1435,6 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
   const zone = bay.zones.find((z) => z.id === zoneId);
   const zoneData = data.zones[zoneId] || { pipeChecks: [], cwtRuns: [] };
   const zs = stats.zoneStats[zoneId];
-
   // Potatoes get pulled from (or filled back into) both ends of a run, so a
   // log entry records up to two pipe ranges (front end + back end) rather
   // than a single count — leaves an accurate picture of exactly which pipes
@@ -1444,11 +1455,9 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
   const [runCwt, setRunCwt] = useState("");
   useEffect(() => { setRunDest(zone?.customer || "Unassigned"); }, [zoneId]);
   useEffect(() => { setRangeFrom1(""); setRangeTo1(""); setRangeFrom2(""); setRangeTo2(""); setLogError(""); }, [zoneId, logType]);
-
   // A bay without its own total yet falls back to whatever's already
   // assigned across its fields — same fallback AddZoneForm uses.
   const bayPipeBound = bay.pipeCount || bay.zones.reduce((s, z) => s + zonePipeCount(z), 0) || null;
-
   const pendingRanges = [
     ...(rangeFrom1 !== "" && rangeTo1 !== "" ? [{ from: Number(rangeFrom1), to: Number(rangeTo1) }] : []),
     ...(rangeFrom2 !== "" && rangeTo2 !== "" ? [{ from: Number(rangeFrom2), to: Number(rangeTo2) }] : []),
@@ -1478,10 +1487,8 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
     onAddCwtRun(bay.id, zoneId, { date: runDate, dest: runDest, cwt: Number(runCwt) });
     setRunCwt(""); setRunDest("");
   };
-
   const pipeChecks = [...(zoneData.pipeChecks || [])].reverse();
   const cwtRuns = [...(zoneData.cwtRuns || [])].reverse();
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -1505,7 +1512,6 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
           </Button>
         )}
       </div>
-
       {bay.zones.length === 0 && (
         <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
           <div style={{ fontSize: 14, color: "#c7cede", marginBottom: 10 }}>
@@ -1516,13 +1522,12 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
           )}
         </div>
       )}
-
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <StatBlock label="Bay inventory" value={`${fmt(stats.currentCwt)} cwt`} sub={`${Math.round(stats.fillPct * 100)}% of ${fmt(stats.capacityCwt)} cwt`} accent="#f2c14e" />
         <StatBlock label="Total run out" value={`${fmt(stats.totalRun)} cwt`} />
         <StatBlock label="Bay shrink" value={`${fmt(stats.shrinkCwt)} cwt`} sub={`${(stats.shrinkPct * 100).toFixed(2)}%`} accent={stats.shrinkPct > 0.08 ? "#e08787" : "#8fd19e"} />
       </div>
-
+      <LiveConditionsCard bay={bay} />
       <div>
         <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
           <Layers size={13} /> INTERIOR VIEW — FIELD DIVISION
@@ -1532,7 +1537,6 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
         </div>
         <div style={{ marginTop: 8 }}><Legend bays={[bay]} /></div>
       </div>
-
       {bay.zones.length > 0 && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           {bay.zones.map((z) => (
@@ -1554,7 +1558,6 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
           )}
         </div>
       )}
-
       {bay.zones.length > 0 && !readOnly && showAddZone && (
         <AddZoneForm
           bay={bay} varieties={varieties} customers={customers}
@@ -1562,7 +1565,6 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
           onAdd={(z) => { onAddZoneToBay(bay.id, z); setShowAddZone(false); }}
         />
       )}
-
       {zone && zs && (
         <>
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
@@ -1583,7 +1585,6 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
             </div>
             <StatBlock label="Field shrink" value={`${fmt(zs.shrinkCwt)} cwt`} sub={`${(zs.shrinkPct * 100).toFixed(2)}%`} accent={zs.shrinkPct > 0.08 ? "#e08787" : "#8fd19e"} />
           </div>
-
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
             <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
               <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
@@ -1648,7 +1649,6 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
                 })}
               </div>
             </div>
-
             <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
               <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
                 <TrendingDown size={16} color="#f2c14e" /> Log cwt run out — {zone.name}
@@ -1677,18 +1677,15 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
     </div>
   );
 }
-
 /* ---------------------------------------------------------------
    Temperature tab
 ----------------------------------------------------------------*/
 const CURING_DAYS = 30; // ~1 month post-fill, wider top/bottom spread is expected
-
 function daysSince(fillDateStr, onDateStr) {
   if (!fillDateStr || !onDateStr) return null;
   const ms = new Date(onDateStr) - new Date(fillDateStr);
   return Math.round(ms / 86400000);
 }
-
 function deltaStatus(delta, daysIn) {
   const abs = Math.abs(delta);
   if (daysIn != null && daysIn >= 0 && daysIn <= CURING_DAYS) {
@@ -1699,7 +1696,6 @@ function deltaStatus(delta, daysIn) {
   if (abs > 3) return { level: "wide", color: "#e08787", note: "wider than target — worth a check" };
   return { level: "ok", color: "#8fd19e", note: "within normal range (target ~1.5°F)" };
 }
-
 // Averages same-day readings per position, then pairs top/bottom by nearest
 // date rather than requiring an exact match — so a top reading on Monday and
 // a bottom reading on Wednesday still produce a delta.
@@ -1724,7 +1720,6 @@ function buildBayDaySeries(logs) {
     })
     .sort((a, b) => a.date.localeCompare(b.date));
 }
-
 // Simple per-pipe reference table: most recent Top and most recent Bottom
 // logged at each individual pipe, whatever dates those happen to be.
 function latestByPipe(logs) {
@@ -1742,7 +1737,6 @@ function latestByPipe(logs) {
     }))
     .sort((a, b) => a.pipeNumber - b.pipeNumber);
 }
-
 function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
   const [bayId, setBayId] = useState(bays[0]?.id);
   const bay = bays.find((b) => b.id === bayId);
@@ -1866,7 +1860,6 @@ function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
     </div>
   );
 }
-
 /* ---------------------------------------------------------------
    Inspections tab
 ----------------------------------------------------------------*/
@@ -1937,7 +1930,6 @@ function InspectionsTab({ bays, inspections, onAdd, readOnly }) {
     </div>
   );
 }
-
 /* ---------------------------------------------------------------
    Sprout Nip tab — product library (with per-customer restriction
    rules), applicator roster, application logging per field, and
@@ -2124,7 +2116,6 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
     </div>
   );
 }
-
 /* ---------------------------------------------------------------
    Customers tab — manage the customer roster. This is the only
    place new customers get created; every other customer field in
@@ -2188,7 +2179,6 @@ function CustomersTab({ customers, bays, onAdd }) {
     </div>
   );
 }
-
 /* ---------------------------------------------------------------
    Varieties tab — manage the variety roster, same pattern as customers.
 ----------------------------------------------------------------*/
@@ -2250,7 +2240,6 @@ function VarietiesTab({ varieties, bays, onAdd }) {
     </div>
   );
 }
-
 /* ---------------------------------------------------------------
    Manage tab — create Locations (complexes), Buildings, and Bays
    (with their fields) without touching code.
@@ -2264,7 +2253,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   const [locLat, setLocLat] = useState("");
   const [locLng, setLocLng] = useState("");
   const [locError, setLocError] = useState("");
-
   const submitLocation = () => {
     const trimmed = locName.trim();
     if (!trimmed) return;
@@ -2277,14 +2265,12 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
     });
     setLocName(""); setLocAddress(""); setLocLat(""); setLocLng(""); setLocError("");
   };
-
   // --- add building ---
   const [bldgLocationId, setBldgLocationId] = useState(locations[0]?.id || "");
   const [bldgName, setBldgName] = useState("");
   const [bldgCwtPerPipe, setBldgCwtPerPipe] = useState("");
   const [bldgPileHeight, setBldgPileHeight] = useState(18);
   const [bldgError, setBldgError] = useState("");
-
   const submitBuilding = () => {
     const trimmed = bldgName.trim();
     if (!trimmed || !bldgLocationId) return;
@@ -2297,7 +2283,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
     });
     setBldgName(""); setBldgCwtPerPipe(""); setBldgPileHeight(18); setBldgError("");
   };
-
   // --- add bay (with zones) ---
   const [bayLocationId, setBayLocationId] = useState(locations[0]?.id || "");
   const buildingsHere = buildings.filter((b) => b.locationId === bayLocationId);
@@ -2306,7 +2291,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
     const opts = buildings.filter((b) => b.locationId === bayLocationId);
     setBayBuildingId(opts[0]?.id || "");
   }, [bayLocationId, buildings]);
-
   const [bayName, setBayName] = useState("");
   const [bayFillDate, setBayFillDate] = useState(todayStr());
   const [bayPipeCount, setBayPipeCount] = useState("");
@@ -2327,14 +2311,11 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   // for adding fields right away if you already know them.
   const [zoneRows, setZoneRows] = useState([]);
   const [bayError, setBayError] = useState("");
-
   const updateZoneRow = (i, patch) => setZoneRows((rows) => rows.map((r, ri) => ri === i ? { ...r, ...patch } : r));
   const addZoneRow = () => setZoneRows((rows) => [...rows, { name: `Field ${rows.length + 1}`, variety: varieties[0] || "", customer: "Unassigned", pipeFrom: "", pipeTo: "", cwtPerPipe: "" }]);
   const removeZoneRow = (i) => setZoneRows((rows) => rows.filter((_, ri) => ri !== i));
-
   const zoneRowPipeSum = zoneRows.reduce((s, r) => s + pipeRangeSet([{ from: r.pipeFrom, to: r.pipeTo }]).size, 0);
   const bayPipeBound = bayPipeCount !== "" ? Number(bayPipeCount) : null;
-
   const submitBay = () => {
     const trimmed = bayName.trim();
     if (!trimmed) { setBayError("Give the bay a name."); return; }
@@ -2366,7 +2347,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
     setBayName(""); setBayPipeCount(""); bayCwtTouched.current = false; bayPileHeightTouched.current = false; setZoneRows([]);
     setBayError("");
   };
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24, maxWidth: 900 }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
@@ -2384,7 +2364,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
           {locError && <div style={{ fontSize: 12, color: "#e08787", marginBottom: 8 }}>{locError}</div>}
           <Button onClick={submitLocation}><Plus size={14} /> Add location</Button>
         </div>
-
         {/* Building */}
         <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
           <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
@@ -2414,7 +2393,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
           <Button onClick={submitBuilding} disabled={!locations.length}><Plus size={14} /> Add building</Button>
         </div>
       </div>
-
       {/* Bay + fields */}
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
@@ -2464,7 +2442,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
             <> <b style={{ color: "#e0a63e" }}>≈ {fmt(Number(bayCwtPerPipe) * 0.5)} cwt/pipe effective at 9'.</b></>
           )}
         </div>
-
         <div style={{ fontSize: 11, color: "#8790a3", margin: "10px 0 6px", letterSpacing: 0.3 }}>
           FIELDS IN THIS BAY (OPTIONAL — you can create the bay empty and add product later)
         </div>
@@ -2506,14 +2483,12 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
             Fields above add up to {zoneRowPipeSum} pipe, more than the {bayPipeCount} total entered for this bay — just a heads up, it'll still save.
           </div>
         )}
-
         {bayError && <div style={{ fontSize: 12, color: "#e08787", margin: "10px 0" }}>{bayError}</div>}
         {readOnly && <div style={{ fontSize: 12, color: "#f2c14e", margin: "10px 0" }}>Switch to the current season to add a bay.</div>}
         <div style={{ marginTop: 10 }}>
           <Button onClick={submitBay} disabled={readOnly}><Plus size={14} /> Create bay</Button>
         </div>
       </div>
-
       {/* existing structure — click into any field to edit it */}
       <div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 4 }}>
@@ -2525,7 +2500,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
           )}
         </div>
         <div style={{ fontSize: 11.5, color: "#6f7890", marginBottom: 10 }}>Click any name or value below to rename or correct it — changes save when you click away.</div>
-
         {showEmptyAll && (
           <div style={{ background: "#1c1414", border: "1px solid #4a2b2b", borderRadius: 10, padding: 14, marginBottom: 14 }}>
             <div style={{ fontSize: 13.5, color: "#f0d3d3", marginBottom: 8 }}>
@@ -2544,7 +2518,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
             </div>
           </div>
         )}
-
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           {locations.map((loc) => {
             const buildingsHere = buildings.filter((b) => b.locationId === loc.id);
@@ -2611,7 +2584,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
     </div>
   );
 }
-
 // A bay in the Manage Sites structure tree. A bay can exist with zero fields
 // — "No product assigned yet" — and product gets attached to it here (or
 // from Bay Detail) whenever it's actually ready to be filled.
@@ -2636,6 +2608,8 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
         {(bay.pileHeight || 18) === 9 && bay.cwtPerPipe > 0 && (
           <span style={{ fontSize: 11, color: "#e0a63e" }}>≈ {fmt(bay.cwtPerPipe * 0.5)} cwt/pipe effective</span>
         )}
+        <span style={{ fontSize: 11, color: "#6f7890" }}>Agri-Stor bin</span>
+        <EditableInline value={bay.agristorBinName ?? ""} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { agristorBinName: v || null })} width={140} placeholder="not linked" />
         {!readOnly && bay.zones.length > 0 && (
           <button
             onClick={() => {
@@ -2703,7 +2677,6 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
     </div>
   );
 }
-
 /* ---------------------------------------------------------------
    Summary tab — pivot by variety / customer / location / bay
 ----------------------------------------------------------------*/
@@ -2714,12 +2687,10 @@ function resetBaysForNewSeason(bays, varieties) {
     zones: b.zones.map((z) => ({ ...z, variety: varieties[0] || z.variety, customer: "Unassigned" })),
   }));
 }
-
 function sortBaysByBuilding(bays, buildings) {
   const order = new Map(buildings.map((b, i) => [b.id, i]));
   return [...bays].sort((a, b) => (order.get(a.buildingId) ?? 999) - (order.get(b.buildingId) ?? 999));
 }
-
 function buildLedger(bays, statsById, buildingsById, locationsById) {
   const rows = [];
   bays.forEach((bay) => {
@@ -2755,20 +2726,16 @@ function buildLedger(bays, statsById, buildingsById, locationsById) {
   });
   return rows;
 }
-
 const DIM_OPTIONS = [
   { key: "variety", label: "Variety" },
   { key: "customer", label: "Customer" },
   { key: "location", label: "Location" },
   { key: "bay", label: "Bay" },
 ];
-
 function SummaryTab({ bays, statsById, buildingsById, locationsById }) {
   const [dims, setDims] = useState(["variety"]);
   const ledger = useMemo(() => buildLedger(bays, statsById, buildingsById, locationsById), [bays, statsById, buildingsById, locationsById]);
-
   const toggleDim = (key) => setDims((d) => (d.includes(key) ? d.filter((k) => k !== key) : [...d, key]));
-
   const grouped = useMemo(() => {
     const map = new Map();
     ledger.forEach((row) => {
@@ -2783,12 +2750,10 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById }) {
     });
     return Array.from(map.values()).sort((a, b) => b.capacity - a.capacity);
   }, [ledger, dims]);
-
   const totals = grouped.reduce((acc, g) => ({
     capacity: acc.capacity + g.capacity, inStorage: acc.inStorage + g.inStorage,
     shipped: acc.shipped + g.shipped, shrink: acc.shrink + g.shrink,
   }), { capacity: 0, inStorage: 0, shipped: 0, shrink: 0 });
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div>
@@ -2804,16 +2769,13 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById }) {
           ))}
         </div>
       </div>
-
       <Legend bays={bays} />
-
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <StatBlock label="Total capacity" value={`${fmt(totals.capacity)} cwt`} />
         <StatBlock label="In storage" value={`${fmt(totals.inStorage)} cwt`} accent="#f2c14e" />
         <StatBlock label="Shipped" value={`${fmt(totals.shipped)} cwt`} />
         <StatBlock label="Shrink" value={`${fmt(totals.shrink)} cwt`} sub={totals.capacity ? `${((totals.shrink / totals.capacity) * 100).toFixed(2)}% of capacity` : ""} accent="#e08787" />
       </div>
-
       <div style={{ overflowX: "auto", border: "1px solid #232d40", borderRadius: 10 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
@@ -2860,7 +2822,6 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById }) {
 }
 const thStyle = { padding: "9px 12px", fontSize: 11, color: "#8790a3", letterSpacing: 0.3, fontWeight: 600 };
 const tdStyle = { padding: "9px 12px", color: "#c7cede" };
-
 /* ---------------------------------------------------------------
    Overview cards (yard tab footer)
 ----------------------------------------------------------------*/
@@ -2904,7 +2865,6 @@ function OverviewCards({ bays, statsById, onSelect }) {
     </div>
   );
 }
-
 /* =================================================================
    App
 ==================================================================*/
@@ -2925,81 +2885,65 @@ export default function PotatoStorage() {
   const [selectedLocationId, setSelectedLocationId] = useState(DEFAULT_LOCATIONS[0].id);
   const [selectedId, setSelectedId] = useState(DEFAULT_BAYS[0].id);
   const [showNewSeason, setShowNewSeason] = useState(false);
-
   useEffect(() => {
     (async () => {
       const locs0 = await loadJSON(LOCATIONS_KEY, null);
       const locList = locs0 && Array.isArray(locs0) && locs0.length ? locs0 : DEFAULT_LOCATIONS;
       if (!locs0) await saveJSON(LOCATIONS_KEY, DEFAULT_LOCATIONS);
       setLocations(locList);
-
       const blds0 = await loadJSON(BUILDINGS_KEY, null);
       const bldList = blds0 && Array.isArray(blds0) && blds0.length ? blds0 : DEFAULT_BUILDINGS;
       if (!blds0) await saveJSON(BUILDINGS_KEY, DEFAULT_BUILDINGS);
       setBuildings(bldList);
-
       const cfg = await loadJSON(CONFIG_KEY, null);
       const bayList = cfg && Array.isArray(cfg) && cfg.length ? cfg : DEFAULT_BAYS;
       if (!cfg) await saveJSON(CONFIG_KEY, DEFAULT_BAYS);
       setBays(bayList);
-
       const dataEntries = {};
       for (const b of bayList) {
         dataEntries[b.id] = await loadJSON(bayDataKey(b.id), emptyBayData(b));
       }
       setDataById(dataEntries);
-
       const insp = await loadJSON(INSPECTIONS_KEY, []);
       setInspections(insp);
-
       const custs = await loadJSON(CUSTOMERS_KEY, null);
       const custList = custs && Array.isArray(custs) && custs.length ? custs : DEFAULT_CUSTOMERS;
       if (!custs) await saveJSON(CUSTOMERS_KEY, DEFAULT_CUSTOMERS);
       setCustomers(custList);
-
       const varList0 = await loadJSON(VARIETIES_KEY, null);
       const varList = varList0 && Array.isArray(varList0) && varList0.length ? varList0 : DEFAULT_VARIETIES;
       if (!varList0) await saveJSON(VARIETIES_KEY, DEFAULT_VARIETIES);
       setVarieties(varList);
-
       const prods0 = await loadJSON(PRODUCTS_KEY, null);
       const prodList = prods0 && Array.isArray(prods0) && prods0.length ? prods0 : DEFAULT_PRODUCTS;
       if (!prods0) await saveJSON(PRODUCTS_KEY, DEFAULT_PRODUCTS);
       setProducts(prodList);
-
       const apps0 = await loadJSON(APPLICATORS_KEY, null);
       const appList = apps0 && Array.isArray(apps0) ? apps0 : DEFAULT_APPLICATORS;
       if (!apps0) await saveJSON(APPLICATORS_KEY, DEFAULT_APPLICATORS);
       setApplicators(appList);
-
       const seasons0 = await loadJSON(SEASONS_KEY, null);
       const seasonList = seasons0 && Array.isArray(seasons0) && seasons0.length ? seasons0 : DEFAULT_SEASONS;
       if (!seasons0) await saveJSON(SEASONS_KEY, DEFAULT_SEASONS);
       setSeasons(seasonList);
       const active = seasonList.find((s) => s.snapshot === null) || seasonList[seasonList.length - 1];
       setSelectedSeasonId(active.id);
-
       setLoaded(true);
     })();
   }, []);
-
   const activeSeason = useMemo(() => seasons.find((s) => s.snapshot === null) || seasons[seasons.length - 1], [seasons]);
   const isReadOnly = activeSeason ? selectedSeasonId !== activeSeason.id : false;
   const selectedSeason = seasons.find((s) => s.id === selectedSeasonId) || activeSeason;
-
   const displayBays = isReadOnly && selectedSeason?.snapshot ? selectedSeason.snapshot.bays : bays;
   const displayDataById = isReadOnly && selectedSeason?.snapshot ? selectedSeason.snapshot.dataById : dataById;
   const displayInspections = isReadOnly && selectedSeason?.snapshot ? selectedSeason.snapshot.inspections : inspections;
-
   const statsById = useMemo(() => {
     const out = {};
     displayBays.forEach((b) => { out[b.id] = computeBayStats(b, displayDataById[b.id] || emptyBayData(b)); });
     return out;
   }, [displayBays, displayDataById]);
-
   const buildingsById = useMemo(() => Object.fromEntries(buildings.map((b) => [b.id, b])), [buildings]);
   const locationsById = useMemo(() => Object.fromEntries(locations.map((l) => [l.id, l])), [locations]);
-
   // Default display order everywhere: alphabetical (numeric-aware). Bays stay
   // grouped by building — sorting bay names first, then grouping by building
   // in alphabetical building order, keeps each building's bays contiguous
@@ -3011,20 +2955,16 @@ export default function PotatoStorage() {
   const sortedVarieties = useMemo(() => sortByNatural(varieties), [varieties]);
   const sortedProducts = useMemo(() => sortByNatural(products, (p) => p.name), [products]);
   const sortedApplicators = useMemo(() => sortByNatural(applicators), [applicators]);
-
   const selectedLocation = locationsById[selectedLocationId] || sortedLocations[0];
-
   const locationBays = useMemo(() => {
     const filtered = displayBays.filter((b) => buildingsById[b.buildingId]?.locationId === selectedLocationId);
     return sortBaysByBuilding(sortByNatural(filtered, (b) => b.name), sortedBuildings);
   }, [displayBays, buildingsById, sortedBuildings, selectedLocationId]);
-
   useEffect(() => {
     if (!locationBays.length) return;
     if (!locationBays.find((b) => b.id === selectedId)) setSelectedId(locationBays[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLocationId, selectedSeasonId, locationBays.map((b) => b.id).join(",")]);
-
   // If the currently-selected location gets deleted, fall back to whatever's
   // first in the list rather than pointing at nothing.
   useEffect(() => {
@@ -3032,7 +2972,6 @@ export default function PotatoStorage() {
       setSelectedLocationId(sortedLocations[0].id);
     }
   }, [sortedLocations, selectedLocationId]);
-
   const updateZoneData = useCallback((bayId, zoneId, updater) => {
     if (isReadOnly) return;
     setDataById((prev) => {
@@ -3046,7 +2985,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, [isReadOnly]);
-
   const onAddPipeCheck = useCallback((bayId, zoneId, entry) => {
     if (isReadOnly) return;
     const bay = bays.find((b) => b.id === bayId);
@@ -3055,9 +2993,7 @@ export default function PotatoStorage() {
     const bayPipeBound = bay.pipeCount || bay.zones.reduce((s, z) => s + zonePipeCount(z), 0) || null;
     const rangesOk = (entry.ranges || []).every((r) => rangeFitsBay(r, bayPipeBound));
     if (!rangesOk) return; // defensive — the Log Pipe form already validates this before calling in
-
     updateZoneData(bayId, zoneId, (zd) => ({ ...zd, pipeChecks: [...(zd.pipeChecks || []), entry] }));
-
     if (entry.type === "fill") {
       // Filling can grow a field's footprint into pipe it didn't cover
       // before — extend pipeRanges and refresh the cached pipeCount.
@@ -3078,11 +3014,9 @@ export default function PotatoStorage() {
       });
     }
   }, [updateZoneData, isReadOnly, bays]);
-
   const onAddCwtRun = useCallback((bayId, zoneId, entry) => {
     updateZoneData(bayId, zoneId, (zd) => ({ ...zd, cwtRuns: [...(zd.cwtRuns || []), entry] }));
   }, [updateZoneData]);
-
   const onAddTemp = useCallback((bayId, entry) => {
     if (isReadOnly) return;
     setDataById((prev) => {
@@ -3093,7 +3027,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, [isReadOnly]);
-
   const onAddInspection = useCallback((entry) => {
     if (isReadOnly) return;
     setInspections((prev) => {
@@ -3102,7 +3035,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, [isReadOnly]);
-
   const onAddCustomer = useCallback((name) => {
     setCustomers((prev) => {
       if (prev.some((c) => c.toLowerCase() === name.toLowerCase())) return prev;
@@ -3111,7 +3043,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, []);
-
   const onUpdateZoneCustomer = useCallback((bayId, zoneId, customer) => {
     if (isReadOnly) return;
     setBays((prev) => {
@@ -3122,7 +3053,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, [isReadOnly]);
-
   const onAddVariety = useCallback((name) => {
     setVarieties((prev) => {
       if (prev.some((v) => v.toLowerCase() === name.toLowerCase())) return prev;
@@ -3131,7 +3061,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, []);
-
   const onUpdateZoneVariety = useCallback((bayId, zoneId, variety) => {
     if (isReadOnly) return;
     setBays((prev) => {
@@ -3142,7 +3071,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, [isReadOnly]);
-
   const onAddProduct = useCallback((product) => {
     setProducts((prev) => {
       const next = [...prev, product];
@@ -3150,7 +3078,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, []);
-
   const onUpdateProductRestrictions = useCallback((productId, restrictedCustomers) => {
     setProducts((prev) => {
       const next = prev.map((p) => p.id === productId ? { ...p, restrictedCustomers } : p);
@@ -3158,7 +3085,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, []);
-
   const onAddApplicator = useCallback((name) => {
     setApplicators((prev) => {
       if (prev.some((a) => a.toLowerCase() === name.toLowerCase())) return prev;
@@ -3167,11 +3093,9 @@ export default function PotatoStorage() {
       return next;
     });
   }, []);
-
   const onAddSproutApplication = useCallback((bayId, zoneId, entry) => {
     updateZoneData(bayId, zoneId, (zd) => ({ ...zd, sproutApplications: [...(zd.sproutApplications || []), entry] }));
   }, [updateZoneData]);
-
   const onAddLocation = useCallback((location) => {
     setLocations((prev) => {
       const next = [...prev, location];
@@ -3179,7 +3103,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, []);
-
   const onUpdateLocation = useCallback((locationId, patch) => {
     setLocations((prev) => {
       const next = prev.map((l) => l.id === locationId ? { ...l, ...patch } : l);
@@ -3187,7 +3110,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, []);
-
   const onAddBuilding = useCallback((building) => {
     setBuildings((prev) => {
       const next = [...prev, building];
@@ -3195,7 +3117,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, []);
-
   const onUpdateBuilding = useCallback((buildingId, patch) => {
     setBuildings((prev) => {
       const next = prev.map((b) => b.id === buildingId ? { ...b, ...patch } : b);
@@ -3203,7 +3124,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, []);
-
   const onAddBay = useCallback((bay) => {
     if (isReadOnly) return;
     setBays((prev) => {
@@ -3217,7 +3137,6 @@ export default function PotatoStorage() {
     setSelectedLocationId(buildingsById[bay.buildingId]?.locationId || selectedLocationId);
     setSelectedId(bay.id);
   }, [buildingsById, selectedLocationId, isReadOnly]);
-
   const onUpdateBayMeta = useCallback((bayId, patch) => {
     if (isReadOnly) return;
     setBays((prev) => {
@@ -3226,7 +3145,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, [isReadOnly]);
-
   const onUpdateZoneMeta = useCallback((bayId, zoneId, patch) => {
     if (isReadOnly) return;
     setBays((prev) => {
@@ -3237,7 +3155,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, [isReadOnly]);
-
   // Attaches a new field/product to a bay that already exists — this is how
   // an empty bay (created with no product yet) gets filled in later, and how
   // a bay gets a second field without having to have known about it upfront.
@@ -3249,7 +3166,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, [isReadOnly]);
-
   // Clears every field out of a single bay — the reverse of onAddZoneToBay.
   // Used once a bay has fully run out and is ready to sit empty until it's
   // filled again; the bay itself (and its history in past seasons) stays.
@@ -3264,7 +3180,6 @@ export default function PotatoStorage() {
     setDataById((prev) => ({ ...prev, [bayId]: empty }));
     saveJSON(bayDataKey(bayId), empty);
   }, [isReadOnly]);
-
   // Bulk version of onEmptyBay — empties every bay across every site in one
   // go (e.g. at full cleanout time). Bay/building/location structure and
   // archived seasons are untouched; only the current season's product
@@ -3286,7 +3201,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, [isReadOnly, bays]);
-
   // Deletes a single field from a bay — unlike emptying a bay, this drops
   // that one field's logged history (checks/runs) for good. The confirming
   // prompt happens at the UI layer before this is called.
@@ -3308,7 +3222,6 @@ export default function PotatoStorage() {
       return next;
     });
   }, [isReadOnly]);
-
   // Deletes a bay entirely — its structure and everything logged in it.
   // The building/location it lived in is untouched.
   const onDeleteBay = useCallback((bayId) => {
@@ -3326,7 +3239,6 @@ export default function PotatoStorage() {
     });
     deleteJSON(bayDataKey(bayId));
   }, [isReadOnly]);
-
   // Deletes a building and cascades to every bay inside it (and each bay's
   // logged history). The UI confirms the bay count with the user first.
   const onDeleteBuilding = useCallback((buildingId) => {
@@ -3349,7 +3261,6 @@ export default function PotatoStorage() {
     });
     bayIdsHere.forEach((id) => deleteJSON(bayDataKey(id)));
   }, [isReadOnly, bays]);
-
   // Deletes a location and cascades to every building and bay under it. The
   // UI confirms the building/bay counts with the user first.
   const onDeleteLocation = useCallback((locationId) => {
@@ -3378,7 +3289,6 @@ export default function PotatoStorage() {
     });
     bayIdsHere.forEach((id) => deleteJSON(bayDataKey(id)));
   }, [isReadOnly, buildings, bays]);
-
   const onStartNewSeason = useCallback((label) => {
     const newSeasonId = uid("season");
     setSeasons((prev) => {
@@ -3399,9 +3309,7 @@ export default function PotatoStorage() {
     saveJSON(INSPECTIONS_KEY, []);
     setSelectedSeasonId(newSeasonId);
   }, [activeSeason, bays, dataById, inspections, varieties]);
-
   const selectedBay = displayBays.find((b) => b.id === selectedId) || locationBays[0];
-
   const NAV = [
     { id: "yard", label: "3D Yard", icon: Warehouse },
     { id: "map", label: "Map", icon: MapIcon },
@@ -3413,7 +3321,6 @@ export default function PotatoStorage() {
     { id: "temp", label: "Temperature", icon: Thermometer },
     { id: "sproutnip", label: "Sprout Nip", icon: FlaskConical },
   ];
-
   if (!loaded) {
     return (
       <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#0e1420", color: "#8790a3", fontFamily: "'JetBrains Mono', monospace" }}>
@@ -3421,7 +3328,6 @@ export default function PotatoStorage() {
       </div>
     );
   }
-
   return (
     <div style={{ height: "100%", minHeight: 640, display: "flex", flexDirection: "column", background: "#0e1420", fontFamily: "Inter, system-ui, sans-serif", color: "#eef1f6" }}>
       <div style={{ padding: "16px 20px", borderBottom: "1px solid #232d40", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
@@ -3471,7 +3377,6 @@ export default function PotatoStorage() {
           })}
         </div>
       </div>
-
       {showNewSeason && (
         <NewSeasonPrompt
           activeSeasonLabel={activeSeason?.label}
@@ -3479,7 +3384,6 @@ export default function PotatoStorage() {
           onConfirm={(label) => { onStartNewSeason(label); setShowNewSeason(false); }}
         />
       )}
-
       {isReadOnly && (
         <div style={{ background: "rgba(224,166,62,0.1)", borderBottom: "1px solid #3a3320", padding: "8px 20px", fontSize: 12.5, color: "#f2c14e", display: "flex", alignItems: "center", gap: 8 }}>
           <Layers size={13} /> Viewing <b>{selectedSeason?.label}</b> — archived, read-only.
@@ -3488,7 +3392,6 @@ export default function PotatoStorage() {
           </button>
         </div>
       )}
-
       <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
         {tab === "yard" && (
           <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
@@ -3508,14 +3411,12 @@ export default function PotatoStorage() {
             )}
           </div>
         )}
-
         {tab === "map" && (
           <div style={{ flex: 1, minHeight: 380 }}>
             <MapTab locations={sortedLocations} bays={displayBays} buildingsById={buildingsById} statsById={statsById}
               onSelectLocation={(id) => { setSelectedLocationId(id); setTab("yard"); }} />
           </div>
         )}
-
         {tab === "detail" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? (
@@ -3540,13 +3441,11 @@ export default function PotatoStorage() {
             )}
           </div>
         )}
-
         {tab === "summary" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             <SummaryTab bays={displayBays} statsById={statsById} buildingsById={buildingsById} locationsById={locationsById} />
           </div>
         )}
-
         {tab === "manage" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             <ManageTab locations={sortedLocations} buildings={sortedBuildings} bays={bays} varieties={sortedVarieties} customers={sortedCustomers} readOnly={isReadOnly}
@@ -3556,19 +3455,16 @@ export default function PotatoStorage() {
               onDeleteLocation={onDeleteLocation} onDeleteBuilding={onDeleteBuilding} onDeleteBay={onDeleteBay} onDeleteZone={onDeleteZone} />
           </div>
         )}
-
         {tab === "customers" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             <CustomersTab customers={sortedCustomers} bays={displayBays} onAdd={onAddCustomer} />
           </div>
         )}
-
         {tab === "varieties" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             <VarietiesTab varieties={sortedVarieties} bays={displayBays} onAdd={onAddVariety} />
           </div>
         )}
-
         {tab === "temp" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
@@ -3576,7 +3472,6 @@ export default function PotatoStorage() {
             )}
           </div>
         )}
-
         {tab === "sproutnip" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
