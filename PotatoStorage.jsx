@@ -2296,6 +2296,11 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   const [bayPipeCount, setBayPipeCount] = useState("");
   const [bayCwtPerPipe, setBayCwtPerPipe] = useState("");
   const [bayPileHeight, setBayPileHeight] = useState(18);
+  // Optional — ties this bay to a bin in the Agri-Stor monitoring panel so a
+  // scheduled sync knows which bay to attach live temperature/CO2/etc.
+  // readings to. Must match that panel's bin name exactly (e.g. "Hidden
+  // Valley 1-2").
+  const [bayAgristorBin, setBayAgristorBin] = useState("");
   // Prefill the bay's cwt/pipe and pile height from its building's defaults
   // whenever the building changes — but only while still untouched, so it
   // never clobbers something already picked/typed in.
@@ -2342,9 +2347,11 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
       pipeCount: bayPipeBound ?? (zoneRowPipeSum || null),
       cwtPerPipe: bayCwtPerPipe !== "" ? Number(bayCwtPerPipe) : 2500,
       pileHeight: bayPileHeight,
+      agristorBinName: bayAgristorBin.trim() || null,
       zones,
     });
-    setBayName(""); setBayPipeCount(""); bayCwtTouched.current = false; bayPileHeightTouched.current = false; setZoneRows([]);
+    setBayName(""); setBayPipeCount(""); bayCwtTouched.current = false; bayPileHeightTouched.current = false;
+    setBayAgristorBin(""); setZoneRows([]);
     setBayError("");
   };
   return (
@@ -2433,11 +2440,20 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
               {PILE_HEIGHT_OPTIONS.map((h) => <option key={h} value={h}>{h}'</option>)}
             </select>
           </Field>
+          <Field label="Agri-Stor bin name (optional)">
+            <input
+              value={bayAgristorBin}
+              onChange={(e) => setBayAgristorBin(e.target.value)}
+              style={{ ...inputStyle, width: 160 }}
+              placeholder="e.g. Hidden Valley 1-2"
+            />
+          </Field>
         </div>
         <div style={{ fontSize: 11, color: "#5b6478", margin: "6px 0" }}>
           Leave "Total pipe" blank to use the sum of the fields below once they're filled in. Cwt/pipe and pile height
           prefill from the building's defaults and can be changed here or later. Always enter cwt/pipe as if piled 18'
-          high — a 9' pile automatically holds about half that.
+          high — a 9' pile automatically holds about half that. "Agri-Stor bin name" must match that panel's bin name
+          exactly — it's how the hourly sync knows which bay a reading belongs to.
           {bayPileHeight === 9 && bayCwtPerPipe !== "" && !isNaN(Number(bayCwtPerPipe)) && (
             <> <b style={{ color: "#e0a63e" }}>≈ {fmt(Number(bayCwtPerPipe) * 0.5)} cwt/pipe effective at 9'.</b></>
           )}
