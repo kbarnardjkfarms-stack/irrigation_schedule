@@ -7,7 +7,16 @@ const SAMPLE_TYPES = Object.keys(METRICS_BY_TYPE)
 
 export default function AgronomyByCriteria({ fields }) {
   const [type, setType] = useState('soil')
+  const [metricKey, setMetricKey] = useState(METRICS_BY_TYPE.soil[0].key)
   const [samples, setSamples] = useState([])
+
+  // Some types (nematode especially, with 19 species) have many possible
+  // metrics - picking a type resets to that type's first metric, and a
+  // second dropdown lets you switch which one to actually rank fields by.
+  function handleTypeChange(nextType) {
+    setType(nextType)
+    setMetricKey(METRICS_BY_TYPE[nextType][0].key)
+  }
 
   useEffect(() => {
     const q = query(collection(db, 'samples'), where('type', '==', type), orderBy('receivedDt', 'desc'))
@@ -27,7 +36,7 @@ export default function AgronomyByCriteria({ fields }) {
     return next
   }, [samples])
 
-  const metric = METRICS_BY_TYPE[type][0]
+  const metric = METRICS_BY_TYPE[type].find((m) => m.key === metricKey) || METRICS_BY_TYPE[type][0]
 
   const rows = useMemo(() => {
     return fields
@@ -48,18 +57,26 @@ export default function AgronomyByCriteria({ fields }) {
     <div className="agronomy-by-criteria">
       <div className="agronomy-type-toggle">
         {SAMPLE_TYPES.map((t) => (
-          <button key={t} className={t === type ? 'active' : ''} onClick={() => setType(t)}>
+          <button key={t} className={t === type ? 'active' : ''} onClick={() => handleTypeChange(t)}>
             {SAMPLE_TYPE_LABEL[t]}
           </button>
         ))}
       </div>
+
+      {METRICS_BY_TYPE[type].length > 1 && (
+        <select value={metricKey} onChange={(e) => setMetricKey(e.target.value)} style={{ marginBottom: '10px' }}>
+          {METRICS_BY_TYPE[type].map((m) => (
+            <option key={m.key} value={m.key}>{m.label}</option>
+          ))}
+        </select>
+      )}
 
       <table className="agronomy-criteria-table">
         <thead>
           <tr>
             <th>Field</th>
             <th>Crop</th>
-            <th>{metric.label} ({metric.unit})</th>
+            <th>{metric.label}{metric.unit ? ` (${metric.unit})` : ''}</th>
             <th>Target</th>
             <th>Status</th>
           </tr>
@@ -82,7 +99,9 @@ export default function AgronomyByCriteria({ fields }) {
                   )}
                 </td>
                 <td>{value != null ? value : '\u2014'}</td>
-                <td className="agronomy-target-cell">{metric.target[0]}{'\u2013'}{metric.target[1]}</td>
+                <td className="agronomy-target-cell">
+                  {metric.target ? `${metric.target[0]}${'\u2013'}${metric.target[1]}` : 'Not set'}
+                </td>
                 <td>
                   {status
                     ? <span className="agronomy-status-badge" style={{ background: color.bg, color: color.fg }}>{status}</span>
