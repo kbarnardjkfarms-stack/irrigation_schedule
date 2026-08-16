@@ -92,26 +92,28 @@ export default function AgronomyByField({ fields }) {
           <p className="agronomy-kpi-value">{weeksSinceEmergence != null ? weeksSinceEmergence : '\u2014'}</p>
         </div>
         {Object.entries(METRICS_BY_TYPE).flatMap(([type, metrics]) =>
-          metrics.map((m) => {
-            const sample = latestByType[type]
-            const value = sample?.values?.[m.key]
-            const status = statusFor(value, m.target)
-            const color = status ? STATUS_COLOR[status] : null
-            return (
-              <div key={type + m.key} className="agronomy-kpi-card">
-                <p className="agronomy-kpi-label">{SAMPLE_TYPE_LABEL[type]} {m.label}</p>
-                <p className="agronomy-kpi-value">
-                  {value != null ? value : '\u2014'}
-                  {value != null && <span className="agronomy-kpi-unit"> {m.unit}</span>}
-                </p>
-                {status && (
-                  <span className="agronomy-status-badge" style={{ background: color.bg, color: color.fg }}>
-                    {status}
-                  </span>
-                )}
-              </div>
-            )
-          })
+          metrics
+            .filter((m) => m.target) // no target yet = not "at a glance" actionable; still visible in the sample table below
+            .map((m) => {
+              const sample = latestByType[type]
+              const value = sample?.values?.[m.key]
+              const status = statusFor(value, m.target)
+              const color = status ? STATUS_COLOR[status] : null
+              return (
+                <div key={type + m.key} className="agronomy-kpi-card">
+                  <p className="agronomy-kpi-label">{SAMPLE_TYPE_LABEL[type]} {m.label}</p>
+                  <p className="agronomy-kpi-value">
+                    {value != null ? value : '\u2014'}
+                    {value != null && <span className="agronomy-kpi-unit"> {m.unit}</span>}
+                  </p>
+                  {status && (
+                    <span className="agronomy-status-badge" style={{ background: color.bg, color: color.fg }}>
+                      {status}
+                    </span>
+                  )}
+                </div>
+              )
+            })
         )}
       </div>
 
