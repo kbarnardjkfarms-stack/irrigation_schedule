@@ -1,7 +1,6 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
     // ---- Role/permission helpers -------------------------------------
     // A single source of truth for "who is this person and what can they
     // touch," used by every match block below instead of repeating raw
@@ -50,7 +49,6 @@ service cloud.firestore {
       return canEditFarmData(fieldId)
         || (role == 'irrigator' && myData().canEditSchedule == true && string(fieldFarmId(fieldId)) in myFarmIds());
     }
-
     // Each person can read their own user record; an Admin or Owner can
     // read and write anyone's (that's what powers the Users tab's team
     // list). Nobody else can create or edit a user record — this is what
@@ -139,6 +137,23 @@ service cloud.firestore {
     match /fieldSettings/{fieldId} {
       allow read: if signedIn();
       allow write: if signedIn() && canEditFarmData(fieldId);
+    }
+    // Agri-Stor live conditions for Potato Storage — the "latest reading"
+    // doc per bin, plus its history subcollection (Plenum/Return
+    // air/Panel Δ T trend, see syncAgristorReadings in index.js and
+    // useAgristorReading/useAgristorHistory in PotatoStorage.jsx). Same
+    // pattern as devices/ above: the sync Cloud Function writes this with
+    // an Admin key that bypasses these rules, so "write: false" here only
+    // blocks the browser, never the sync job. This collection previously
+    // had no rule at all, which Firestore defaults to denying — that's
+    // what was causing "Missing or insufficient permissions" in the app.
+    match /agristorReadings/{binId} {
+      allow read: if signedIn();
+      allow write: if false;
+      match /history/{historyId} {
+        allow read: if signedIn();
+        allow write: if false;
+      }
     }
     // Potato Storage module. All of its data (bays, seasons, tube checks,
     // cwt runs, temp logs, Sprout Nip applications, product/customer/variety
