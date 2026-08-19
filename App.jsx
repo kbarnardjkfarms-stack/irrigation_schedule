@@ -614,7 +614,7 @@ export default function App() {
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: '10px' }}>
-          {(userRole === 'admin' || userRole === 'owner') && (
+          {(userRole === 'admin' || userRole === 'owner' || (page === 'irrigation' && selectedFarmId !== 'all')) && (
             <div ref={settingsMenuRef} style={{ position: 'relative' }}>
               <button
                 onClick={() => { setSettingsMenuOpen((o) => !o); setProfileMenuOpen(false) }}
@@ -628,10 +628,18 @@ export default function App() {
               </button>
               {settingsMenuOpen && (
                 <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '6px', background: '#fff', border: '0.5px solid #ddd8cc', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.12)', minWidth: '200px', zIndex: 10, overflow: 'hidden' }}>
-                  <button
-                    onClick={() => { setPage('users'); setSettingsMenuOpen(false) }}
-                    style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
-                  >Users &amp; Permissions</button>
+                  {(userRole === 'admin' || userRole === 'owner') && (
+                    <button
+                      onClick={() => { setPage('users'); setSettingsMenuOpen(false) }}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
+                    >Users &amp; Permissions</button>
+                  )}
+                  {page === 'irrigation' && selectedFarmId !== 'all' && (
+                    <button
+                      onClick={copyWatchLink}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: (userRole === 'admin' || userRole === 'owner') ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
+                    >{linkCopied ? 'Copied!' : 'Copy irrigator link'}</button>
+                  )}
                 </div>
               )}
             </div>
@@ -736,9 +744,6 @@ export default function App() {
                 <option key={f.id} value={f.id}>{f.name}</option>
               ))}
             </select>
-            {selectedFarmId !== 'all' && (
-              <button onClick={copyWatchLink}>{linkCopied ? 'Copied!' : 'Copy irrigator link'}</button>
-            )}
           </div>}
           {view === 'schedule' && <div className="week-nav">
             <button onClick={() => setWeekOffset((w) => w - 1)}>‹ Prev week</button>
