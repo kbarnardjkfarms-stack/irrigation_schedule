@@ -16,6 +16,7 @@ import Login from './Login.jsx'
 
 import PotatoStorage from './PotatoStorage.jsx'
 import Users from './Users.jsx'
+import PivotProfile from './PivotProfile.jsx'
 import Agronomy from './Agronomy.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
@@ -252,6 +253,8 @@ export default function App() {
   const [expandedPivotFieldId, setExpandedPivotFieldId] = useState(null)
   const [pivotPanelPos, setPivotPanelPos] = useState({ top: 0, left: 0 })
   const pivotDetailRef = useRef(null)
+  const [pivotProfileGuid, setPivotProfileGuid] = useState(null)
+  const [gpmByPivotGuid, setGpmByPivotGuid] = useState({})
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const settingsMenuRef = useRef(null)
@@ -436,6 +439,21 @@ export default function App() {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data() })
       setPivotsByGuid(next)
+    })
+    return () => unsub()
+  }, [user])
+
+  // GPM now lives on the pivot's own profile (a pivot can serve more than
+  // one field, e.g. Mietzner Middle, so it belongs with the machine, not
+  // any one field). This replaces fieldSettings.gpm as the source for the
+  // scheduled-inches column below — that field was never actually wired to
+  // a UI, so every field was showing 0.00 in "Scheduled inches" until now.
+  useEffect(() => {
+    if (!user) return
+    const unsub = onSnapshot(collection(db, 'pivotProfiles'), (snap) => {
+      const next = {}
+      snap.forEach((d) => { next[d.id] = d.data().currentGpm ?? null })
+      setGpmByPivotGuid(next)
     })
     return () => unsub()
   }, [user])
@@ -718,6 +736,7 @@ export default function App() {
       )}
       {page === 'potato-storage' && <PotatoStorage />}
       {page === 'users' && <Users />}
+      {page === 'pivot-profile' && <PivotProfile pivotGuid={pivotProfileGuid} onBack={() => setPage('irrigation')} />}
       {page === 'agronomy' && canSeeAgronomy && <Agronomy />}
       {page === 'irrigation' && (
         <>
@@ -901,7 +920,7 @@ export default function App() {
               <tbody>
                 {fields.map((field) => {
                   const events = eventsByField[field.id] || []
-                  const gpm = gpmByField[field.id]
+                  const gpm = gpmByPivotGuid[pivotGuidByFieldId[field.id]]
                   const color = CROP_COLOR[field.crop] || { bg: '#D3D1C7', fg: '#2C2C2A' }
                   const isSource = mode === 'copy-targets' && copySourceId === field.id
                   const isCopyTarget = mode === 'copy-targets' && copyTargets.has(field.id)
@@ -1003,6 +1022,16 @@ export default function App() {
           style={{ position: 'fixed', top: pivotPanelPos.top, left: pivotPanelPos.left, zIndex: 1000, boxShadow: '0 6px 16px rgba(0,0,0,0.12)' }}
         >
           <PivotDetailPanel pivot={pivotsByGuid[pivotGuidByFieldId[expandedPivotFieldId]]} />
+          {pivotGuidByFieldId[expandedPivotFieldId] && (
+            <button
+              onClick={() => {
+                setPivotProfileGuid(pivotGuidByFieldId[expandedPivotFieldId])
+                setPage('pivot-profile')
+                setExpandedPivotFieldId(null)
+              }}
+              style={{ width: '100%', borderRadius: '0 0 8px 8px', border: '1px solid #E2E4E8', borderTop: 'none', background: '#fff', padding: '8px 0', fontSize: '13px' }}
+            >Pivot profile</button>
+          )}
         </div>,
         document.body
       )}
