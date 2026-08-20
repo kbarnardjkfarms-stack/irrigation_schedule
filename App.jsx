@@ -1021,7 +1021,9 @@ export default function App() {
           onClick={(e) => e.stopPropagation()}
           style={{ position: 'fixed', top: pivotPanelPos.top, left: pivotPanelPos.left, zIndex: 1000, boxShadow: '0 6px 16px rgba(0,0,0,0.12)' }}
         >
-          <PivotDetailPanel pivot={pivotsByGuid[pivotGuidByFieldId[expandedPivotFieldId]]} />
+          <div style={{ borderTop: '1px solid #E2E4E8', borderRadius: '8px 8px 0 0', overflow: 'hidden' }}>
+            <PivotDetailPanel pivot={pivotsByGuid[pivotGuidByFieldId[expandedPivotFieldId]]} />
+          </div>
           {pivotGuidByFieldId[expandedPivotFieldId] && (
             <button
               onClick={() => {
@@ -1029,8 +1031,8 @@ export default function App() {
                 setPage('pivot-profile')
                 setExpandedPivotFieldId(null)
               }}
-              style={{ width: '100%', borderRadius: '0 0 8px 8px', border: '1px solid #E2E4E8', borderTop: 'none', background: '#fff', padding: '8px 0', fontSize: '13px' }}
-            >Pivot profile</button>
+              style={{ width: '100%', marginTop: '8px', borderRadius: '8px', border: 'none', background: '#3c5a3f', color: '#fff', fontWeight: 600, padding: '9px 0', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+            >Pivot profile <span style={{ fontWeight: 400 }}>&rarr;</span></button>
           )}
         </div>,
         document.body
