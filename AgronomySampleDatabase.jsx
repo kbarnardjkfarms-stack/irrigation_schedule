@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { collection, getDocs, limit, onSnapshot, orderBy, query, startAfter, where } from 'firebase/firestore'
 import { db } from './firebase.js'
 import { SAMPLE_TYPE_LABEL, METRICS_BY_TYPE, CROP_COLOR } from './AgronomyConfig.js'
@@ -6,19 +6,53 @@ import { SAMPLE_TYPE_LABEL, METRICS_BY_TYPE, CROP_COLOR } from './AgronomyConfig
 const SAMPLE_TYPES = Object.keys(METRICS_BY_TYPE)
 const PAGE_SIZE = 200
 
+const MATCH_TYPE_OPTIONS = [
+  { value: '', label: 'Any match status' },
+  { value: 'exact', label: 'Exact match' },
+  { value: 'fuzzy', label: 'Fuzzy match' },
+  { value: 'manual', label: 'Manually confirmed' },
+  { value: 'unmapped', label: 'Unmapped' }
+]
+
 function fmtDate(ts) {
   if (!ts) return ''
   return ts.toDate().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
+function SortArrow({ active, dir }) {
+  if (!active) return null
+  return <span style={{ marginLeft: '4px' }}>{dir === 'asc' ? '\u25b2' : '\u25bc'}</span>
+}
+
 export default function AgronomySampleDatabase({ fields }) {
   const [type, setType] = useState('soil')
   const [fieldFilter, setFieldFilter] = useState('all')
+  const [matchTypeFilter, setMatchTypeFilter] = useState('')
+  const [searchText, setSearchText] = useState('')
+  const [sinceDate, setSinceDate] = useState('')
+  const [untilDate, setUntilDate] = useState('')
   const [samples, setSamples] = useState([])
   const [lastDoc, setLastDoc] = useState(null)
   const [hasMore, setHasMore] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState(null)
+  const [sortColumn, setSortColumn] = useState('receivedDt')
+  const [sortDir, setSortDir] = useState('desc')
+  const [expandedId, setExpandedId] = useState(null)
+
+  // Builds the shared where()/orderBy() clauses for both the live first
+  // page and loadMore. sinceDate/untilDate are range filters on the same
+  // receivedDt field already covered by the type+receivedDt composite
+  // index - Firestore allows range filters on whichever field is being
+  // ordered on without needing a separate index for it, so this doesn't
+  // require creating anything new.
+  function buildConstraints() {
+    const constraints = [where('type', '==', type)]
+    if (sinceDate) constraints.push(where('receivedDt', '>=', new Date(sinceDate)))
+    if (untilDate) constraints.push(where('receivedDt', '<=', new Date(untilDate + 'T23:59:59.999')))
+    constraints.push(orderBy('receivedDt', 'desc'))
+    return constraints
+  }
 
   // Only the first page stays live (onSnapshot) - new samples of this
   // type appear automatically. Pages beyond that are a manual one-time
@@ -30,12 +64,8 @@ export default function AgronomySampleDatabase({ fields }) {
     setLastDoc(null)
     setHasMore(false)
     setError(null)
-    const q = query(
-      collection(db, 'samples'),
-      where('type', '==', type),
-      orderBy('receivedDt', 'desc'),
-      limit(PAGE_SIZE)
-    )
+    setExpandedId(null)
+    const q = query(collection(db, 'samples'), ...buildConstraints(), limit(PAGE_SIZE))
     const unsub = onSnapshot(
       q,
       (snap) => {
@@ -46,29 +76,19 @@ export default function AgronomySampleDatabase({ fields }) {
         setHasMore(snap.docs.length === PAGE_SIZE)
       },
       (err) => {
-        // Without this, a failed query (most commonly a missing Firestore
-        // composite index, or a permissions issue) silently looks
-        // identical to "genuinely zero samples" - this surfaces the real
-        // reason instead. Check the browser console too - Firestore
-        // prints a clickable link that auto-creates a missing index.
         console.error('AgronomySampleDatabase samples query failed:', err)
         setError(err.message)
       }
     )
     return () => unsub()
-  }, [type])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type, sinceDate, untilDate])
 
   async function loadMore() {
     if (!lastDoc) return
     setLoadingMore(true)
     try {
-      const q = query(
-        collection(db, 'samples'),
-        where('type', '==', type),
-        orderBy('receivedDt', 'desc'),
-        startAfter(lastDoc),
-        limit(PAGE_SIZE)
-      )
+      const q = query(collection(db, 'samples'), ...buildConstraints(), startAfter(lastDoc), limit(PAGE_SIZE))
       const snap = await getDocs(q)
       const more = []
       snap.forEach((d) => more.push({ id: d.id, ...d.data() }))
@@ -87,9 +107,76 @@ export default function AgronomySampleDatabase({ fields }) {
   }, [fields])
 
   const visibleSamples = useMemo(() => {
-    if (fieldFilter === 'all') return samples
-    return samples.filter((s) => s.fieldId === fieldFilter)
-  }, [samples, fieldFilter])
+    const search = searchText.trim().toLowerCase()
+    return samples.filter((s) => {
+      if (fieldFilter !== 'all' && s.fieldId !== fieldFilter) return false
+      if (matchTypeFilter) {
+        if (matchTypeFilter === 'unmapped' ? s.fieldMatchType : s.fieldMatchType !== matchTypeFilter) return false
+      }
+      if (search) {
+        const field = fieldById[s.fieldId]
+        const haystack = [field?.name, field?.cropName, s.rawFieldLabel].filter(Boolean).join(' ').toLowerCase()
+        if (!haystack.includes(search)) return false
+      }
+      return true
+    })
+  }, [samples, fieldFilter, matchTypeFilter, searchText, fieldById])
+
+  // Columns come from whatever value keys are actually present in the
+  // currently loaded samples - known/labeled metrics (from
+  // AgronomyConfig.js) come first in their defined order, then any other
+  // key Stukenholtz sent that isn't formally mapped yet, alphabetically.
+  const valueColumns = useMemo(() => {
+    const seenKeys = new Set()
+    visibleSamples.forEach((s) => Object.keys(s.values || {}).forEach((k) => seenKeys.add(k)))
+    const configured = (METRICS_BY_TYPE[type] || []).map((m) => m.key).filter((k) => seenKeys.has(k))
+    const extra = [...seenKeys].filter((k) => !configured.includes(k)).sort()
+    return [...configured, ...extra].map((key) => {
+      const metric = (METRICS_BY_TYPE[type] || []).find((m) => m.key === key)
+      return { key, label: metric ? metric.label : key, unit: metric ? metric.unit : null }
+    })
+  }, [visibleSamples, type])
+
+  function handleSort(columnKey) {
+    if (sortColumn === columnKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortColumn(columnKey)
+      setSortDir('asc')
+    }
+  }
+
+  // Sorts/searches only what's currently loaded (this page, plus
+  // anything pulled in via Load more) - the date range above is a real
+  // server-side query bound, but search text, match status, and sorting
+  // by a value column all operate on the loaded set, since Firestore
+  // can't do free-text search or sort by an arbitrary nested field
+  // without a dedicated index per metric. Load more first if you want to
+  // search/sort across full history rather than just the loaded page(s).
+  const sortedSamples = useMemo(() => {
+    const list = [...visibleSamples]
+    function getValue(s) {
+      if (sortColumn === 'receivedDt') return s.receivedDt ? s.receivedDt.toMillis() : null
+      if (sortColumn === 'field') return fieldById[s.fieldId]?.name || s.rawFieldLabel || ''
+      if (sortColumn === 'crop') return fieldById[s.fieldId]?.cropName || ''
+      return s.values ? s.values[sortColumn] : null
+    }
+    list.sort((a, b) => {
+      const av = getValue(a)
+      const bv = getValue(b)
+      if (av == null && bv == null) return 0
+      if (av == null) return 1
+      if (bv == null) return -1
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return sortDir === 'asc' ? av - bv : bv - av
+      }
+      const strA = String(av), strB = String(bv)
+      return sortDir === 'asc' ? strA.localeCompare(strB) : strB.localeCompare(strA)
+    })
+    return list
+  }, [visibleSamples, sortColumn, sortDir, fieldById])
+
+  const totalColumns = 3 + valueColumns.length
 
   return (
     <div className="agronomy-sample-database">
@@ -101,10 +188,34 @@ export default function AgronomySampleDatabase({ fields }) {
         ))}
       </div>
 
-      <select value={fieldFilter} onChange={(e) => setFieldFilter(e.target.value)}>
-        <option value="all">All fields</option>
-        {fields.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-      </select>
+      <div className="agronomy-filter-bar">
+        <select value={fieldFilter} onChange={(e) => setFieldFilter(e.target.value)}>
+          <option value="all">All fields</option>
+          {fields.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+        </select>
+        <select value={matchTypeFilter} onChange={(e) => setMatchTypeFilter(e.target.value)}>
+          {MATCH_TYPE_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+        </select>
+        <input
+          type="date"
+          value={sinceDate}
+          onChange={(e) => setSinceDate(e.target.value)}
+          title="Since date"
+        />
+        <input
+          type="date"
+          value={untilDate}
+          onChange={(e) => setUntilDate(e.target.value)}
+          title="Until date"
+        />
+        <input
+          type="text"
+          placeholder="Search field, crop, or lab label..."
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          className="agronomy-search-input"
+        />
+      </div>
 
       {error && (
         <p className="agronomy-error-banner">
@@ -113,36 +224,77 @@ export default function AgronomySampleDatabase({ fields }) {
         </p>
       )}
 
-      <table className="agronomy-sample-table">
-        <thead>
-          <tr><th>Date</th><th>Field</th><th>Crop</th><th>Values</th></tr>
-        </thead>
-        <tbody>
-          {!error && visibleSamples.length === 0 && (
-            <tr><td colSpan={4} className="agronomy-table-empty">
-              No {SAMPLE_TYPE_LABEL[type].toLowerCase()} samples {fieldFilter === 'all' ? 'yet' : 'for this field yet'}.
-            </td></tr>
-          )}
-          {visibleSamples.map((s) => {
-            const field = fieldById[s.fieldId]
-            const cropColor = field?.cropName ? (CROP_COLOR[field.cropName] || { bg: '#D3D1C7', fg: '#2C2C2A' }) : null
-            return (
-              <tr key={s.id}>
-                <td>{fmtDate(s.receivedDt)}</td>
-                <td>{field?.name || s.rawFieldLabel || '\u2014'}</td>
-                <td>
-                  {field?.cropName && (
-                    <span className="crop-badge" style={{ background: cropColor.bg, color: cropColor.fg }}>
-                      {field.cropName}
-                    </span>
+      <div className="table-scroll">
+        <table className="agronomy-sample-table agronomy-wide-table">
+          <thead>
+            <tr>
+              <th className="agronomy-sortable" onClick={() => handleSort('receivedDt')}>
+                Date<SortArrow active={sortColumn === 'receivedDt'} dir={sortDir} />
+              </th>
+              <th className="agronomy-sortable" onClick={() => handleSort('field')}>
+                Field<SortArrow active={sortColumn === 'field'} dir={sortDir} />
+              </th>
+              <th className="agronomy-sortable" onClick={() => handleSort('crop')}>
+                Crop<SortArrow active={sortColumn === 'crop'} dir={sortDir} />
+              </th>
+              {valueColumns.map((col) => (
+                <th key={col.key} className="agronomy-sortable" onClick={() => handleSort(col.key)}>
+                  {col.label}{col.unit ? ` (${col.unit})` : ''}
+                  <SortArrow active={sortColumn === col.key} dir={sortDir} />
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedSamples.length === 0 && !error && (
+              <tr><td colSpan={totalColumns} className="agronomy-table-empty">
+                No {SAMPLE_TYPE_LABEL[type].toLowerCase()} samples match the current filters.
+              </td></tr>
+            )}
+            {sortedSamples.map((s) => {
+              const field = fieldById[s.fieldId]
+              const cropColor = field?.cropName ? (CROP_COLOR[field.cropName] || { bg: '#D3D1C7', fg: '#2C2C2A' }) : null
+              const isExpanded = expandedId === s.id
+              return (
+                <Fragment key={s.id}>
+                  <tr className="agronomy-clickable-row" onClick={() => setExpandedId(isExpanded ? null : s.id)}>
+                    <td>{fmtDate(s.receivedDt)}</td>
+                    <td>{field?.name || s.rawFieldLabel || '\u2014'}</td>
+                    <td>
+                      {field?.cropName && (
+                        <span className="crop-badge" style={{ background: cropColor.bg, color: cropColor.fg }}>
+                          {field.cropName}
+                        </span>
+                      )}
+                    </td>
+                    {valueColumns.map((col) => (
+                      <td key={col.key}>{s.values?.[col.key] != null ? s.values[col.key] : '\u2014'}</td>
+                    ))}
+                  </tr>
+                  {isExpanded && (
+                    <tr className="agronomy-detail-row">
+                      <td colSpan={totalColumns}>
+                        <div className="agronomy-detail-content">
+                          <div><strong>Field label from lab:</strong> {s.rawFieldLabel || '\u2014'}</div>
+                          <div><strong>Match type:</strong> {s.fieldMatchType || 'unmapped'}</div>
+                          <div><strong>Report ID:</strong> {s.id}</div>
+                          {valueColumns.map((col) => (
+                            <div key={col.key}>
+                              <strong>{col.label}:</strong>{' '}
+                              {s.values?.[col.key] != null ? s.values[col.key] : '\u2014'}
+                              {col.unit ? ` ${col.unit}` : ''}
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
                   )}
-                </td>
-                <td>{Object.entries(s.values || {}).map(([k, v]) => `${k}: ${v}`).join(' \u00b7 ')}</td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+                </Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
 
       {hasMore && (
         <button disabled={loadingMore} onClick={loadMore} style={{ marginTop: '10px' }}>
