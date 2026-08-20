@@ -262,30 +262,61 @@ const PILE_HEIGHT_OPTIONS = [18, 9];
 function pileHeightRatio(bay) {
   return (bay?.pileHeight || 18) / 18;
 }
-function computeZoneStats(bay, zone, zoneData) {
-  const footprint = pipeRangeSet(zone.pipeRanges);
-  const pipeCount = footprint.size;
-  // Every pipe starts full the moment it's part of the field's footprint
-  // (freshly filled) — logged entries afterward flip specific pipes: a
-  // "haul" entry (pulled out) marks pipes empty, a "fill" entry (filled back
-  // in, or the field's footprint growing into more pipe) marks them full.
-  // Replayed in the order they were logged, so the latest entry for any
-  // given pipe wins.
+// Replays a pipe-check log against a footprint of pipe numbers, same
+// full/empty-flip logic used for both the bottom (base) footprint and the
+// (optional) top-of-pile footprint below — factored out so the two stay
+// in lockstep instead of two hand-copied loops drifting apart.
+function replayPipeLog(footprint, pipeLog) {
   const fullMap = new Map();
   footprint.forEach((p) => fullMap.set(p, true));
-  const pipeLog = zoneData?.pipeChecks || [];
   pipeLog.forEach((entry) => {
     pipeRangeSet(entry.ranges).forEach((p) => {
       if (fullMap.has(p)) fullMap.set(p, entry.type === "fill");
     });
   });
+  return fullMap;
+}
+function computeZoneStats(bay, zone, zoneData) {
+  const footprint = pipeRangeSet(zone.pipeRanges);
+  const pipeCount = footprint.size;
+  const pipeLog = zoneData?.pipeChecks || [];
+  // Every pipe starts full the moment it's part of the field's footprint
+  // (freshly filled) — logged entries afterward flip specific pipes: a
+  // "haul" entry (pulled out) marks pipes empty, a "fill" entry (filled back
+  // in, or the field's footprint growing into more pipe) marks them full.
+  // Replayed in the order they were logged, so the latest entry for any
+  // given pipe wins. This is the bottom/base footprint — the one that
+  // drives cwt below — so it only replays entries NOT explicitly logged
+  // against the top (position === "top"); legacy entries with no position
+  // at all count as bottom, same as before this feature existed.
+  const fullMap = replayPipeLog(footprint, pipeLog.filter((e) => e.position !== "top"));
   const pipesFilled = Array.from(fullMap.values()).filter(Boolean).length;
   const pipesEmpty = pipeCount - pipesFilled;
+  // Top-of-pile footprint — purely visual (feeds the 3D mound's tapered
+  // top face in applyZoneFill), never the cwt math below. Independent
+  // tracking only kicks in once there's a reason to: either an explicit
+  // top range was entered on Add Product, or a "top" position entry has
+  // ever been logged via Log Pipe (which can introduce top tracking on
+  // its own, defaulting to the same footprint as bottom until it's been
+  // narrowed by a log entry). Otherwise falls back to mirroring bottom
+  // exactly, so a field that's never touched this feature renders exactly
+  // as it always has.
+  const topEntries = pipeLog.filter((e) => e.position === "top");
+  const hasTopRange = (zone.topPipeRanges || []).length > 0 || topEntries.length > 0;
+  const topFootprint = hasTopRange ? pipeRangeSet(zone.topPipeRanges?.length ? zone.topPipeRanges : zone.pipeRanges) : footprint;
+  const topFullMap = hasTopRange ? replayPipeLog(topFootprint, topEntries) : fullMap;
   // The entered cwt/pipe is always the 18'-pile number — scale it down for a
   // bay marked as a 9' pile so capacity/current cwt reflect the shorter pile
   // without anyone having to re-enter a new approximation by hand.
   const cwtPerPipe = (zone.cwtPerPipe || bay.cwtPerPipe || 0) * pileHeightRatio(bay);
-  const currentCwt = pipesFilled * cwtPerPipe;
+  const calculatedCwt = pipesFilled * cwtPerPipe;
+  // A manual correction for when the pipe-count math and the actual
+  // physical inventory have drifted apart (moisture loss, an unlogged
+  // haul, etc.) — when set, this is what "current cwt" means everywhere;
+  // the pipe-derived number is still shown alongside it for reference,
+  // never silently discarded.
+  const hasOverride = zone.actualCwtOverride != null && zone.actualCwtOverride !== "";
+  const currentCwt = hasOverride ? Number(zone.actualCwtOverride) : calculatedCwt;
   const capacityCwt = pipeCount * cwtPerPipe;
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
   const runs = zoneData?.cwtRuns || [];
@@ -294,7 +325,8 @@ function computeZoneStats(bay, zone, zoneData) {
   const shrinkCwt = initialCwt - (totalRun + currentCwt);
   const shrinkPct = initialCwt > 0 ? shrinkCwt / initialCwt : 0;
   return {
-    pipeCount, pipesEmpty, pipesFilled, fullMap, cwtPerPipe, currentCwt, capacityCwt, fillPct,
+    pipeCount, pipesEmpty, pipesFilled, fullMap, topFullMap, hasTopRange, cwtPerPipe,
+    calculatedCwt, hasOverride, currentCwt, capacityCwt, fillPct,
     totalRun, initialCwt, shrinkCwt, shrinkPct, runs,
     lastCheckDate: pipeLog.length ? pipeLog[pipeLog.length - 1].date : null,
   };
@@ -351,12 +383,19 @@ function strutMesh(p0, p1, material, thickness = 0.22) {
 // but the two lengthwise ends slope inward as it rises — like a real potato
 // pile's natural angle of repose. Spans Y from 0 (floor) to 1 (scaled later
 // for fill level).
-function buildPileFrustumGeometry(widthBottom, widthTop, depthBottom, depthTop) {
+// topOffsetZ shifts the top face's center along Z relative to the bottom
+// face's center — lets the mound lean rather than always tapering
+// perfectly symmetrically, for the (optional) case where a field's actual
+// top-of-pile pipe range isn't centered on its bottom/base range. Defaults
+// to 0 (a straight, centered taper) so every existing call site — and
+// every field that's never had a separate top range entered — renders
+// exactly as before.
+function buildPileFrustumGeometry(widthBottom, widthTop, depthBottom, depthTop, topOffsetZ = 0) {
   const hwb = widthBottom / 2, hwt = widthTop / 2, hdb = depthBottom / 2, hdt = depthTop / 2;
   const b0 = new THREE.Vector3(-hwb, 0, -hdb), b1 = new THREE.Vector3(hwb, 0, -hdb);
   const b2 = new THREE.Vector3(hwb, 0, hdb), b3 = new THREE.Vector3(-hwb, 0, hdb);
-  const t0 = new THREE.Vector3(-hwt, 1, -hdt), t1 = new THREE.Vector3(hwt, 1, -hdt);
-  const t2 = new THREE.Vector3(hwt, 1, hdt), t3 = new THREE.Vector3(-hwt, 1, hdt);
+  const t0 = new THREE.Vector3(-hwt, 1, -hdt + topOffsetZ), t1 = new THREE.Vector3(hwt, 1, -hdt + topOffsetZ);
+  const t2 = new THREE.Vector3(hwt, 1, hdt + topOffsetZ), t3 = new THREE.Vector3(-hwt, 1, hdt + topOffsetZ);
   const tris = [
     [t0, t1, t2], [t0, t2, t3],   // top
     [b0, b1, t1], [b0, t1, t0],   // front (sloped) end
@@ -503,11 +542,40 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
     // separate mounds with a gap of exposed (light-colored) pipe between
     // them, instead of one pile that only ever recedes from a single end.
     const segDepth = Math.max(0.3, (q - p + 1) * pipeWidth - 0.3);
-    const segTopDepth = segDepth * PILE_TAPER;
     const topWidth = innerW * PILE_TAPER;
     const segCenterZ = zStart + (p - 1 + (q - p + 1) / 2) * pipeWidth;
+    // Top face of the mound: if this field has ever had a top-of-pile pipe
+    // range logged (Add Product's optional top range, or a "top" position
+    // haul narrowing it since), use its ACTUAL currently-full extent within
+    // this run instead of a generic symmetric taper — so the mound really
+    // reflects what's been reported, including leaning to one side if the
+    // top range isn't centered on the base range. No top range ever
+    // entered → falls back to the original fixed-ratio taper, unchanged.
+    const zStatsHere = zoneStatsById[zone.id];
+    const hasTopRange = !!zStatsHere?.hasTopRange;
+    const topFullMap = zStatsHere?.topFullMap;
+    let segTopDepth, topOffsetZ;
+    const topPipesHere = topFullMap
+      ? Array.from(topFullMap.entries()).filter(([pn, isFull]) => isFull && pn >= p && pn <= q).map(([pn]) => pn)
+      : [];
+    if (hasTopRange && topPipesHere.length) {
+      const minP = Math.min(...topPipesHere), maxP = Math.max(...topPipesHere);
+      const topCenterZ = zStart + (minP - 1 + (maxP - minP + 1) / 2) * pipeWidth;
+      topOffsetZ = topCenterZ - segCenterZ;
+      segTopDepth = Math.min(segDepth, Math.max(0.15, (maxP - minP + 1) * pipeWidth - 0.3));
+    } else if (hasTopRange) {
+      // Top tracking is active but every pipe in the top footprint has
+      // since been hauled out within this run — pile comes to a near-point
+      // at the top, centered, rather than silently reverting to the
+      // generic taper.
+      segTopDepth = 0.08;
+      topOffsetZ = 0;
+    } else {
+      segTopDepth = segDepth * PILE_TAPER;
+      topOffsetZ = 0;
+    }
     const mat = new THREE.MeshStandardMaterial({ color: getVarietyColor(zone.variety), roughness: 0.95, side: THREE.DoubleSide });
-    const pile = new THREE.Mesh(buildPileFrustumGeometry(innerW, topWidth, segDepth, segTopDepth), mat);
+    const pile = new THREE.Mesh(buildPileFrustumGeometry(innerW, topWidth, segDepth, segTopDepth, topOffsetZ), mat);
     pile.scale.set(1, pileH, 1);
     pile.position.set(0, 0, segCenterZ);
     pile.castShadow = true;
@@ -798,6 +866,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
             }}>
               <div style={{ fontWeight: 700 }}>{bay.name}</div>
               <div style={{ color: "#9aa4b8", marginTop: 1 }}>{Math.round((bayStats?.fillPct || 0) * 100)}% full</div>
+              <YardBayAgristorBadge bay={bay} />
             </div>
           );
         }
@@ -1124,7 +1193,16 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
   const [customer, setCustomer] = useState("Unassigned");
   const [pipeFrom, setPipeFrom] = useState("");
   const [pipeTo, setPipeTo] = useState("");
+  // Optional — the pipe range actually exposed at the TOP of this field's
+  // pile, if it's narrower than (or offset from) the bottom/base range
+  // above. Leave blank for a field that hasn't been checked/doesn't need
+  // this — the 3D mound just uses its normal fixed taper, same as always.
+  const [topPipeFrom, setTopPipeFrom] = useState("");
+  const [topPipeTo, setTopPipeTo] = useState("");
   const [cwtPerPipe, setCwtPerPipe] = useState("");
+  // Optional manual correction for total cwt — see computeZoneStats'
+  // actualCwtOverride handling. Leave blank to just use the pipe-count math.
+  const [actualCwt, setActualCwt] = useState("");
   const [error, setError] = useState("");
   const [fromAgworld, setFromAgworld] = useState(false);
   // A bay without its own total yet falls back to whatever's already
@@ -1149,13 +1227,22 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
       setError(`This bay only has ${bayPipeBound} pipe — pipe ${Math.max(range.from, range.to)} doesn't exist.`);
       return;
     }
+    const hasTopRange = topPipeFrom !== "" && topPipeTo !== "";
+    const topRange = hasTopRange ? { from: Number(topPipeFrom), to: Number(topPipeTo) } : null;
+    if (topRange && !rangeFitsBay(topRange, bayPipeBound)) {
+      setError(`This bay only has ${bayPipeBound} pipe — top pipe ${Math.max(topRange.from, topRange.to)} doesn't exist.`);
+      return;
+    }
     onAdd({
       id: uid("zone"), name: trimmed, variety, customer: customer || "Unassigned",
       pipeRanges: [range], pipeCount: pipeRangeSet([range]).size,
+      ...(topRange ? { topPipeRanges: [topRange] } : {}),
       ...(cwtPerPipe ? { cwtPerPipe: Number(cwtPerPipe) } : {}),
+      ...(actualCwt !== "" ? { actualCwtOverride: Number(actualCwt) } : {}),
     });
     setName(nextName); setVariety(varieties[0] || ""); setCustomer("Unassigned");
-    setPipeFrom(""); setPipeTo(""); setCwtPerPipe(""); setError(""); setFromAgworld(false);
+    setPipeFrom(""); setPipeTo(""); setTopPipeFrom(""); setTopPipeTo("");
+    setCwtPerPipe(""); setActualCwt(""); setError(""); setFromAgworld(false);
   };
   const overlap = pipeFrom !== "" && pipeTo !== ""
     ? Array.from(pipeRangeSet([{ from: pipeFrom, to: pipeTo }])).filter((p) => takenPipes.has(p))
@@ -1181,14 +1268,31 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
             {customerOptions(customers, customer).map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </Field>
-        <Field label={`Pipe from (of ${bayPipeBound ?? "?"})`}>
+        <Field label={`Bottom pipe from (of ${bayPipeBound ?? "?"})`}>
           <input type="number" min="1" max={bayPipeBound || undefined} value={pipeFrom} onChange={(e) => setPipeFrom(e.target.value)} style={{ ...inputStyle, width: 90 }} placeholder="e.g. 1" />
         </Field>
         <Field label="to">
           <input type="number" min="1" max={bayPipeBound || undefined} value={pipeTo} onChange={(e) => setPipeTo(e.target.value)} style={{ ...inputStyle, width: 90 }} placeholder="e.g. 15" />
         </Field>
         <Field label="Cwt/pipe at 18' (optional)"><input type="number" value={cwtPerPipe} onChange={(e) => setCwtPerPipe(e.target.value)} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 3200" /></Field>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <Field label="Top pipe from (optional, if narrower)">
+          <input type="number" min="1" max={bayPipeBound || undefined} value={topPipeFrom} onChange={(e) => setTopPipeFrom(e.target.value)} style={{ ...inputStyle, width: 90 }} placeholder="e.g. 3" />
+        </Field>
+        <Field label="to">
+          <input type="number" min="1" max={bayPipeBound || undefined} value={topPipeTo} onChange={(e) => setTopPipeTo(e.target.value)} style={{ ...inputStyle, width: 90 }} placeholder="e.g. 12" />
+        </Field>
+        <Field label="Actual cwt override (optional)">
+          <input type="number" value={actualCwt} onChange={(e) => setActualCwt(e.target.value)} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 42000" />
+        </Field>
         <Button onClick={submit}><Plus size={14} /> Add product</Button>
+      </div>
+      <div style={{ fontSize: 11, color: "#6f7890" }}>
+        Bottom pipe is the field's full base footprint (drives cwt). Top pipe is only the range still exposed at the
+        top of the pile, if it's narrower than the base — leave blank and the 3D mound just uses a standard taper.
+        Actual cwt overrides the pipe-count math for this field's inventory total (e.g. to correct for shrink not yet
+        reflected in the log) — the calculated number stays visible for reference.
       </div>
       {overlap.length > 0 && (
         <div style={{ fontSize: 11, color: "#e0a63e" }}>Heads up: pipe {formatPipeRanges([{ from: Math.min(...overlap), to: Math.max(...overlap) }])} is already assigned to another field in this bay.</div>
@@ -1547,6 +1651,34 @@ function EquipmentStatusPanel({ bay }) {
     </div>
   );
 }
+// Compact Agri-Stor readout embedded in each bay's yard-view (3D map)
+// label — this is the "widget on the 3D map screen" showing live
+// conditions per bay without having to open it. Same state language as the
+// bigger interior EquipmentStatusPanel above: Fan %/Refer % are shown live
+// as numbers at all times, and "STOPPED" appears only as an extra idle-state
+// word alongside them (never in place of the numbers). Renders nothing for
+// a bay with no Agri-Stor bin linked, or before the first reading loads —
+// so bays without Agri-Stor look exactly as they did before this was added.
+function YardBayAgristorBadge({ bay }) {
+  const reading = useAgristorReading(bay.agristorBinName);
+  if (!bay.agristorBinName || reading === null || reading === undefined) return null;
+  const fanPct = reading?.fanPct ?? null;
+  const coolPct = reading?.coolingPct ?? reading?.refrigerationPct ?? null;
+  const fanOn = fanPct != null && fanPct > 0;
+  const coolOn = coolPct != null && coolPct > 0;
+  const stopped = !fanOn && !coolOn;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 3, paddingTop: 3, borderTop: "1px solid #2b3549" }}>
+      <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
+        <Fan size={10} color={fanOn ? "#f2c14e" : "#4a5468"} /> {fanPct != null ? `${fanPct}%` : "—"}
+      </span>
+      <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
+        <Snowflake size={10} color={coolOn ? "#5fd1e6" : "#4a5468"} /> {coolPct != null ? `${coolPct}%` : "—"}
+      </span>
+      {stopped && <span style={{ fontSize: 9, fontWeight: 700, color: "#8790a3", letterSpacing: 0.3 }}>STOPPED</span>}
+    </div>
+  );
+}
 function LiveStat({ label, value, sub }) {
   return (
     <div>
@@ -1559,7 +1691,7 @@ function LiveStat({ label, value, sub }) {
 /* ---------------------------------------------------------------
    Bay detail panel (per-zone pipe checks + cwt runs) + interior 3D
 ----------------------------------------------------------------*/
-function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipeCheck, onAddCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay, onEmptyBay }) {
+function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipeCheck, onAddCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay, onUpdateZoneMeta, onEmptyBay, onDeleteZone }) {
   const [zoneId, setZoneId] = useState(bay.zones[0]?.id ?? null);
   useEffect(() => { setZoneId(bay.zones[0]?.id ?? null); }, [bay.id]);
   const [showAddZone, setShowAddZone] = useState(false);
@@ -1575,6 +1707,13 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
   // this field's footprint; "fill" puts product into pipe (including pipe
   // not yet part of this field, growing its footprint).
   const [logType, setLogType] = useState("haul"); // "haul" | "fill"
+  // Which of the field's two footprints this entry applies to — "bottom"
+  // (the base range, drives cwt) or "top" (the top-of-pile range, purely
+  // visual). Defaults to bottom so existing muscle memory/behavior is
+  // unchanged; switching to "top" is what lets the mound's tapered top
+  // face narrow over the season as reported, instead of only ever using
+  // whatever top range (if any) was entered once at Add Product time.
+  const [logPosition, setLogPosition] = useState("bottom"); // "bottom" | "top"
   const [rangeFrom1, setRangeFrom1] = useState("");
   const [rangeTo1, setRangeTo1] = useState("");
   const [rangeFrom2, setRangeFrom2] = useState("");
@@ -1586,7 +1725,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
   const [runDest, setRunDest] = useState(zone?.customer || "Unassigned");
   const [runCwt, setRunCwt] = useState("");
   useEffect(() => { setRunDest(zone?.customer || "Unassigned"); }, [zoneId]);
-  useEffect(() => { setRangeFrom1(""); setRangeTo1(""); setRangeFrom2(""); setRangeTo2(""); setLogError(""); }, [zoneId, logType]);
+  useEffect(() => { setRangeFrom1(""); setRangeTo1(""); setRangeFrom2(""); setRangeTo2(""); setLogError(""); }, [zoneId, logType, logPosition]);
   // A bay without its own total yet falls back to whatever's already
   // assigned across its fields — same fallback AddZoneForm uses.
   const bayPipeBound = bay.pipeCount || bay.zones.reduce((s, z) => s + zonePipeCount(z), 0) || null;
@@ -1603,15 +1742,21 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
       }
     }
     if (logType === "haul") {
-      const footprint = pipeRangeSet(zone.pipeRanges);
+      // Hauling from "top" checks against whichever top footprint is
+      // currently in effect (an explicit top range, or — once any top
+      // entry has ever been logged — the same footprint as bottom); from
+      // "bottom" it's always the base pipeRanges, exactly as before.
+      const footprint = logPosition === "top"
+        ? pipeRangeSet(zone.topPipeRanges?.length ? zone.topPipeRanges : zone.pipeRanges)
+        : pipeRangeSet(zone.pipeRanges);
       const outside = Array.from(pipeRangeSet(pendingRanges)).filter((p) => !footprint.has(p));
       if (outside.length > 0) {
-        setLogError(`Pipe ${outside[0]} isn't part of ${zone.name}'s pipe yet — can't haul it from here.`);
+        setLogError(`Pipe ${outside[0]} isn't part of ${zone.name}'s ${logPosition} pipe yet — can't haul it from here.`);
         return;
       }
     }
     setLogError("");
-    onAddPipeCheck(bay.id, zoneId, { date: checkDate, type: logType, ranges: pendingRanges, note: checkNote });
+    onAddPipeCheck(bay.id, zoneId, { date: checkDate, type: logType, position: logPosition, ranges: pendingRanges, note: checkNote });
     setRangeFrom1(""); setRangeTo1(""); setRangeFrom2(""); setRangeTo2(""); setCheckNote("");
   };
   const submitRun = () => {
@@ -1635,7 +1780,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
             variant="ghost"
             style={{ borderColor: "#4a2b2b", color: "#e08787" }}
             onClick={() => {
-              if (window.confirm(`Empty "${bay.name}"? This removes all ${bay.zones.length} field${bay.zones.length !== 1 ? "s" : ""} currently assigned. You can add new product to it any time.`)) {
+              if (window.confirm(`Empty "${bay.name}"? This unassigns all ${bay.zones.length} field${bay.zones.length !== 1 ? "s" : ""} currently in it so you can fill it with something new. Their logged checks, cwt runs, and applications are kept, not deleted — use "Delete field & records" on an individual field below if you actually want to erase its history.`)) {
                 onEmptyBay(bay.id);
               }
             }}
@@ -1673,16 +1818,33 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
       {bay.zones.length > 0 && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           {bay.zones.map((z) => (
-            <button key={z.id} onClick={() => setZoneId(z.id)} style={{
+            <div key={z.id} style={{
               border: `1px solid ${z.id === zoneId ? "#e0a63e" : "#232d40"}`,
               background: z.id === zoneId ? "rgba(224,166,62,0.12)" : "transparent",
-              color: z.id === zoneId ? "#f2c14e" : "#8790a3",
-              borderRadius: 20, padding: "6px 14px", fontSize: 12.5, cursor: "pointer", fontWeight: 600,
+              borderRadius: 20, padding: "6px 8px 6px 14px", fontSize: 12.5, fontWeight: 600,
               display: "inline-flex", alignItems: "center", gap: 6,
             }}>
-              <ColorDot color={getVarietyColor(z.variety)} /><ColorDot color={getCustomerColor(z.customer)} />
-              {z.name} <span style={{ opacity: 0.7 }}>· {z.variety} · {z.customer}</span>
-            </button>
+              <button onClick={() => setZoneId(z.id)} style={{
+                border: "none", background: "none", padding: 0, cursor: "pointer", fontWeight: 600, fontSize: 12.5,
+                color: z.id === zoneId ? "#f2c14e" : "#8790a3", display: "inline-flex", alignItems: "center", gap: 6,
+              }}>
+                <ColorDot color={getVarietyColor(z.variety)} /><ColorDot color={getCustomerColor(z.customer)} />
+                {z.name} <span style={{ opacity: 0.7 }}>· {z.variety} · {z.customer}</span>
+              </button>
+              {!readOnly && (
+                <button
+                  title="Delete field & records — permanent"
+                  onClick={() => {
+                    if (window.confirm(`Permanently delete "${z.name}" from ${bay.name}? This erases its pipe checks, cwt runs, and Sprout Nip applications for good — this is NOT the same as "Empty this bay", which keeps records. This cannot be undone.`)) {
+                      onDeleteZone(bay.id, z.id);
+                    }
+                  }}
+                  style={{ border: "none", background: "none", padding: 3, cursor: "pointer", color: "#6f7890", display: "flex", alignItems: "center" }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              )}
+            </div>
           ))}
           {!readOnly && (
             <Button variant="ghost" onClick={() => setShowAddZone((v) => !v)}>
@@ -1701,7 +1863,19 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
       {zone && zs && (
         <>
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
-            <StatBlock label={`${zone.name} inventory`} value={`${fmt(zs.currentCwt)} cwt`} sub={`${Math.round(zs.fillPct * 100)}% of ${fmt(zs.capacityCwt)} cwt · ${zs.pipesFilled}/${zone.pipeCount} pipe`} accent="#f2c14e" />
+            <StatBlock label={`${zone.name} inventory`} value={`${fmt(zs.currentCwt)} cwt`}
+              sub={zs.hasOverride
+                ? `manual · calculated from checks: ${fmt(zs.calculatedCwt)} cwt · ${zs.pipesFilled}/${zone.pipeCount} pipe`
+                : `${Math.round(zs.fillPct * 100)}% of ${fmt(zs.capacityCwt)} cwt · ${zs.pipesFilled}/${zone.pipeCount} pipe`}
+              accent="#f2c14e" />
+            <div>
+              <div style={{ fontSize: 10.5, letterSpacing: 1, textTransform: "uppercase", color: "#8790a3" }}>Actual cwt override</div>
+              <EditableInline
+                value={zone.actualCwtOverride ?? ""} type="number" disabled={readOnly} width={110}
+                placeholder={fmt(zs.calculatedCwt)}
+                onSave={(v) => onUpdateZoneMeta(bay.id, zone.id, { actualCwtOverride: v })}
+              />
+            </div>
             <div>
               <div style={{ fontSize: 10.5, letterSpacing: 1, textTransform: "uppercase", color: "#8790a3" }}>Variety</div>
               <select value={zone.variety} disabled={readOnly} onChange={(e) => onUpdateZoneVariety(bay.id, zone.id, e.target.value)}
@@ -1727,10 +1901,14 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
                 <button type="button" onClick={() => setLogType("haul")} style={agworldTabStyle(logType === "haul")}>Hauling out</button>
                 <button type="button" onClick={() => setLogType("fill")} style={agworldTabStyle(logType === "fill")}>Filling in</button>
               </div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                <button type="button" onClick={() => setLogPosition("bottom")} style={agworldTabStyle(logPosition === "bottom")}>Bottom pipe</button>
+                <button type="button" onClick={() => setLogPosition("top")} style={agworldTabStyle(logPosition === "top")}>Top pipe</button>
+              </div>
               <div style={{ fontSize: 12, color: "#8790a3", marginBottom: 10 }}>
                 {logType === "haul"
-                  ? "Potatoes get pulled from both ends, so enter which pipe number ranges have been hauled out on each end. Leave the second range blank if you've only pulled from one end."
-                  : "Enter which pipe number ranges this load filled — pipe not already part of this field gets added to its footprint. Leave the second range blank if you only filled one stretch."}
+                  ? `Potatoes get pulled from both ends, so enter which pipe number ranges have been hauled out on each end of the ${logPosition} pipe. Leave the second range blank if you've only pulled from one end.`
+                  : `Enter which pipe number ranges this load filled on the ${logPosition} pipe — pipe not already part of this field's ${logPosition} footprint gets added to it. Leave the second range blank if you only filled one stretch.`}
               </div>
               <Field label="Date"><input type="date" value={checkDate} onChange={(e) => setCheckDate(e.target.value)} style={inputStyle} /></Field>
               <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 4, letterSpacing: 0.3 }}>Pipe range 1 (bay has {bayPipeBound ?? "?"} total)</div>
@@ -3362,6 +3540,15 @@ export default function PotatoStorage() {
   // Clears every field out of a single bay — the reverse of onAddZoneToBay.
   // Used once a bay has fully run out and is ready to sit empty until it's
   // filled again; the bay itself (and its history in past seasons) stays.
+  // Only clears the STRUCTURAL assignment (which fields currently sit in
+  // this bay) — it used to also blow away dataById[bayId] entirely, which
+  // silently deleted every one of those fields' pipeChecks/cwtRuns/Sprout
+  // Nip history (and even this bay's own tempLogs) the moment it ran. Now
+  // it leaves dataById untouched: a zone's records just become orphaned
+  // (unreferenced by any current field) rather than erased, so re-adding
+  // "the same" field later doesn't silently resurrect old numbers, but
+  // nothing is destroyed. Use onDeleteZone for an actual, permanent erase
+  // of one field's records.
   const onEmptyBay = useCallback((bayId) => {
     if (isReadOnly) return;
     setBays((prev) => {
@@ -3369,14 +3556,13 @@ export default function PotatoStorage() {
       saveJSON(CONFIG_KEY, next);
       return next;
     });
-    const empty = emptyBayData({ zones: [] });
-    setDataById((prev) => ({ ...prev, [bayId]: empty }));
-    saveJSON(bayDataKey(bayId), empty);
   }, [isReadOnly]);
   // Bulk version of onEmptyBay — empties every bay across every site in one
   // go (e.g. at full cleanout time). Bay/building/location structure and
   // archived seasons are untouched; only the current season's product
   // assignments are cleared.
+  // Same fix as onEmptyBay above — structural-only, dataById (and every
+  // field's history within it) is left alone.
   const onEmptyAllBays = useCallback(() => {
     if (isReadOnly) return;
     setBays((prev) => {
@@ -3384,16 +3570,7 @@ export default function PotatoStorage() {
       saveJSON(CONFIG_KEY, next);
       return next;
     });
-    setDataById((prev) => {
-      const next = { ...prev };
-      bays.forEach((b) => {
-        const empty = emptyBayData({ zones: [] });
-        next[b.id] = empty;
-        saveJSON(bayDataKey(b.id), empty);
-      });
-      return next;
-    });
-  }, [isReadOnly, bays]);
+  }, [isReadOnly]);
   // Deletes a single field from a bay — unlike emptying a bay, this drops
   // that one field's logged history (checks/runs) for good. The confirming
   // prompt happens at the UI layer before this is called.
@@ -3629,7 +3806,7 @@ export default function PotatoStorage() {
                 <BayDetail bay={selectedBay} data={displayDataById[selectedBay.id] || emptyBayData(selectedBay)} stats={statsById[selectedBay.id]}
                   customers={sortedCustomers} varieties={sortedVarieties} readOnly={isReadOnly} onAddPipeCheck={onAddPipeCheck} onAddCwtRun={onAddCwtRun}
                   onUpdateZoneCustomer={onUpdateZoneCustomer} onUpdateZoneVariety={onUpdateZoneVariety} onAddZoneToBay={onAddZoneToBay}
-                  onEmptyBay={onEmptyBay} />
+                  onUpdateZoneMeta={onUpdateZoneMeta} onEmptyBay={onEmptyBay} onDeleteZone={onDeleteZone} />
               </>
             )}
           </div>
