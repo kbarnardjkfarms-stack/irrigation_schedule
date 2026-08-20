@@ -206,6 +206,53 @@ thead th.sticky-col { top: 0; z-index: 4; }
   min-width: 220px;
 }
 
+.agronomy-column-picker {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: #fff;
+  border: 0.5px solid #ddd8cc;
+  border-radius: 10px;
+  padding: 10px;
+  min-width: 200px;
+  max-height: 320px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  z-index: 10;
+}
+
+.agronomy-column-picker-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.agronomy-column-picker label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 3px 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.agronomy-compost-layout {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.agronomy-compost-source-list {
+  flex: 0 0 220px;
+}
+
+.agronomy-compost-detail {
+  flex: 1;
+  min-width: 0;
+}
+
 .agronomy-error-banner {
   background: #F5DCDA;
   color: #A32D2D;
