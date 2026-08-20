@@ -3,7 +3,10 @@ import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestor
 import { db } from './firebase.js'
 import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, distanceFromTarget, STATUS_COLOR, CROP_COLOR } from './AgronomyConfig.js'
 
-const SAMPLE_TYPES = Object.keys(METRICS_BY_TYPE)
+// Compost isn't included here - it identifies a compost source, not a
+// field, so "rank fields by their compost value" doesn't apply to it.
+// See AgronomyCompostSources.jsx for compost's own by-source view.
+const SAMPLE_TYPES = Object.keys(METRICS_BY_TYPE).filter((t) => t !== 'compost')
 
 export default function AgronomyByCriteria({ fields }) {
   const [type, setType] = useState('soil')
