@@ -17,6 +17,7 @@ import Login from './Login.jsx'
 import PotatoStorage from './PotatoStorage.jsx'
 import Users from './Users.jsx'
 import PivotProfile from './PivotProfile.jsx'
+import PivotProfilesList from './PivotProfilesList.jsx'
 import Agronomy from './Agronomy.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
@@ -614,6 +615,9 @@ export default function App() {
     ? Math.max(0, Math.round((Date.now() - new Date(expandedPivotProfile.positionUnchangedSince).getTime()) / 60000))
     : null
   const canClearStuckAlerts = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager' || userRole === 'irrigation_manager'
+  const showUsersMenuItem = userRole === 'admin' || userRole === 'owner'
+  const showPivotProfilesMenuItem = page === 'irrigation' && (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager')
+  const showCopyLinkMenuItem = page === 'irrigation' && selectedFarmId !== 'all'
 
   if (user === undefined) {
     return <div className="app"><p style={{ padding: '2rem' }}>Loading…</p></div>
@@ -649,7 +653,7 @@ export default function App() {
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: '10px' }}>
-          {(userRole === 'admin' || userRole === 'owner' || (page === 'irrigation' && selectedFarmId !== 'all')) && (
+          {(userRole === 'admin' || userRole === 'owner' || (page === 'irrigation' && (userRole === 'farm_manager' || selectedFarmId !== 'all'))) && (
             <div ref={settingsMenuRef} style={{ position: 'relative' }}>
               <button
                 onClick={() => { setSettingsMenuOpen((o) => !o); setProfileMenuOpen(false) }}
@@ -663,16 +667,22 @@ export default function App() {
               </button>
               {settingsMenuOpen && (
                 <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '6px', background: '#fff', border: '0.5px solid #ddd8cc', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.12)', minWidth: '200px', zIndex: 10, overflow: 'hidden' }}>
-                  {(userRole === 'admin' || userRole === 'owner') && (
+                  {showUsersMenuItem && (
                     <button
                       onClick={() => { setPage('users'); setSettingsMenuOpen(false) }}
                       style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
                     >Users &amp; Permissions</button>
                   )}
-                  {page === 'irrigation' && selectedFarmId !== 'all' && (
+                  {showPivotProfilesMenuItem && (
+                    <button
+                      onClick={() => { setPage('pivot-profiles-list'); setSettingsMenuOpen(false) }}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: showUsersMenuItem ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
+                    >Pivot profiles</button>
+                  )}
+                  {showCopyLinkMenuItem && (
                     <button
                       onClick={copyWatchLink}
-                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: (userRole === 'admin' || userRole === 'owner') ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: (showUsersMenuItem || showPivotProfilesMenuItem) ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
                     >{linkCopied ? 'Copied!' : 'Copy irrigator link'}</button>
                   )}
                 </div>
@@ -754,6 +764,20 @@ export default function App() {
       {page === 'potato-storage' && <PotatoStorage />}
       {page === 'users' && <Users />}
       {page === 'pivot-profile' && <PivotProfile pivotGuid={pivotProfileGuid} onBack={() => setPage('irrigation')} />}
+      {page === 'pivot-profiles-list' && (
+        <PivotProfilesList
+          farms={farms}
+          pivotsByGuid={pivotsByGuid}
+          pivotProfilesByGuid={pivotProfilesByGuid}
+          pivotGuidByFieldId={pivotGuidByFieldId}
+          baseFieldsById={baseFieldsById}
+          userRole={userRole}
+          userProfile={userProfile}
+          selectedFarmId={selectedFarmId}
+          onOpenProfile={(guid) => { setPivotProfileGuid(guid); setPage('pivot-profile') }}
+          onBack={() => setPage('irrigation')}
+        />
+      )}
       {page === 'agronomy' && canSeeAgronomy && <Agronomy />}
       {page === 'irrigation' && (
         <>
