@@ -13,7 +13,7 @@ const ROLE_LABELS = {
 }
 const FARM_SCOPED_ROLES = ['farm_manager', 'irrigation_manager', 'irrigator']
 
-const EMPTY_FORM = { name: '', email: '', role: 'irrigator', farmIds: [], canEditSchedule: false }
+const EMPTY_FORM = { name: '', email: '', phone: '', receiveTextAlerts: true, role: 'irrigator', farmIds: [], canEditSchedule: false }
 
 function ProfileForm({ initial, farms, emailEditable, submitLabel, onCancel, onSubmit }) {
   const [form, setForm] = useState(initial)
@@ -64,6 +64,27 @@ function ProfileForm({ initial, farms, emailEditable, submitLabel, onCancel, onS
         disabled={!emailEditable}
         style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #ccc', marginBottom: '10px', background: emailEditable ? '#fff' : '#f4f2ec', color: emailEditable ? '#000' : '#888' }}
       />
+      <div className="editor-label">Phone (optional)</div>
+      <input
+        type="tel"
+        value={form.phone}
+        onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+        placeholder="(208) 555-0123"
+        style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #ccc', marginBottom: '10px' }}
+      />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+        <input
+          type="checkbox"
+          id="receiveTextAlerts"
+          checked={form.receiveTextAlerts}
+          onChange={(e) => setForm((f) => ({ ...f, receiveTextAlerts: e.target.checked }))}
+          disabled={!form.phone}
+          style={{ margin: 0 }}
+        />
+        <label htmlFor="receiveTextAlerts" style={{ fontSize: '12px', color: form.phone ? '#000' : '#888' }}>
+          Send text alerts to this number{!form.phone && ' (add a phone number first)'}
+        </label>
+      </div>
       <div className="editor-label">Role</div>
       <select
         value={form.role}
@@ -154,6 +175,8 @@ export default function Users() {
     const result = await createUser({
       name: form.name,
       email: form.email.trim(),
+      phone: form.phone.trim(),
+      receiveTextAlerts: !!form.phone && !!form.receiveTextAlerts,
       role: form.role,
       farmIds: form.farmIds,
       canEditSchedule: form.canEditSchedule
@@ -169,7 +192,12 @@ export default function Users() {
   }
 
   async function handleSaveEdit(uid, form) {
-    const update = { name: form.name, role: form.role }
+    const update = {
+      name: form.name,
+      role: form.role,
+      phone: form.phone.trim(),
+      receiveTextAlerts: !!form.phone && !!form.receiveTextAlerts
+    }
     if (FARM_SCOPED_ROLES.includes(form.role)) {
       update.farmIds = form.farmIds
     } else {
@@ -294,6 +322,7 @@ export default function Users() {
         <thead>
           <tr style={{ textAlign: 'left', color: '#888', fontSize: '11px' }}>
             <th style={{ padding: '6px 8px' }}>Name</th>
+            <th style={{ padding: '6px 8px' }}>Phone</th>
             <th style={{ padding: '6px 8px' }}>Role</th>
             <th style={{ padding: '6px 8px' }}>Farms</th>
             <th style={{ padding: '6px 8px' }}>Schedule access</th>
@@ -307,6 +336,10 @@ export default function Users() {
                 <td style={{ padding: '8px' }}>
                   <div style={{ fontWeight: 600 }}>{user.name || '\u2014'}</div>
                   <div style={{ fontSize: '11px', color: '#888' }}>{user.email}{user.disabled ? ' \u00b7 disabled' : ''}</div>
+                </td>
+                <td style={{ padding: '8px', color: '#666' }}>
+                  {user.phone || '\u2014'}
+                  {user.phone && <div style={{ fontSize: '10px', color: '#888' }}>Texts {user.receiveTextAlerts !== false ? 'on' : 'off'}</div>}
                 </td>
                 <td style={{ padding: '8px' }}>{ROLE_LABELS[user.role] || user.role}</td>
                 <td style={{ padding: '8px', color: '#666' }}>{farmSummary(user)}</td>
@@ -326,11 +359,13 @@ export default function Users() {
               </tr>
               {editingUid === user.uid && (
                 <tr>
-                  <td colSpan={5} style={{ padding: '12px 8px' }}>
+                  <td colSpan={6} style={{ padding: '12px 8px' }}>
                     <ProfileForm
                       initial={{
                         name: user.name || '',
                         email: user.email || '',
+                        phone: user.phone || '',
+                        receiveTextAlerts: user.receiveTextAlerts !== false,
                         role: user.role || 'irrigator',
                         farmIds: user.farmIds || [],
                         canEditSchedule: !!user.canEditSchedule
