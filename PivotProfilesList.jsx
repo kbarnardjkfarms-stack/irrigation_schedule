@@ -105,7 +105,7 @@ export default function PivotProfilesList({
         farmNames: farmIds.map((fid) => farmNameById[fid] || fid).join(', ') || '\u2014',
         gpm: profile.currentGpm != null ? profile.currentGpm : null,
         packageName: profile.sprinklerPackage ? profile.sprinklerPackage.fileName : null,
-        threshold: profile.stuckAlertThresholdMinutes || 30,
+        threshold: profile.stuckAlertThresholdMinutes || 60,
         stuck: !!profile.stuckAlertActive,
         statusLabel: status.label,
         statusKey: status.key
