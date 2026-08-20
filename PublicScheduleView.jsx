@@ -162,6 +162,7 @@ export default function PublicScheduleView({ slug }) {
   const [seasonDataByField, setSeasonDataByField] = useState({})
   const [pivotGuidByFieldId, setPivotGuidByFieldId] = useState({})
   const [pivotsByGuid, setPivotsByGuid] = useState({})
+  const [pivotProfilesByGuid, setPivotProfilesByGuid] = useState({})
   const [seasons, setSeasons] = useState([])
   const [eventsToday, setEventsToday] = useState({})
   const [eventsTomorrow, setEventsTomorrow] = useState({})
@@ -215,6 +216,18 @@ export default function PublicScheduleView({ slug }) {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data() })
       setPivotsByGuid(next)
+    })
+    return () => unsub()
+  }, [authReady])
+
+  // Read-only here on purpose — this page has no login, so there's no
+  // "Clear error" action, just the same red badge the logged-in app shows.
+  useEffect(() => {
+    if (!authReady) return
+    const unsub = onSnapshot(collection(db, 'pivotProfiles'), (snap) => {
+      const next = {}
+      snap.forEach((d) => { next[d.id] = d.data() })
+      setPivotProfilesByGuid(next)
     })
     return () => unsub()
   }, [authReady])
@@ -283,16 +296,18 @@ export default function PublicScheduleView({ slug }) {
         const seasonData = seasonDataByField[id] || {}
         const pivotGuid = pivotGuidByFieldId[id]
         const pivot = pivotGuid ? pivotsByGuid[pivotGuid] : null
+        const stuckAlert = pivotGuid ? !!pivotProfilesByGuid[pivotGuid]?.stuckAlertActive : false
         return {
           id,
           fieldName: base.name,
           crop: (seasonData.cropName || '').toUpperCase(),
           acres: seasonData.acres || null,
-          pivot
+          pivot,
+          stuckAlert
         }
       })
       .sort((a, b) => (a.fieldName || '').localeCompare(b.fieldName || ''))
-  }, [farm, baseFieldsById, seasonDataByField, pivotGuidByFieldId, pivotsByGuid])
+  }, [farm, baseFieldsById, seasonDataByField, pivotGuidByFieldId, pivotsByGuid, pivotProfilesByGuid])
 
   if (authError) {
     return (
@@ -388,7 +403,7 @@ export default function PublicScheduleView({ slug }) {
                       onClick={() => field.pivot && setExpandedFieldId(isExpanded ? null : field.id)}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <PivotIcon pivot={field.pivot} size={55} />
+                        <PivotIcon pivot={field.pivot} size={55} stuckAlert={field.stuckAlert} />
                         <div>
                           <div><strong>{field.fieldName}</strong></div>
                           <div style={{ marginTop: '4px' }}>
