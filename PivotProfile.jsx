@@ -8,10 +8,11 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const [pivot, setPivot] = useState(null)
   const [profile, setProfile] = useState(null)
   const [gpmInput, setGpmInput] = useState('')
-  const [threshold, setThreshold] = useState(30)
+  const [thresholdInput, setThresholdInput] = useState('60')
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState(null)
   const [gpmSaved, setGpmSaved] = useState(false)
+  const [thresholdSaved, setThresholdSaved] = useState(false)
 
   useEffect(() => {
     if (!pivotGuid) return
@@ -25,7 +26,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
       const data = snap.exists() ? snap.data() : null
       setProfile(data)
       setGpmInput(data && data.currentGpm != null ? String(data.currentGpm) : '')
-      setThreshold(data && data.stuckAlertThresholdMinutes != null ? data.stuckAlertThresholdMinutes : 30)
+      setThresholdInput(data && data.stuckAlertThresholdMinutes != null ? String(data.stuckAlertThresholdMinutes) : '60')
     })
     return () => unsub()
   }, [pivotGuid])
@@ -65,9 +66,16 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     setTimeout(() => setGpmSaved(false), 1500)
   }
 
-  async function handleThresholdChange(minutes) {
-    setThreshold(minutes)
-    await setDoc(doc(db, 'pivotProfiles', pivotGuid), { stuckAlertThresholdMinutes: minutes }, { merge: true })
+  async function handleSaveThreshold() {
+    const n = parseInt(thresholdInput, 10)
+    if (!thresholdInput || isNaN(n) || n < 45 || n > 120) {
+      setError('Enter a number between 45 and 120.')
+      return
+    }
+    setError(null)
+    await setDoc(doc(db, 'pivotProfiles', pivotGuid), { stuckAlertThresholdMinutes: n }, { merge: true })
+    setThresholdSaved(true)
+    setTimeout(() => setThresholdSaved(false), 1500)
   }
 
   if (!pivotGuid) return null
@@ -123,19 +131,12 @@ export default function PivotProfile({ pivotGuid, onBack }) {
 
       <div>
         <div className="editor-label" style={{ marginBottom: '8px' }}>Stuck-pivot alert</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <input
-            type="range"
-            min="30"
-            max="120"
-            step="5"
-            value={threshold}
-            onChange={(e) => handleThresholdChange(Number(e.target.value))}
-            style={{ flex: 1 }}
-          />
-          <span style={{ fontSize: '13px', fontWeight: 500, minWidth: '70px' }}>{threshold} min</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <input type="number" value={thresholdInput} onChange={(e) => setThresholdInput(e.target.value)} style={{ width: '100px' }} />
+          <span style={{ fontSize: '13px', color: '#555' }}>min</span>
+          <button onClick={handleSaveThreshold}>{thresholdSaved ? 'Saved!' : 'Save'}</button>
         </div>
-        <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Alert if running wet with no movement for this long</div>
+        <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Alert if running wet with no movement for this long (45\u2013120 min)</div>
       </div>
 
       {error && <p style={{ color: '#A32D2D', fontSize: '13px', marginTop: '16px' }}>{error}</p>}
