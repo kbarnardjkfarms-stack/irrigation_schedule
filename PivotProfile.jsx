@@ -1,144 +1,150 @@
-import { useState, useEffect } from 'react'
-import { doc, onSnapshot, setDoc } from 'firebase/firestore'
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
-import { db, storage } from './firebase.js'
-import PivotIcon from './PivotIcon.jsx'
+import { useState, useEffect, useMemo } from 'react'
 
-export default function PivotProfile({ pivotGuid, onBack }) {
-  const [pivot, setPivot] = useState(null)
-  const [profile, setProfile] = useState(null)
-  const [gpmInput, setGpmInput] = useState('')
-  const [threshold, setThreshold] = useState(30)
-  const [uploading, setUploading] = useState(false)
-  const [error, setError] = useState(null)
-  const [gpmSaved, setGpmSaved] = useState(false)
+const FARM_SCOPED_MANAGER_ROLES = ['farm_manager']
 
+function statusLabel(pivot) {
+  if (!pivot) return '\u2014'
+  const isRunning = pivot.systemStatus === 'Running'
+  if (!isRunning) return 'Stopped'
+  return pivot.waterMode === 'Dry' ? 'Running, dry' : 'Running, wet'
+}
+
+export default function PivotProfilesList({
+  farms,
+  pivotsByGuid,
+  pivotProfilesByGuid,
+  pivotGuidByFieldId,
+  baseFieldsById,
+  userRole,
+  userProfile,
+  selectedFarmId,
+  onOpenProfile,
+  onBack
+}) {
+  const [checkedFarmIds, setCheckedFarmIds] = useState([])
+  const [defaultApplied, setDefaultApplied] = useState(false)
+
+  const isFarmManager = FARM_SCOPED_MANAGER_ROLES.includes(userRole)
+  const isAdminOrOwner = userRole === 'admin' || userRole === 'owner'
+
+  // Default the admin/owner checklist to whatever farm was already selected
+  // on the schedule ("all" pre-checks every farm) — just a sensible
+  // starting point, not a restriction; they can still change it.
   useEffect(() => {
-    if (!pivotGuid) return
-    const unsub = onSnapshot(doc(db, 'pivots', pivotGuid), (snap) => setPivot(snap.exists() ? snap.data() : null))
-    return () => unsub()
-  }, [pivotGuid])
-
-  useEffect(() => {
-    if (!pivotGuid) return
-    const unsub = onSnapshot(doc(db, 'pivotProfiles', pivotGuid), (snap) => {
-      const data = snap.exists() ? snap.data() : null
-      setProfile(data)
-      setGpmInput(data && data.currentGpm != null ? String(data.currentGpm) : '')
-      setThreshold(data && data.stuckAlertThresholdMinutes != null ? data.stuckAlertThresholdMinutes : 30)
-    })
-    return () => unsub()
-  }, [pivotGuid])
-
-  async function handleUpload(e) {
-    const file = e.target.files && e.target.files[0]
-    if (!file) return
-    setUploading(true)
-    setError(null)
-    try {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-      const path = `pivotProfiles/${pivotGuid}/${Date.now()}_${safeName}`
-      const fileRef = ref(storage, path)
-      await uploadBytes(fileRef, file)
-      const downloadUrl = await getDownloadURL(fileRef)
-      const newEntry = { fileName: file.name, uploadedAt: new Date().toISOString(), downloadUrl, storagePath: path }
-      const existingHistory = (profile && profile.sprinklerPackageHistory) || []
-      const history = profile && profile.sprinklerPackage ? [profile.sprinklerPackage, ...existingHistory] : existingHistory
-      await setDoc(doc(db, 'pivotProfiles', pivotGuid), {
-        sprinklerPackage: newEntry,
-        sprinklerPackageHistory: history
-      }, { merge: true })
-    } catch (err) {
-      setError(err.message || 'Upload failed.')
-    } finally {
-      setUploading(false)
-      e.target.value = ''
+    if (defaultApplied || farms.length === 0) return
+    if (selectedFarmId && selectedFarmId !== 'all') {
+      setCheckedFarmIds([String(selectedFarmId)])
+    } else {
+      setCheckedFarmIds(farms.map((f) => String(f.id)))
     }
+    setDefaultApplied(true)
+  }, [defaultApplied, farms, selectedFarmId])
+
+  function toggleFarm(farmId) {
+    setCheckedFarmIds((prev) => {
+      const id = String(farmId)
+      return prev.includes(id) ? prev.filter((f) => f !== id) : [...prev, id]
+    })
   }
 
-  async function handleSaveGpm() {
-    const n = parseFloat(gpmInput)
-    if (!gpmInput || isNaN(n) || n <= 0) { setError('Enter a valid GPM.'); return }
-    setError(null)
-    await setDoc(doc(db, 'pivotProfiles', pivotGuid), { currentGpm: n }, { merge: true })
-    setGpmSaved(true)
-    setTimeout(() => setGpmSaved(false), 1500)
-  }
+  const fieldIdsByPivotGuid = useMemo(() => {
+    const map = {}
+    Object.entries(pivotGuidByFieldId).forEach(([fieldId, guid]) => {
+      if (!guid) return
+      if (!map[guid]) map[guid] = []
+      map[guid].push(fieldId)
+    })
+    return map
+  }, [pivotGuidByFieldId])
 
-  async function handleThresholdChange(minutes) {
-    setThreshold(minutes)
-    await setDoc(doc(db, 'pivotProfiles', pivotGuid), { stuckAlertThresholdMinutes: minutes }, { merge: true })
-  }
+  const farmNameById = useMemo(() => {
+    const map = {}
+    farms.forEach((f) => { map[String(f.id)] = f.name })
+    return map
+  }, [farms])
 
-  if (!pivotGuid) return null
+  const rows = useMemo(() => {
+    const scopeFarmIds = isFarmManager
+      ? (userProfile && Array.isArray(userProfile.farmIds) ? userProfile.farmIds.map(String) : [])
+      : checkedFarmIds
 
-  const pkg = profile && profile.sprinklerPackage
-  const historyCount = (profile && profile.sprinklerPackageHistory && profile.sprinklerPackageHistory.length) || 0
+    return Object.entries(pivotsByGuid)
+      .map(([guid, pivot]) => {
+        const fieldIds = fieldIdsByPivotGuid[guid] || []
+        const farmIds = [...new Set(fieldIds.map((fid) => baseFieldsById[fid] && baseFieldsById[fid].farmId).filter((f) => f != null).map(String))]
+        const profile = pivotProfilesByGuid[guid] || {}
+        return {
+          guid,
+          name: pivot.name || guid,
+          farmIds,
+          farmNames: farmIds.map((fid) => farmNameById[fid] || fid).join(', ') || '\u2014',
+          gpm: profile.currentGpm != null ? profile.currentGpm : null,
+          packageName: profile.sprinklerPackage ? profile.sprinklerPackage.fileName : null,
+          threshold: profile.stuckAlertThresholdMinutes || 30,
+          stuck: !!profile.stuckAlertActive,
+          status: statusLabel(pivot)
+        }
+      })
+      .filter((row) => row.farmIds.some((fid) => scopeFarmIds.includes(fid)))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [pivotsByGuid, pivotProfilesByGuid, fieldIdsByPivotGuid, baseFieldsById, farmNameById, isFarmManager, userProfile, checkedFarmIds])
 
   return (
-    <div style={{ padding: '16px 24px', maxWidth: '480px' }}>
+    <div style={{ padding: '16px 24px', maxWidth: '900px' }}>
       <button onClick={onBack} style={{ marginBottom: '16px' }}>&larr; Back</button>
+      <h2 style={{ margin: '0 0 16px', fontSize: '18px' }}>Pivot profiles</h2>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', paddingBottom: '14px', borderBottom: '1px solid #eee' }}>
-        <PivotIcon pivot={pivot} size={44} />
-        <div>
-          <div style={{ fontSize: '16px', fontWeight: 600 }}>{(pivot && pivot.name) || 'Pivot'}</div>
-          <div style={{ fontSize: '11px', color: '#888' }}>Pivot profile</div>
-        </div>
-      </div>
-
-      <div style={{ marginBottom: '24px' }}>
-        <div className="editor-label" style={{ marginBottom: '8px' }}>Sprinkler package</div>
-        {pkg ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px' }}>
-            <div style={{ flex: 1 }}>
-              <a href={pkg.downloadUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: '13px' }}>{pkg.fileName}</a>
-              <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>Uploaded {new Date(pkg.uploadedAt).toLocaleDateString()}</div>
-            </div>
-            <label style={{ fontSize: '12px', padding: '6px 10px', border: '1px solid #ccc', borderRadius: '6px', cursor: uploading ? 'default' : 'pointer', background: '#fff' }}>
-              {uploading ? 'Uploading\u2026' : 'Replace'}
-              <input type="file" accept="application/pdf" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
-            </label>
+      {isAdminOrOwner && (
+        <div style={{ marginBottom: '16px' }}>
+          <div className="editor-label" style={{ marginBottom: '6px' }}>Farms</div>
+          <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
+            {farms.map((farm) => (
+              <label key={farm.id} style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '13px' }}>
+                <input
+                  type="checkbox"
+                  checked={checkedFarmIds.includes(String(farm.id))}
+                  onChange={() => toggleFarm(farm.id)}
+                  style={{ margin: 0 }}
+                />
+                {farm.name}
+              </label>
+            ))}
           </div>
-        ) : (
-          <label style={{ display: 'inline-block', fontSize: '13px', padding: '8px 14px', border: '1px dashed #ccc', borderRadius: '8px', cursor: uploading ? 'default' : 'pointer' }}>
-            {uploading ? 'Uploading\u2026' : 'Upload PDF'}
-            <input type="file" accept="application/pdf" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
-          </label>
-        )}
-        {historyCount > 0 && (
-          <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>{historyCount} older version{historyCount > 1 ? 's' : ''} kept for reference</div>
-        )}
-      </div>
-
-      <div style={{ marginBottom: '24px' }}>
-        <div className="editor-label" style={{ marginBottom: '8px' }}>Current GPM</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <input type="number" value={gpmInput} onChange={(e) => setGpmInput(e.target.value)} style={{ width: '100px' }} />
-          <span style={{ fontSize: '13px', color: '#555' }}>GPM</span>
-          <button onClick={handleSaveGpm}>{gpmSaved ? 'Saved!' : 'Save'}</button>
         </div>
-        <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Used for this pivot's scheduled-inches calculation</div>
-      </div>
+      )}
 
-      <div>
-        <div className="editor-label" style={{ marginBottom: '8px' }}>Stuck-pivot alert</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <input
-            type="range"
-            min="30"
-            max="120"
-            step="5"
-            value={threshold}
-            onChange={(e) => handleThresholdChange(Number(e.target.value))}
-            style={{ flex: 1 }}
-          />
-          <span style={{ fontSize: '13px', fontWeight: 500, minWidth: '70px' }}>{threshold} min</span>
-        </div>
-        <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Alert if running wet with no movement for this long</div>
-      </div>
-
-      {error && <p style={{ color: '#A32D2D', fontSize: '13px', marginTop: '16px' }}>{error}</p>}
+      <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ textAlign: 'left', color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.02em', borderBottom: '1px solid #ddd8cc' }}>
+            <th style={{ padding: '6px 8px' }}>Pivot</th>
+            <th style={{ padding: '6px 8px' }}>Farm</th>
+            <th style={{ padding: '6px 8px' }}>GPM</th>
+            <th style={{ padding: '6px 8px' }}>Sprinkler package</th>
+            <th style={{ padding: '6px 8px' }}>Alert threshold</th>
+            <th style={{ padding: '6px 8px' }}>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr
+              key={row.guid}
+              onClick={() => onOpenProfile(row.guid)}
+              style={{ cursor: 'pointer', borderBottom: '1px solid #eee', background: row.stuck ? '#fbeaea' : undefined }}
+            >
+              <td style={{ padding: '7px 8px', fontWeight: 600 }}>
+                {row.stuck && <span style={{ color: '#A32D2D', fontWeight: 700, marginRight: '4px' }}>!</span>}
+                {row.name}
+              </td>
+              <td style={{ padding: '7px 8px', color: '#666' }}>{row.farmNames}</td>
+              <td style={{ padding: '7px 8px', color: row.gpm == null ? '#A32D2D' : undefined }}>{row.gpm != null ? row.gpm : 'Not set'}</td>
+              <td style={{ padding: '7px 8px', color: row.packageName ? '#185FA5' : '#888' }}>{row.packageName || 'Not uploaded'}</td>
+              <td style={{ padding: '7px 8px' }}>{row.threshold} min</td>
+              <td style={{ padding: '7px 8px', color: row.status === 'Stopped' ? '#888' : undefined }}>{row.status}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rows.length === 0 && <p style={{ color: '#888', padding: '1rem 0' }}>No pivots for the selected farm(s).</p>}
     </div>
   )
 }
