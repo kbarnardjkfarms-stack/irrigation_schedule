@@ -1667,15 +1667,27 @@ function YardBayAgristorBadge({ bay }) {
   const fanOn = fanPct != null && fanPct > 0;
   const coolOn = coolPct != null && coolPct > 0;
   const stopped = !fanOn && !coolOn;
+  const plenum = reading?.plenumTempF ?? null;
+  const returnAir = reading?.returnAirTempF ?? null;
+  // Same "return air minus plenum" formula as buildAgristorDaySeries' panelDelta,
+  // so this live number and the Temperature tab's historical chart always agree.
+  const deltaT = plenum != null && returnAir != null ? Math.round((returnAir - plenum) * 10) / 10 : null;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 3, paddingTop: 3, borderTop: "1px solid #2b3549" }}>
-      <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
-        <Fan size={10} color={fanOn ? "#f2c14e" : "#4a5468"} /> {fanPct != null ? `${fanPct}%` : "—"}
-      </span>
-      <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
-        <Snowflake size={10} color={coolOn ? "#5fd1e6" : "#4a5468"} /> {coolPct != null ? `${coolPct}%` : "—"}
-      </span>
-      {stopped && <span style={{ fontSize: 9, fontWeight: 700, color: "#8790a3", letterSpacing: 0.3 }}>STOPPED</span>}
+    <div style={{ marginTop: 3, paddingTop: 3, borderTop: "1px solid #2b3549" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
+          <Fan size={10} color={fanOn ? "#f2c14e" : "#4a5468"} /> {fanPct != null ? `${fanPct}%` : "—"}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
+          <Snowflake size={10} color={coolOn ? "#5fd1e6" : "#4a5468"} /> {coolPct != null ? `${coolPct}%` : "—"}
+        </span>
+        {stopped && <span style={{ fontSize: 9, fontWeight: 700, color: "#8790a3", letterSpacing: 0.3 }}>STOPPED</span>}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 2, fontSize: 9.5, color: "#9aa4b8" }}>
+        <span>Plen {plenum != null ? `${plenum}°` : "—"}</span>
+        <span>Ret {returnAir != null ? `${returnAir}°` : "—"}</span>
+        <span>ΔT {deltaT != null ? `${deltaT}°` : "—"}</span>
+      </div>
     </div>
   );
 }
