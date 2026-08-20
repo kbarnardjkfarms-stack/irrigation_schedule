@@ -26,7 +26,15 @@ export default function AgronomyCleanup({ fields }) {
     const q = query(collection(db, 'samples'), where('fieldId', '==', null))
     const unsub = onSnapshot(q, (snap) => {
       const list = []
-      snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
+      snap.forEach((d) => {
+        const data = d.data()
+        // Compost samples identify a source, not a field - fieldId is
+        // always null for them by design (see mapResultToSample in
+        // functions/index.js), so they'd otherwise sit here forever as
+        // unresolvable noise. Not a cleanup task; excluded on purpose.
+        if (data.type === 'compost') return
+        list.push({ id: d.id, ...data })
+      })
       setUnmapped(list)
     })
     return () => unsub()
