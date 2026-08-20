@@ -254,7 +254,7 @@ export default function App() {
   const [pivotPanelPos, setPivotPanelPos] = useState({ top: 0, left: 0 })
   const pivotDetailRef = useRef(null)
   const [pivotProfileGuid, setPivotProfileGuid] = useState(null)
-  const [gpmByPivotGuid, setGpmByPivotGuid] = useState({})
+  const [pivotProfilesByGuid, setPivotProfilesByGuid] = useState({})
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const settingsMenuRef = useRef(null)
@@ -448,12 +448,14 @@ export default function App() {
   // any one field). This replaces fieldSettings.gpm as the source for the
   // scheduled-inches column below — that field was never actually wired to
   // a UI, so every field was showing 0.00 in "Scheduled inches" until now.
+  // Also carries the stuck-pivot alert state (stuckAlertActive, etc.) used
+  // for the badge and the "Clear error" action.
   useEffect(() => {
     if (!user) return
     const unsub = onSnapshot(collection(db, 'pivotProfiles'), (snap) => {
       const next = {}
-      snap.forEach((d) => { next[d.id] = d.data().currentGpm ?? null })
-      setGpmByPivotGuid(next)
+      snap.forEach((d) => { next[d.id] = d.data() })
+      setPivotProfilesByGuid(next)
     })
     return () => unsub()
   }, [user])
@@ -597,6 +599,21 @@ export default function App() {
   async function handleSignOut() {
     await signOut(auth)
   }
+
+  async function handleClearStuckAlert(pivotGuid) {
+    await setDoc(doc(db, 'pivotProfiles', pivotGuid), {
+      stuckAlertActive: false,
+      stuckAlertClearedAt: new Date().toISOString()
+    }, { merge: true })
+  }
+
+  const expandedPivotGuid = expandedPivotFieldId ? pivotGuidByFieldId[expandedPivotFieldId] : null
+  const expandedPivotProfile = expandedPivotGuid ? pivotProfilesByGuid[expandedPivotGuid] : null
+  const expandedPivotIsStuck = !!(expandedPivotProfile && expandedPivotProfile.stuckAlertActive)
+  const expandedPivotStuckMinutes = expandedPivotIsStuck && expandedPivotProfile.positionUnchangedSince
+    ? Math.max(0, Math.round((Date.now() - new Date(expandedPivotProfile.positionUnchangedSince).getTime()) / 60000))
+    : null
+  const canClearStuckAlerts = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager' || userRole === 'irrigation_manager'
 
   if (user === undefined) {
     return <div className="app"><p style={{ padding: '2rem' }}>Loading…</p></div>
@@ -920,7 +937,7 @@ export default function App() {
               <tbody>
                 {fields.map((field) => {
                   const events = eventsByField[field.id] || []
-                  const gpm = gpmByPivotGuid[pivotGuidByFieldId[field.id]]
+                  const gpm = pivotProfilesByGuid[pivotGuidByFieldId[field.id]]?.currentGpm
                   const color = CROP_COLOR[field.crop] || { bg: '#D3D1C7', fg: '#2C2C2A' }
                   const isSource = mode === 'copy-targets' && copySourceId === field.id
                   const isCopyTarget = mode === 'copy-targets' && copyTargets.has(field.id)
@@ -952,6 +969,7 @@ export default function App() {
                             <PivotIcon
                               pivot={pivot}
                               size={55}
+                              stuckAlert={!!pivotProfilesByGuid[pivotGuid]?.stuckAlertActive}
                               onClick={(e) => {
                                 e.stopPropagation()
                                 if (isPivotExpanded) {
@@ -1021,7 +1039,25 @@ export default function App() {
           onClick={(e) => e.stopPropagation()}
           style={{ position: 'fixed', top: pivotPanelPos.top, left: pivotPanelPos.left, zIndex: 1000, boxShadow: '0 6px 16px rgba(0,0,0,0.12)' }}
         >
-          <div style={{ borderTop: '1px solid #E2E4E8', borderRadius: '8px 8px 0 0', overflow: 'hidden' }}>
+          {expandedPivotIsStuck && (
+            <div style={{ padding: '10px 14px', background: '#FBEAEA', border: '1px solid #E8B4B4', borderRadius: '8px 8px 0 0' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                <span style={{ color: '#A32D2D', fontSize: '15px', fontWeight: 700, lineHeight: 1.3 }}>!</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#A32D2D' }}>Potential parked wet pivot</div>
+                  <div style={{ fontSize: '11px', color: '#8A3636', marginTop: '2px' }}>
+                    No movement detected for {expandedPivotStuckMinutes != null ? `${expandedPivotStuckMinutes} min` : 'a while'} while running
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => handleClearStuckAlert(expandedPivotGuid)}
+                style={{ marginTop: '8px', width: '100%', fontSize: '12px', padding: '6px 0', border: '1px solid #A32D2D', color: '#A32D2D', background: '#fff', borderRadius: '6px', display: canClearStuckAlerts ? undefined : 'none' }}
+                disabled={!canClearStuckAlerts}
+              >Clear error</button>
+            </div>
+          )}
+          <div style={{ borderTop: expandedPivotIsStuck ? 'none' : '1px solid #E2E4E8', borderRadius: expandedPivotIsStuck ? '0' : '8px 8px 0 0', overflow: 'hidden' }}>
             <PivotDetailPanel pivot={pivotsByGuid[pivotGuidByFieldId[expandedPivotFieldId]]} />
           </div>
           {pivotGuidByFieldId[expandedPivotFieldId] && (
