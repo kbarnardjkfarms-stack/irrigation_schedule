@@ -125,6 +125,19 @@ service cloud.firestore {
       allow read: if signedIn() && canViewAgronomy();
       allow write: if false;
     }
+    // Pivot profiles: sprinkler package reference (metadata only — the PDF
+    // itself lives in Storage, see storage.rules), current GPM, and the
+    // stuck-pivot alert threshold. Deliberately NOT farm-scoped like
+    // canEditFarmData() — a single pivot can serve more than one field
+    // (and therefore, in principle, span farm boundaries; Mietzner Middle
+    // already does this across two fields on the same farm), and some
+    // pivots have no field mapped at all (Mills). Simpler and safer for
+    // now to gate on role alone; can be tightened once/if a pivot's farm
+    // ownership needs to be unambiguous.
+    match /pivotProfiles/{pivotId} {
+      allow read: if signedIn();
+      allow write: if signedIn() && (isAdminOrOwner() || myRole() == 'farm_manager' || myRole() == 'irrigation_manager');
+    }
     // The actual irrigation schedule. Everyone signed in can view it (read
     // access isn't farm-scoped — farm/irrigation managers are explicitly
     // allowed to view farms outside their own, and locking irrigators to
