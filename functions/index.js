@@ -1408,9 +1408,13 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
     const pivot = pivotDoc.data();
     const profile = profileByGuid[guid] || {};
 
-    const statusDate = pivot.statusDate ? new Date(pivot.statusDate) : null;
-    if (!statusDate || isNaN(statusDate.getTime())) continue;
-    const dataAgeMinutes = (now.getTime() - statusDate.getTime()) / 60000;
+    // updatedAt is a real Firestore Timestamp written by the sync service
+    // itself (unlike statusDate, which is just whatever raw string format
+    // BaseStation3 hands back) — much more reliable to compute a "how
+    // fresh is this" check against.
+    const lastSynced = pivot.updatedAt && typeof pivot.updatedAt.toDate === 'function' ? pivot.updatedAt.toDate() : null;
+    if (!lastSynced) continue;
+    const dataAgeMinutes = (now.getTime() - lastSynced.getTime()) / 60000;
     if (dataAgeMinutes > STALE_DATA_CUTOFF_MINUTES) continue;
 
     checked++;
