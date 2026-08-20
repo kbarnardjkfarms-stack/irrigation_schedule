@@ -194,6 +194,16 @@ thead th.sticky-col { top: 0; z-index: 4; }
   gap: 8px;
   flex-wrap: wrap;
   margin-bottom: 10px;
+  align-items: center;
+}
+
+.agronomy-search-input {
+  font-family: inherit;
+  border: 0.5px solid #ddd8cc;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  min-width: 220px;
 }
 
 .agronomy-error-banner {
@@ -203,6 +213,52 @@ thead th.sticky-col { top: 0; z-index: 4; }
   padding: 10px 14px;
   font-size: 12px;
   margin-bottom: 12px;
+}
+
+/* Overrides the fixed/even column widths used elsewhere - with a dynamic
+   column per value (up to 19+ for nematode), fixed layout would just
+   cram every column tiny to fit the container instead of actually
+   growing wide enough for .table-scroll's horizontal scroll to do
+   anything useful. */
+.agronomy-wide-table {
+  table-layout: auto;
+  min-width: max-content;
+}
+
+.agronomy-wide-table th,
+.agronomy-wide-table td {
+  white-space: nowrap;
+  padding: 6px 10px;
+}
+
+.agronomy-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.agronomy-sortable:hover {
+  color: #3c5a3f;
+}
+
+.agronomy-clickable-row {
+  cursor: pointer;
+}
+
+.agronomy-clickable-row:hover {
+  background: #f4f2ec;
+}
+
+.agronomy-detail-row td {
+  background: #f4f2ec;
+  padding: 12px 14px;
+  white-space: normal;
+}
+
+.agronomy-detail-content {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 6px 16px;
+  font-size: 11px;
 }
 
 .agronomy-field-picker {
