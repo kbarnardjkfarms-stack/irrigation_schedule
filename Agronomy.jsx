@@ -4,6 +4,7 @@ import { db } from './firebase.js'
 import AgronomyByField from './AgronomyByField.jsx'
 import AgronomyByCriteria from './AgronomyByCriteria.jsx'
 import AgronomySampleDatabase from './AgronomySampleDatabase.jsx'
+import AgronomyCompostSources from './AgronomyCompostSources.jsx'
 import AgronomyCleanup from './AgronomyCleanup.jsx'
 
 export default function Agronomy() {
@@ -127,6 +128,9 @@ export default function Agronomy() {
         <button className={view === 'database' ? 'active' : ''} onClick={() => setView('database')}>
           All samples
         </button>
+        <button className={view === 'compost' ? 'active' : ''} onClick={() => setView('compost')}>
+          Compost sources
+        </button>
         <button className={view === 'cleanup' ? 'active' : ''} onClick={() => setView('cleanup')}>
           Cleanup
         </button>
@@ -135,6 +139,7 @@ export default function Agronomy() {
       {view === 'field' && <AgronomyByField fields={fields} />}
       {view === 'criteria' && <AgronomyByCriteria fields={fields} />}
       {view === 'database' && <AgronomySampleDatabase fields={fields} />}
+      {view === 'compost' && <AgronomyCompostSources />}
       {view === 'cleanup' && <AgronomyCleanup fields={allFields} />}
     </div>
   )
