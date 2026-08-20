@@ -176,7 +176,31 @@ export default function AgronomySampleDatabase({ fields }) {
     return list
   }, [visibleSamples, sortColumn, sortDir, fieldById])
 
-  const totalColumns = 3 + valueColumns.length
+  // null = show all columns (default). Once the person toggles anything,
+  // this becomes a real Set and only those columns show. Reset whenever
+  // the type changes, so a column selection made while looking at
+  // Nematode's 19 columns doesn't carry over and quietly hide everything
+  // when switching back to Soil's 2.
+  const [visibleColumnKeys, setVisibleColumnKeys] = useState(null)
+  const [columnPickerOpen, setColumnPickerOpen] = useState(false)
+  useEffect(() => { setVisibleColumnKeys(null); setColumnPickerOpen(false) }, [type])
+
+  function toggleColumn(key) {
+    setVisibleColumnKeys((prev) => {
+      const base = prev || new Set(valueColumns.map((c) => c.key))
+      const next = new Set(base)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const displayedColumns = useMemo(() => {
+    if (!visibleColumnKeys) return valueColumns
+    return valueColumns.filter((c) => visibleColumnKeys.has(c.key))
+  }, [valueColumns, visibleColumnKeys])
+
+  const totalColumns = 3 + displayedColumns.length
 
   return (
     <div className="agronomy-sample-database">
@@ -215,6 +239,31 @@ export default function AgronomySampleDatabase({ fields }) {
           onChange={(e) => setSearchText(e.target.value)}
           className="agronomy-search-input"
         />
+        {valueColumns.length > 1 && (
+          <div style={{ position: 'relative' }}>
+            <button onClick={() => setColumnPickerOpen((o) => !o)}>
+              Columns ({displayedColumns.length}/{valueColumns.length})
+            </button>
+            {columnPickerOpen && (
+              <div className="agronomy-column-picker">
+                <div className="agronomy-column-picker-actions">
+                  <button onClick={() => setVisibleColumnKeys(new Set(valueColumns.map((c) => c.key)))}>All</button>
+                  <button onClick={() => setVisibleColumnKeys(new Set())}>None</button>
+                </div>
+                {valueColumns.map((col) => (
+                  <label key={col.key}>
+                    <input
+                      type="checkbox"
+                      checked={!visibleColumnKeys || visibleColumnKeys.has(col.key)}
+                      onChange={() => toggleColumn(col.key)}
+                    />
+                    {col.label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {error && (
@@ -237,7 +286,7 @@ export default function AgronomySampleDatabase({ fields }) {
               <th className="agronomy-sortable" onClick={() => handleSort('crop')}>
                 Crop<SortArrow active={sortColumn === 'crop'} dir={sortDir} />
               </th>
-              {valueColumns.map((col) => (
+              {displayedColumns.map((col) => (
                 <th key={col.key} className="agronomy-sortable" onClick={() => handleSort(col.key)}>
                   {col.label}{col.unit ? ` (${col.unit})` : ''}
                   <SortArrow active={sortColumn === col.key} dir={sortDir} />
@@ -267,7 +316,7 @@ export default function AgronomySampleDatabase({ fields }) {
                         </span>
                       )}
                     </td>
-                    {valueColumns.map((col) => (
+                    {displayedColumns.map((col) => (
                       <td key={col.key}>{s.values?.[col.key] != null ? s.values[col.key] : '\u2014'}</td>
                     ))}
                   </tr>
