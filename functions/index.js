@@ -1321,3 +1321,220 @@ exports.syncAgristorReadingsNow = onRequest(
     }
   }
 );
+
+// ---- Stuck-pivot watcher -----------------------------------------------
+// Runs every 10 minutes. Catches the "last tower gets stuck while running
+// wet, the overwatering timer fails to shut it off, and it just parks wet
+// until someone notices" failure mode: if a pivot's angle position hasn't
+// moved at all while it's reporting as running wet, for longer than that
+// pivot's own configured threshold (pivotProfiles/{guid}
+// .stuckAlertThresholdMinutes — 30 to 120 min, default 30 — set on the
+// Pivot Profile page), it gets flagged (the red badge on the pivot icon,
+// everywhere PivotIcon renders) and texted to whoever should know about
+// that farm.
+//
+// Set these once with:
+//   firebase functions:secrets:set TWILIO_ACCOUNT_SID
+//   firebase functions:secrets:set TWILIO_AUTH_TOKEN
+//   firebase functions:secrets:set TWILIO_FROM_NUMBER
+const TWILIO_ACCOUNT_SID = defineSecret('TWILIO_ACCOUNT_SID');
+const TWILIO_AUTH_TOKEN = defineSecret('TWILIO_AUTH_TOKEN');
+const TWILIO_FROM_NUMBER = defineSecret('TWILIO_FROM_NUMBER');
+
+// How far the angle has to move to count as "not stuck" — small enough to
+// catch a real stall quickly, comfortably larger than sensor jitter. Even
+// a pivot slowed way down (5% timer) still covers a few degrees in 10
+// minutes per the Valley percent-timer chart, so this stays conservative.
+const STUCK_POSITION_EPSILON_DEG = 0.5;
+// If BaseStation3 hasn't synced a pivot's data within this long, skip it
+// this cycle rather than risk mistaking a sync/connectivity gap for a
+// genuinely stuck pivot.
+const STALE_DATA_CUTOFF_MINUTES = 60;
+const DEFAULT_STUCK_THRESHOLD_MINUTES = 30;
+
+async function sendSms(to, body, accountSid, authToken, fromNumber) {
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+  const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
+  const params = new URLSearchParams({ To: to, From: fromNumber, Body: body });
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${auth}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: params
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Twilio send failed (${res.status}): ${text}`);
+  }
+}
+
+async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
+  const db = admin.firestore();
+  const now = new Date();
+
+  const [pivotsSnap, profilesSnap, mappingSnap, fieldsSnap, usersSnap] = await Promise.all([
+    db.collection('pivots').get(),
+    db.collection('pivotProfiles').get(),
+    db.collection('pivotFieldMapping').get(),
+    db.collection('fields').get(),
+    db.collection('users').get()
+  ]);
+
+  const profileByGuid = {};
+  profilesSnap.forEach((d) => { profileByGuid[d.id] = d.data(); });
+
+  const farmIdByFieldId = {};
+  fieldsSnap.forEach((d) => { farmIdByFieldId[d.id] = d.data().farmId; });
+
+  // A pivot can serve more than one field (Mietzner Middle already does),
+  // so this is guid -> array of fieldIds, not a single one.
+  const fieldIdsByPivotGuid = {};
+  mappingSnap.forEach((d) => {
+    const { fieldId, pivotGuid } = d.data();
+    if (!pivotGuid || !fieldId) return;
+    if (!fieldIdsByPivotGuid[pivotGuid]) fieldIdsByPivotGuid[pivotGuid] = [];
+    fieldIdsByPivotGuid[pivotGuid].push(fieldId);
+  });
+
+  const users = [];
+  usersSnap.forEach((d) => users.push({ uid: d.id, ...d.data() }));
+
+  let checked = 0, flagged = 0, texted = 0;
+
+  for (const pivotDoc of pivotsSnap.docs) {
+    const guid = pivotDoc.id;
+    const pivot = pivotDoc.data();
+    const profile = profileByGuid[guid] || {};
+
+    const statusDate = pivot.statusDate ? new Date(pivot.statusDate) : null;
+    if (!statusDate || isNaN(statusDate.getTime())) continue;
+    const dataAgeMinutes = (now.getTime() - statusDate.getTime()) / 60000;
+    if (dataAgeMinutes > STALE_DATA_CUTOFF_MINUTES) continue;
+
+    checked++;
+
+    const isRunningWet = pivot.systemStatus === 'Running' && pivot.waterMode !== 'Dry';
+    const position = Number(pivot.currentPosition);
+    const threshold = profile.stuckAlertThresholdMinutes || DEFAULT_STUCK_THRESHOLD_MINUTES;
+
+    if (!isRunningWet || isNaN(position)) {
+      // Not irrigating right now (or no usable position reading) — clear
+      // any tracking so a stale "unchanged since" timestamp from a
+      // previous wet cycle can't cause a false alert next time it starts.
+      // Only write when there's actually something to reset, so a pivot
+      // that's simply been off for days doesn't get rewritten every cycle.
+      if (profile.stuckAlertActive || profile.lastKnownPosition != null) {
+        await db.collection('pivotProfiles').doc(guid).set({
+          lastKnownPosition: null,
+          positionUnchangedSince: now.toISOString(),
+          stuckAlertActive: false
+        }, { merge: true });
+      }
+      continue;
+    }
+
+    const hasMoved = profile.lastKnownPosition == null
+      || Math.abs(position - profile.lastKnownPosition) > STUCK_POSITION_EPSILON_DEG;
+
+    if (hasMoved) {
+      await db.collection('pivotProfiles').doc(guid).set({
+        lastKnownPosition: position,
+        positionUnchangedSince: now.toISOString(),
+        stuckAlertActive: false
+      }, { merge: true });
+      continue;
+    }
+
+    const unchangedSince = profile.positionUnchangedSince ? new Date(profile.positionUnchangedSince) : now;
+    const minutesUnchanged = (now.getTime() - unchangedSince.getTime()) / 60000;
+    if (minutesUnchanged < threshold) continue;
+
+    // Stuck long enough to matter. Only actually (re-)alert if this is a
+    // fresh episode, or someone already cleared it and it's still stuck a
+    // full threshold later — not on every single cycle past that point.
+    const lastSent = profile.stuckAlertLastSentAt ? new Date(profile.stuckAlertLastSentAt) : null;
+    const minutesSinceLastSent = lastSent ? (now.getTime() - lastSent.getTime()) / 60000 : Infinity;
+    const shouldAlert = !profile.stuckAlertActive && minutesSinceLastSent >= threshold;
+    if (!shouldAlert) continue;
+
+    flagged++;
+
+    await db.collection('pivotProfiles').doc(guid).set({
+      stuckAlertActive: true,
+      stuckAlertLastSentAt: now.toISOString(),
+      stuckAlertClearedAt: admin.firestore.FieldValue.delete()
+    }, { merge: true });
+
+    const fieldIds = fieldIdsByPivotGuid[guid] || [];
+    const farmIds = [...new Set(fieldIds.map((fid) => farmIdByFieldId[fid]).filter((f) => f != null).map(String))];
+
+    const recipients = users.filter((u) => {
+      if (!u.phone || u.receiveTextAlerts === false) return false;
+      if (u.role === 'admin' || u.role === 'owner') return true;
+      if ((u.role === 'farm_manager' || u.role === 'irrigation_manager') && Array.isArray(u.farmIds)) {
+        return u.farmIds.some((fid) => farmIds.includes(String(fid)));
+      }
+      return false;
+    });
+
+    const pivotName = pivot.name || guid;
+    const message = `AIO alert: ${pivotName} may be parked wet \u2014 no movement for over ${threshold} min while running. Check it out.`;
+
+    for (const recipient of recipients) {
+      try {
+        await sendSms(recipient.phone, message, accountSid, authToken, fromNumber);
+        texted++;
+      } catch (err) {
+        console.error(`Failed to text ${recipient.email || recipient.uid} about pivot ${guid}:`, err.message);
+      }
+    }
+
+    if (recipients.length === 0) {
+      console.warn(`Pivot ${guid} (${pivotName}) flagged stuck, but nobody is set up to receive a text for its farm(s): ${farmIds.join(', ') || 'none resolved'}.`);
+    }
+  }
+
+  return { checked, flagged, texted };
+}
+
+exports.checkStuckPivots = onSchedule(
+  {
+    schedule: 'every 10 minutes',
+    secrets: [TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER],
+    timeoutSeconds: 120,
+    memory: '256MiB'
+  },
+  async () => {
+    try {
+      const result = await checkStuckPivotsOnce(
+        TWILIO_ACCOUNT_SID.value(),
+        TWILIO_AUTH_TOKEN.value(),
+        TWILIO_FROM_NUMBER.value()
+      );
+      console.log(`Stuck-pivot check: ${result.checked} pivot(s) checked, ${result.flagged} newly flagged, ${result.texted} text(s) sent.`);
+    } catch (err) {
+      console.error('Stuck-pivot check failed:', err);
+    }
+  }
+);
+
+// Manual trigger for testing right after deploy, without waiting for the
+// next scheduled run.
+exports.checkStuckPivotsNow = onRequest(
+  { secrets: [TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER], timeoutSeconds: 120, memory: '256MiB' },
+  async (req, res) => {
+    try {
+      const result = await checkStuckPivotsOnce(
+        TWILIO_ACCOUNT_SID.value(),
+        TWILIO_AUTH_TOKEN.value(),
+        TWILIO_FROM_NUMBER.value()
+      );
+      res.status(200).send(`Checked ${result.checked} pivot(s), flagged ${result.flagged} new, sent ${result.texted} text(s).`);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send(err.message);
+    }
+  }
+);
