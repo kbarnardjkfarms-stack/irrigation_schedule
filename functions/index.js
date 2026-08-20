@@ -1328,7 +1328,7 @@ exports.syncAgristorReadingsNow = onRequest(
 // until someone notices" failure mode: if a pivot's angle position hasn't
 // moved at all while it's reporting as running wet, for longer than that
 // pivot's own configured threshold (pivotProfiles/{guid}
-// .stuckAlertThresholdMinutes — 30 to 120 min, default 30 — set on the
+// .stuckAlertThresholdMinutes — 45 to 120 min, default 60 — set on the
 // Pivot Profile page), it gets flagged (the red badge on the pivot icon,
 // everywhere PivotIcon renders) and texted to whoever should know about
 // that farm.
@@ -1350,7 +1350,8 @@ const STUCK_POSITION_EPSILON_DEG = 0.5;
 // this cycle rather than risk mistaking a sync/connectivity gap for a
 // genuinely stuck pivot.
 const STALE_DATA_CUTOFF_MINUTES = 60;
-const DEFAULT_STUCK_THRESHOLD_MINUTES = 30;
+const DEFAULT_STUCK_THRESHOLD_MINUTES = 60;
+const MIN_STUCK_THRESHOLD_MINUTES = 45;
 
 async function sendSms(to, body, accountSid, authToken, fromNumber) {
   const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
@@ -1421,7 +1422,7 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
 
     const isRunningWet = pivot.systemStatus === 'Running' && pivot.waterMode !== 'Dry';
     const position = Number(pivot.currentPosition);
-    const threshold = profile.stuckAlertThresholdMinutes || DEFAULT_STUCK_THRESHOLD_MINUTES;
+    const threshold = Math.max(MIN_STUCK_THRESHOLD_MINUTES, profile.stuckAlertThresholdMinutes || DEFAULT_STUCK_THRESHOLD_MINUTES);
 
     if (!isRunningWet || isNaN(position)) {
       // Not irrigating right now (or no usable position reading) — clear
