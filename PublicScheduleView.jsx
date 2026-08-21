@@ -296,14 +296,14 @@ export default function PublicScheduleView({ slug }) {
         const seasonData = seasonDataByField[id] || {}
         const pivotGuid = pivotGuidByFieldId[id]
         const pivot = pivotGuid ? pivotsByGuid[pivotGuid] : null
-        const stuckAlert = pivotGuid ? !!pivotProfilesByGuid[pivotGuid]?.stuckAlertActive : false
+        const flagged = pivotGuid ? !!(pivotProfilesByGuid[pivotGuid]?.stuckAlertActive || pivotProfilesByGuid[pivotGuid]?.lapTimeDriftFlagged) : false
         return {
           id,
           fieldName: base.name,
           crop: (seasonData.cropName || '').toUpperCase(),
           acres: seasonData.acres || null,
           pivot,
-          stuckAlert
+          flagged
         }
       })
       .sort((a, b) => (a.fieldName || '').localeCompare(b.fieldName || ''))
@@ -403,7 +403,7 @@ export default function PublicScheduleView({ slug }) {
                       onClick={() => field.pivot && setExpandedFieldId(isExpanded ? null : field.id)}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <PivotIcon pivot={field.pivot} size={55} stuckAlert={field.stuckAlert} />
+                        <PivotIcon pivot={field.pivot} size={55} flagged={field.flagged} />
                         <div>
                           <div><strong>{field.fieldName}</strong></div>
                           <div style={{ marginTop: '4px' }}>
