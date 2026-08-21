@@ -614,6 +614,11 @@ export default function App() {
   const expandedPivotStuckMinutes = expandedPivotIsStuck && expandedPivotProfile.positionUnchangedSince
     ? Math.max(0, Math.round((Date.now() - new Date(expandedPivotProfile.positionUnchangedSince).getTime()) / 60000))
     : null
+  const expandedPivotHasDrift = !!(expandedPivotProfile && expandedPivotProfile.lapTimeDriftFlagged)
+  const expandedPivotBaseline = expandedPivotProfile && expandedPivotProfile.seasonBaselines && selectedSeasonId
+    ? expandedPivotProfile.seasonBaselines[selectedSeasonId]
+    : null
+  const hasAnyExpandedAlert = expandedPivotIsStuck || expandedPivotHasDrift
   const canClearStuckAlerts = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager' || userRole === 'irrigation_manager'
   const showUsersMenuItem = userRole === 'admin' || userRole === 'owner'
   const showPivotProfilesMenuItem = page === 'irrigation' && (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager')
@@ -993,7 +998,7 @@ export default function App() {
                             <PivotIcon
                               pivot={pivot}
                               size={55}
-                              stuckAlert={!!pivotProfilesByGuid[pivotGuid]?.stuckAlertActive}
+                              flagged={!!(pivotProfilesByGuid[pivotGuid]?.stuckAlertActive || pivotProfilesByGuid[pivotGuid]?.lapTimeDriftFlagged)}
                               onClick={(e) => {
                                 e.stopPropagation()
                                 if (isPivotExpanded) {
@@ -1081,7 +1086,20 @@ export default function App() {
               >Clear error</button>
             </div>
           )}
-          <div style={{ borderTop: expandedPivotIsStuck ? 'none' : '1px solid #E2E4E8', borderRadius: expandedPivotIsStuck ? '0' : '8px 8px 0 0', overflow: 'hidden' }}>
+          {expandedPivotHasDrift && (
+            <div style={{ padding: '10px 14px', background: '#FBF3E2', border: '1px solid #F0D9A8', borderTop: expandedPivotIsStuck ? 'none' : undefined, borderRadius: expandedPivotIsStuck ? '0' : '8px 8px 0 0' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                <span style={{ color: '#854F0B', fontSize: '15px', fontWeight: 700, lineHeight: 1.3 }}>~</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#854F0B' }}>Lap time has drifted</div>
+                  <div style={{ fontSize: '11px', color: '#6B4108', marginTop: '2px' }}>
+                    {expandedPivotProfile && expandedPivotProfile.currentLapTimeHours != null ? `${expandedPivotProfile.currentLapTimeHours} hr` : 'Current'} lap time is more than 10% off this season's baseline{expandedPivotBaseline ? ` (${expandedPivotBaseline.lapTimeHours} hr)` : ''}. Clears on its own once a new audit lands back in range.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          <div style={{ borderTop: hasAnyExpandedAlert ? 'none' : '1px solid #E2E4E8', borderRadius: hasAnyExpandedAlert ? '0' : '8px 8px 0 0', overflow: 'hidden' }}>
             <PivotDetailPanel pivot={pivotsByGuid[pivotGuidByFieldId[expandedPivotFieldId]]} />
           </div>
           {pivotGuidByFieldId[expandedPivotFieldId] && (
