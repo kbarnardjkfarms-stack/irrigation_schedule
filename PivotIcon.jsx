@@ -23,7 +23,7 @@ function sectorPath(cx, cy, r, s, e) {
  * pivot: the Firestore document from the `pivots` collection, or null/undefined
  * if this field has no pivot mapped yet (renders a neutral placeholder).
  */
-export default function PivotIcon({ pivot, size = 40, onClick, stuckAlert = false }) {
+export default function PivotIcon({ pivot, size = 40, onClick, flagged = false }) {
   if (!pivot) {
     return (
       <svg
@@ -105,8 +105,8 @@ export default function PivotIcon({ pivot, size = 40, onClick, stuckAlert = fals
           strokeLinejoin="round"
         />
       </g>
-      {stuckAlert && (
-        <g aria-label="Alert: possible parked wet pivot">
+      {flagged && (
+        <g aria-label="Alert: this pivot needs attention, open its profile for details">
           <circle cx="33" cy="7" r="7" fill="#A32D2D" stroke="#fff" strokeWidth="1.5" />
           <text x="33" y="7" textAnchor="middle" dy="0.35em" fill="#fff" fontSize="10" fontWeight="700">!</text>
         </g>
