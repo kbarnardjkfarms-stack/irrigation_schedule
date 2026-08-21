@@ -1371,16 +1371,31 @@ async function sendSms(to, body, accountSid, authToken, fromNumber) {
   }
 }
 
+// Total degrees a pivot travels in one lap — 360 for a full-circle
+// machine, or the arc between its reverse/forward stops for a
+// wiper/sector pivot. Mirrors the exact same full-circle detection used
+// in PivotIcon.jsx (equal reverse/forward angle means "goes all the way
+// around," not "no data").
+function computeArcDegrees(pivot) {
+  const rev = Number(pivot.reverseAngle) || 0;
+  const fwd = Number(pivot.forwardAngle) || 0;
+  if (rev === fwd) return 360;
+  let diff = fwd - rev;
+  if (diff < 0) diff += 360;
+  return diff;
+}
+
 async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
   const db = admin.firestore();
   const now = new Date();
 
-  const [pivotsSnap, profilesSnap, mappingSnap, fieldsSnap, usersSnap] = await Promise.all([
+  const [pivotsSnap, profilesSnap, mappingSnap, fieldsSnap, usersSnap, seasonsSnap] = await Promise.all([
     db.collection('pivots').get(),
     db.collection('pivotProfiles').get(),
     db.collection('pivotFieldMapping').get(),
     db.collection('fields').get(),
-    db.collection('users').get()
+    db.collection('users').get(),
+    db.collection('seasons').get()
   ]);
 
   const profileByGuid = {};
@@ -1402,7 +1417,32 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
   const users = [];
   usersSnap.forEach((d) => users.push({ uid: d.id, ...d.data() }));
 
-  let checked = 0, flagged = 0, texted = 0;
+  // Current season, same "match the calendar year, fall back to latest
+  // start date" logic the app itself uses — needed to know which season a
+  // freshly-qualifying baseline audit belongs to, and to size the
+  // baseline requirement (a pivot's combined acreage across every field
+  // it serves, this season).
+  const seasonsList = [];
+  seasonsSnap.forEach((d) => seasonsList.push({ id: d.id, ...d.data() }));
+  seasonsList.sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''));
+  const currentYear = String(now.getFullYear());
+  const currentSeasonDoc = seasonsList.find((s) => String(s.name) === currentYear);
+  const currentSeasonId = currentSeasonDoc ? currentSeasonDoc.id : (seasonsList[0] ? seasonsList[0].id : null);
+
+  const acresByPivotGuid = {};
+  if (currentSeasonId) {
+    const seasonDocsSnap = await db.collectionGroup('seasons').where('seasonId', '==', currentSeasonId).get();
+    const acresByFieldId = {};
+    seasonDocsSnap.forEach((d) => {
+      const fieldId = d.ref.parent.parent.id;
+      acresByFieldId[fieldId] = d.data().acres || 0;
+    });
+    Object.entries(fieldIdsByPivotGuid).forEach(([guid, fieldIds]) => {
+      acresByPivotGuid[guid] = fieldIds.reduce((sum, fid) => sum + (acresByFieldId[fid] || 0), 0);
+    });
+  }
+
+  let checked = 0, flagged = 0, texted = 0, auditsUpdated = 0;
 
   for (const pivotDoc of pivotsSnap.docs) {
     const guid = pivotDoc.id;
@@ -1420,57 +1460,127 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
 
     checked++;
 
+    const updates = {};
+    let sendStuckText = false;
+
+    // ---- Stuck-pivot check (running wet only) --------------------------
     const isRunningWet = pivot.systemStatus === 'Running' && pivot.waterMode !== 'Dry';
     const position = Number(pivot.currentPosition);
-    const threshold = Math.max(MIN_STUCK_THRESHOLD_MINUTES, profile.stuckAlertThresholdMinutes || DEFAULT_STUCK_THRESHOLD_MINUTES);
+    const stuckThreshold = Math.max(MIN_STUCK_THRESHOLD_MINUTES, profile.stuckAlertThresholdMinutes || DEFAULT_STUCK_THRESHOLD_MINUTES);
 
     if (!isRunningWet || isNaN(position)) {
-      // Not irrigating right now (or no usable position reading) — clear
-      // any tracking so a stale "unchanged since" timestamp from a
-      // previous wet cycle can't cause a false alert next time it starts.
-      // Only write when there's actually something to reset, so a pivot
-      // that's simply been off for days doesn't get rewritten every cycle.
       if (profile.stuckAlertActive || profile.lastKnownPosition != null) {
-        await db.collection('pivotProfiles').doc(guid).set({
-          lastKnownPosition: null,
-          positionUnchangedSince: now.toISOString(),
-          stuckAlertActive: false
-        }, { merge: true });
+        updates.lastKnownPosition = null;
+        updates.positionUnchangedSince = now.toISOString();
+        updates.stuckAlertActive = false;
       }
-      continue;
+    } else {
+      const hasMoved = profile.lastKnownPosition == null
+        || Math.abs(position - profile.lastKnownPosition) > STUCK_POSITION_EPSILON_DEG;
+
+      if (hasMoved) {
+        updates.lastKnownPosition = position;
+        updates.positionUnchangedSince = now.toISOString();
+        updates.stuckAlertActive = false;
+      } else {
+        const unchangedSince = profile.positionUnchangedSince ? new Date(profile.positionUnchangedSince) : now;
+        const minutesUnchanged = (now.getTime() - unchangedSince.getTime()) / 60000;
+        if (minutesUnchanged >= stuckThreshold) {
+          const lastSent = profile.stuckAlertLastSentAt ? new Date(profile.stuckAlertLastSentAt) : null;
+          const minutesSinceLastSent = lastSent ? (now.getTime() - lastSent.getTime()) / 60000 : Infinity;
+          if (!profile.stuckAlertActive && minutesSinceLastSent >= stuckThreshold) {
+            flagged++;
+            updates.stuckAlertActive = true;
+            updates.stuckAlertLastSentAt = now.toISOString();
+            updates.stuckAlertClearedAt = admin.firestore.FieldValue.delete();
+            sendStuckText = true;
+          }
+        }
+      }
     }
 
-    const hasMoved = profile.lastKnownPosition == null
-      || Math.abs(position - profile.lastKnownPosition) > STUCK_POSITION_EPSILON_DEG;
+    // ---- Lap-time audit (running at all, wet or dry — rotation speed --
+    // ---- doesn't care whether water's on) ------------------------------
+    const isRunningAtAll = pivot.systemStatus === 'Running';
+    const direction = pivot.direction;
+    const percentTimer = Number(pivot.percentTimer);
+    const episode = profile.auditEpisode;
 
-    if (hasMoved) {
-      await db.collection('pivotProfiles').doc(guid).set({
-        lastKnownPosition: position,
-        positionUnchangedSince: now.toISOString(),
-        stuckAlertActive: false
-      }, { merge: true });
-      continue;
+    if (!isRunningAtAll || isNaN(position) || isNaN(percentTimer) || !direction) {
+      if (episode) {
+        updates.auditEpisode = admin.firestore.FieldValue.delete();
+        updates.currentLapTimeIsLive = false;
+      }
+    } else {
+      const episodeMatches = episode && episode.direction === direction && episode.percentTimer === percentTimer;
+
+      if (!episodeMatches) {
+        // Direction or speed changed (or there was no episode at all) —
+        // start fresh. If the old episode had already produced a
+        // qualifying result, that number just freezes in place as "last
+        // known" rather than being touched here.
+        if (episode) updates.currentLapTimeIsLive = false;
+        updates.auditEpisode = {
+          startedAt: now.toISOString(),
+          direction,
+          percentTimer,
+          totalArcDegrees: computeArcDegrees(pivot),
+          lastCheckedAt: now.toISOString(),
+          lastCheckedPosition: position,
+          accumulatedDegrees: 0
+        };
+      } else {
+        const delta = direction === 'Forward'
+          ? ((position - episode.lastCheckedPosition) + 360) % 360
+          : ((episode.lastCheckedPosition - position) + 360) % 360;
+        const accumulatedDegrees = (episode.accumulatedDegrees || 0) + delta;
+        const elapsedHours = (now.getTime() - new Date(episode.startedAt).getTime()) / 3600000;
+
+        updates.auditEpisode = { ...episode, lastCheckedAt: now.toISOString(), lastCheckedPosition: position, accumulatedDegrees };
+
+        if (elapsedHours >= 3 && accumulatedDegrees > 0) {
+          const degreesPerHour = accumulatedDegrees / elapsedHours;
+          const lapTimeAtSpeed = episode.totalArcDegrees / degreesPerHour;
+          const lapTimeAt100 = lapTimeAtSpeed * (percentTimer / 100);
+          const lapTimeRounded = Math.round(lapTimeAt100 * 10) / 10;
+
+          updates.currentLapTimeHours = lapTimeRounded;
+          updates.currentLapTimeUpdatedAt = now.toISOString();
+          updates.currentLapTimeIsLive = true;
+          auditsUpdated++;
+
+          const acres = acresByPivotGuid[guid] || 0;
+          const requiredHours = acres > 30 ? 24 : 12;
+          const baselines = profile.seasonBaselines || {};
+
+          if (currentSeasonId && elapsedHours >= requiredHours && !baselines[currentSeasonId]) {
+            updates.seasonBaselines = {
+              ...baselines,
+              [currentSeasonId]: {
+                lapTimeHours: lapTimeRounded,
+                completedAt: now.toISOString(),
+                percentTimerAtMeasurement: percentTimer,
+                acres,
+                requiredHours
+              }
+            };
+          }
+
+          const baselineForDrift = currentSeasonId
+            ? ((updates.seasonBaselines && updates.seasonBaselines[currentSeasonId]) || baselines[currentSeasonId])
+            : null;
+          updates.lapTimeDriftFlagged = baselineForDrift
+            ? Math.abs(lapTimeRounded - baselineForDrift.lapTimeHours) / baselineForDrift.lapTimeHours > 0.10
+            : false;
+        }
+      }
     }
 
-    const unchangedSince = profile.positionUnchangedSince ? new Date(profile.positionUnchangedSince) : now;
-    const minutesUnchanged = (now.getTime() - unchangedSince.getTime()) / 60000;
-    if (minutesUnchanged < threshold) continue;
+    if (Object.keys(updates).length > 0) {
+      await db.collection('pivotProfiles').doc(guid).set(updates, { merge: true });
+    }
 
-    // Stuck long enough to matter. Only actually (re-)alert if this is a
-    // fresh episode, or someone already cleared it and it's still stuck a
-    // full threshold later — not on every single cycle past that point.
-    const lastSent = profile.stuckAlertLastSentAt ? new Date(profile.stuckAlertLastSentAt) : null;
-    const minutesSinceLastSent = lastSent ? (now.getTime() - lastSent.getTime()) / 60000 : Infinity;
-    const shouldAlert = !profile.stuckAlertActive && minutesSinceLastSent >= threshold;
-    if (!shouldAlert) continue;
-
-    flagged++;
-
-    await db.collection('pivotProfiles').doc(guid).set({
-      stuckAlertActive: true,
-      stuckAlertLastSentAt: now.toISOString(),
-      stuckAlertClearedAt: admin.firestore.FieldValue.delete()
-    }, { merge: true });
+    if (!sendStuckText) continue;
 
     const fieldIds = fieldIdsByPivotGuid[guid] || [];
     const farmIds = [...new Set(fieldIds.map((fid) => farmIdByFieldId[fid]).filter((f) => f != null).map(String))];
@@ -1485,7 +1595,7 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
     });
 
     const pivotName = pivot.name || guid;
-    const message = `AIO alert: ${pivotName} may be parked wet \u2014 no movement for over ${threshold} min while running. Check it out.`;
+    const message = `AIO alert: ${pivotName} may be parked wet \u2014 no movement for over ${stuckThreshold} min while running. Check it out.`;
 
     for (const recipient of recipients) {
       try {
@@ -1501,7 +1611,7 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
     }
   }
 
-  return { checked, flagged, texted };
+  return { checked, flagged, texted, auditsUpdated };
 }
 
 exports.checkStuckPivots = onSchedule(
@@ -1518,7 +1628,7 @@ exports.checkStuckPivots = onSchedule(
         TWILIO_AUTH_TOKEN.value(),
         TWILIO_FROM_NUMBER.value()
       );
-      console.log(`Stuck-pivot check: ${result.checked} pivot(s) checked, ${result.flagged} newly flagged, ${result.texted} text(s) sent.`);
+      console.log(`Pivot check: ${result.checked} checked, ${result.flagged} newly flagged stuck, ${result.texted} text(s) sent, ${result.auditsUpdated} lap-time audit(s) updated.`);
     } catch (err) {
       console.error('Stuck-pivot check failed:', err);
     }
@@ -1536,7 +1646,7 @@ exports.checkStuckPivotsNow = onRequest(
         TWILIO_AUTH_TOKEN.value(),
         TWILIO_FROM_NUMBER.value()
       );
-      res.status(200).send(`Checked ${result.checked} pivot(s), flagged ${result.flagged} new, sent ${result.texted} text(s).`);
+      res.status(200).send(`Checked ${result.checked} pivot(s), flagged ${result.flagged} new, sent ${result.texted} text(s), updated ${result.auditsUpdated} lap-time audit(s).`);
     } catch (err) {
       console.error(err);
       res.status(500).send(err.message);
