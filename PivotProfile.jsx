@@ -14,6 +14,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const [gpmSaved, setGpmSaved] = useState(false)
   const [thresholdSaved, setThresholdSaved] = useState(false)
   const [currentSeasonId, setCurrentSeasonId] = useState(null)
+  const [currentSeasonName, setCurrentSeasonName] = useState(null)
   const [acres, setAcres] = useState(null)
 
   // One-time lookup, not a live listener — this pivot's combined acreage
@@ -30,15 +31,22 @@ export default function PivotProfile({ pivotGuid, onBack }) {
       const currentYear = String(new Date().getFullYear())
       const match = seasonsList.find((s) => String(s.name) === currentYear)
       const seasonId = match ? match.id : (seasonsList[0] ? seasonsList[0].id : null)
+      const seasonName = match ? match.name : (seasonsList[0] ? seasonsList[0].name : null)
       if (cancelled) return
       setCurrentSeasonId(seasonId)
+      setCurrentSeasonName(seasonName)
 
       const mappingSnap = await getDocs(query(collection(db, 'pivotFieldMapping'), where('pivotGuid', '==', pivotGuid)))
-      const fieldIds = []
-      mappingSnap.forEach((d) => { if (d.data().fieldId) fieldIds.push(d.data().fieldId) })
+      // A Set here, not an array — a leftover mapping doc from before the
+      // pivotFieldMapping rekey (fieldId-keyed docs replaced the old
+      // pivotGuid-keyed ones, but old ones weren't always cleaned up) can
+      // otherwise list the same field twice and silently double the
+      // acreage total below.
+      const fieldIds = new Set()
+      mappingSnap.forEach((d) => { if (d.data().fieldId) fieldIds.add(d.data().fieldId) })
 
-      if (!seasonId || fieldIds.length === 0) { if (!cancelled) setAcres(0); return }
-      const seasonDocs = await Promise.all(fieldIds.map((fid) => getDoc(doc(db, 'fields', fid, 'seasons', seasonId))))
+      if (!seasonId || fieldIds.size === 0) { if (!cancelled) setAcres(0); return }
+      const seasonDocs = await Promise.all([...fieldIds].map((fid) => getDoc(doc(db, 'fields', fid, 'seasons', seasonId))))
       const total = seasonDocs.reduce((sum, snap) => sum + (snap.exists() ? (snap.data().acres || 0) : 0), 0)
       if (!cancelled) setAcres(total)
     }
@@ -177,11 +185,11 @@ export default function PivotProfile({ pivotGuid, onBack }) {
           <span style={{ fontSize: '13px', color: '#555' }}>min</span>
           <button onClick={handleSaveThreshold}>{thresholdSaved ? 'Saved!' : 'Save'}</button>
         </div>
-        <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Alert if running wet with no movement for this long (45\u2013120 min)</div>
+        <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Alert if running wet with no movement for this long (45&ndash;120 min)</div>
       </div>
 
       <div style={{ marginTop: '24px', marginBottom: '24px' }}>
-        <div className="editor-label" style={{ marginBottom: '8px' }}>Full audit &mdash; {currentSeasonId || '\u2014'}</div>
+        <div className="editor-label" style={{ marginBottom: '8px' }}>Full audit &mdash; {currentSeasonName || '\u2014'}</div>
         {baseline ? (
           <div style={{ background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px' }}>
             <div style={{ fontSize: '13px', fontWeight: 600, color: '#2b2b26' }}>{baseline.lapTimeHours} hr baseline set</div>
