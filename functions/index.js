@@ -1405,13 +1405,17 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
   fieldsSnap.forEach((d) => { farmIdByFieldId[d.id] = d.data().farmId; });
 
   // A pivot can serve more than one field (Mietzner Middle already does),
-  // so this is guid -> array of fieldIds, not a single one.
+  // so this is guid -> array of fieldIds, not a single one. Guarded
+  // against duplicates on purpose — a leftover mapping doc from before
+  // pivotFieldMapping was rekeyed from pivotGuid to fieldId (old docs
+  // weren't always cleaned up) could otherwise list the same field twice
+  // and silently double a pivot's acreage total below.
   const fieldIdsByPivotGuid = {};
   mappingSnap.forEach((d) => {
     const { fieldId, pivotGuid } = d.data();
     if (!pivotGuid || !fieldId) return;
     if (!fieldIdsByPivotGuid[pivotGuid]) fieldIdsByPivotGuid[pivotGuid] = [];
-    fieldIdsByPivotGuid[pivotGuid].push(fieldId);
+    if (!fieldIdsByPivotGuid[pivotGuid].includes(fieldId)) fieldIdsByPivotGuid[pivotGuid].push(fieldId);
   });
 
   const users = [];
