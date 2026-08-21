@@ -31,6 +31,7 @@ export default function PivotProfilesList({
   const [gpmFilter, setGpmFilter] = useState(new Set())
   const [packageFilter, setPackageFilter] = useState(new Set())
   const [statusFilter, setStatusFilter] = useState(new Set())
+  const [lapTimeFilter, setLapTimeFilter] = useState(new Set())
   const menuRef = useRef(null)
 
   const isFarmManager = FARM_SCOPED_MANAGER_ROLES.includes(userRole)
@@ -53,7 +54,7 @@ export default function PivotProfilesList({
     })
   }
 
-  const noFiltersActive = farmFilter.size === 0 && gpmFilter.size === 0 && packageFilter.size === 0 && statusFilter.size === 0
+  const noFiltersActive = farmFilter.size === 0 && gpmFilter.size === 0 && packageFilter.size === 0 && statusFilter.size === 0 && lapTimeFilter.size === 0
   const isDefaultView = sortBy === DEFAULT_SORT_BY && sortDir === DEFAULT_SORT_DIR && noFiltersActive
 
   function clearAll() {
@@ -63,6 +64,7 @@ export default function PivotProfilesList({
     setGpmFilter(new Set())
     setPackageFilter(new Set())
     setStatusFilter(new Set())
+    setLapTimeFilter(new Set())
   }
 
   const fieldIdsByPivotGuid = useMemo(() => {
@@ -106,7 +108,10 @@ export default function PivotProfilesList({
         gpm: profile.currentGpm != null ? profile.currentGpm : null,
         packageName: profile.sprinklerPackage ? profile.sprinklerPackage.fileName : null,
         threshold: profile.stuckAlertThresholdMinutes || 60,
-        stuck: !!profile.stuckAlertActive,
+        flagged: !!profile.stuckAlertActive || !!profile.lapTimeDriftFlagged,
+        lapTimeHours: profile.currentLapTimeHours != null ? profile.currentLapTimeHours : null,
+        lapTimeIsLive: !!profile.currentLapTimeIsLive,
+        lapTimeDrift: !!profile.lapTimeDriftFlagged,
         statusLabel: status.label,
         statusKey: status.key
       }
@@ -122,8 +127,14 @@ export default function PivotProfilesList({
       .filter((row) => packageFilter.size === 0 || packageFilter.has(row.packageName ? 'uploaded' : 'not_uploaded'))
       .filter((row) => {
         if (statusFilter.size === 0) return true
-        if (statusFilter.has('flagged') && row.stuck) return true
+        if (statusFilter.has('flagged') && row.flagged) return true
         return row.statusKey && statusFilter.has(row.statusKey)
+      })
+      .filter((row) => {
+        if (lapTimeFilter.size === 0) return true
+        if (lapTimeFilter.has('drifted') && row.lapTimeDrift) return true
+        if (lapTimeFilter.has('no_result') && row.lapTimeHours == null) return true
+        return false
       })
 
     list.sort((a, b) => {
@@ -140,13 +151,19 @@ export default function PivotProfilesList({
         else if (!b.packageName) cmp = -1
         else cmp = a.packageName.localeCompare(b.packageName)
       } else if (sortBy === 'threshold') cmp = a.threshold - b.threshold
+      else if (sortBy === 'lapTime') {
+        if (a.lapTimeHours == null && b.lapTimeHours == null) cmp = 0
+        else if (a.lapTimeHours == null) cmp = 1
+        else if (b.lapTimeHours == null) cmp = -1
+        else cmp = a.lapTimeHours - b.lapTimeHours
+      }
       else if (sortBy === 'status') cmp = (STATUS_RANK[a.statusKey] ?? 3) - (STATUS_RANK[b.statusKey] ?? 3)
       else cmp = a.name.localeCompare(b.name)
       return sortDir === 'desc' ? -cmp : cmp
     })
 
     return list
-  }, [pivotsByGuid, pivotProfilesByGuid, fieldIdsByPivotGuid, baseFieldsById, farmNameById, isFarmManager, availableFarms, farmFilter, gpmFilter, packageFilter, statusFilter, sortBy, sortDir])
+  }, [pivotsByGuid, pivotProfilesByGuid, fieldIdsByPivotGuid, baseFieldsById, farmNameById, isFarmManager, availableFarms, farmFilter, gpmFilter, packageFilter, statusFilter, lapTimeFilter, sortBy, sortDir])
 
   function Header({ label, sortKey, children }) {
     return (
@@ -244,6 +261,19 @@ export default function PivotProfilesList({
                 <button className={sortBy === 'threshold' && sortDir === 'desc' ? 'active' : ''} onClick={() => { setSortBy('threshold'); setSortDir('desc') }}>High-low</button>
               </div>
             </Header>
+            <Header label="Min lap time" sortKey="lapTime">
+              <div className="sort-menu-label">Sort by lap time</div>
+              <div className="sort-menu-group row">
+                <button className={sortBy === 'lapTime' && sortDir === 'asc' ? 'active' : ''} onClick={() => { setSortBy('lapTime'); setSortDir('asc') }}>Low-high</button>
+                <button className={sortBy === 'lapTime' && sortDir === 'desc' ? 'active' : ''} onClick={() => { setSortBy('lapTime'); setSortDir('desc') }}>High-low</button>
+              </div>
+              <div className="sort-menu-divider" />
+              <div className="sort-menu-label">Filter</div>
+              <div className="sort-menu-checklist">
+                <label><input type="checkbox" checked={lapTimeFilter.has('drifted')} onChange={() => toggle(setLapTimeFilter, 'drifted')} />Drifted from baseline</label>
+                <label><input type="checkbox" checked={lapTimeFilter.has('no_result')} onChange={() => toggle(setLapTimeFilter, 'no_result')} />No result yet</label>
+              </div>
+            </Header>
             <Header label="Status" sortKey="status">
               <div className="sort-menu-label">Sort by status</div>
               <div className="sort-menu-group row">
@@ -266,16 +296,19 @@ export default function PivotProfilesList({
             <tr
               key={row.guid}
               onClick={() => onOpenProfile(row.guid)}
-              style={{ cursor: 'pointer', borderBottom: '1px solid #eee', background: row.stuck ? '#fbeaea' : undefined }}
+              style={{ cursor: 'pointer', borderBottom: '1px solid #eee', background: row.flagged ? '#fbeaea' : undefined }}
             >
               <td style={{ padding: '7px 8px', fontWeight: 600 }}>
-                {row.stuck && <span style={{ color: '#A32D2D', fontWeight: 700, marginRight: '4px' }}>!</span>}
+                {row.flagged && <span style={{ color: '#A32D2D', fontWeight: 700, marginRight: '4px' }}>!</span>}
                 {row.name}
               </td>
               <td style={{ padding: '7px 8px', color: '#666' }}>{row.farmNames}</td>
               <td style={{ padding: '7px 8px', color: row.gpm == null ? '#A32D2D' : undefined }}>{row.gpm != null ? row.gpm : 'Not set'}</td>
               <td style={{ padding: '7px 8px', color: row.packageName ? '#185FA5' : '#888' }}>{row.packageName || 'Not uploaded'}</td>
               <td style={{ padding: '7px 8px' }}>{row.threshold} min</td>
+              <td style={{ padding: '7px 8px', color: row.lapTimeDrift ? '#854F0B' : row.lapTimeHours == null ? '#888' : undefined }}>
+                {row.lapTimeHours != null ? `${row.lapTimeHours} hr${row.lapTimeIsLive ? ' (live)' : ''}` : '\u2014'}
+              </td>
               <td style={{ padding: '7px 8px', color: row.statusKey === 'stopped' ? '#888' : undefined }}>{row.statusLabel}</td>
             </tr>
           ))}
