@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { doc, onSnapshot, setDoc } from 'firebase/firestore'
+import { useState, useEffect, useMemo } from 'react'
+import { collection, doc, getDoc, getDocs, onSnapshot, query, setDoc, where } from 'firebase/firestore'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { db, storage } from './firebase.js'
 import PivotIcon from './PivotIcon.jsx'
@@ -13,6 +13,38 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const [error, setError] = useState(null)
   const [gpmSaved, setGpmSaved] = useState(false)
   const [thresholdSaved, setThresholdSaved] = useState(false)
+  const [currentSeasonId, setCurrentSeasonId] = useState(null)
+  const [acres, setAcres] = useState(null)
+
+  // One-time lookup, not a live listener — this pivot's combined acreage
+  // (across every field it maps to) and which season is "current" don't
+  // change minute to minute the way status/profile data does.
+  useEffect(() => {
+    if (!pivotGuid) return
+    let cancelled = false
+    async function loadSeasonAndAcres() {
+      const seasonsSnap = await getDocs(collection(db, 'seasons'))
+      const seasonsList = []
+      seasonsSnap.forEach((d) => seasonsList.push({ id: d.id, ...d.data() }))
+      seasonsList.sort((a, b) => (b.startDate || '').localeCompare(a.startDate || ''))
+      const currentYear = String(new Date().getFullYear())
+      const match = seasonsList.find((s) => String(s.name) === currentYear)
+      const seasonId = match ? match.id : (seasonsList[0] ? seasonsList[0].id : null)
+      if (cancelled) return
+      setCurrentSeasonId(seasonId)
+
+      const mappingSnap = await getDocs(query(collection(db, 'pivotFieldMapping'), where('pivotGuid', '==', pivotGuid)))
+      const fieldIds = []
+      mappingSnap.forEach((d) => { if (d.data().fieldId) fieldIds.push(d.data().fieldId) })
+
+      if (!seasonId || fieldIds.length === 0) { if (!cancelled) setAcres(0); return }
+      const seasonDocs = await Promise.all(fieldIds.map((fid) => getDoc(doc(db, 'fields', fid, 'seasons', seasonId))))
+      const total = seasonDocs.reduce((sum, snap) => sum + (snap.exists() ? (snap.data().acres || 0) : 0), 0)
+      if (!cancelled) setAcres(total)
+    }
+    loadSeasonAndAcres()
+    return () => { cancelled = true }
+  }, [pivotGuid])
 
   useEffect(() => {
     if (!pivotGuid) return
@@ -83,6 +115,15 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const pkg = profile && profile.sprinklerPackage
   const historyCount = (profile && profile.sprinklerPackageHistory && profile.sprinklerPackageHistory.length) || 0
 
+  const episode = profile && profile.auditEpisode
+  const episodeElapsedHours = episode ? (Date.now() - new Date(episode.startedAt).getTime()) / 3600000 : null
+  const baseline = profile && profile.seasonBaselines && currentSeasonId ? profile.seasonBaselines[currentSeasonId] : null
+  const requiredHours = acres != null ? (acres > 30 ? 24 : 12) : null
+  const baselineProgressPct = (!baseline && episode && requiredHours)
+    ? Math.min(100, Math.round((episodeElapsedHours / requiredHours) * 100))
+    : null
+  const hasDrift = !!(profile && profile.lapTimeDriftFlagged)
+
   return (
     <div style={{ padding: '16px 24px', maxWidth: '480px' }}>
       <button onClick={onBack} style={{ marginBottom: '16px' }}>&larr; Back</button>
@@ -137,6 +178,59 @@ export default function PivotProfile({ pivotGuid, onBack }) {
           <button onClick={handleSaveThreshold}>{thresholdSaved ? 'Saved!' : 'Save'}</button>
         </div>
         <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Alert if running wet with no movement for this long (45\u2013120 min)</div>
+      </div>
+
+      <div style={{ marginTop: '24px', marginBottom: '24px' }}>
+        <div className="editor-label" style={{ marginBottom: '8px' }}>Full audit &mdash; {currentSeasonId || '\u2014'}</div>
+        {baseline ? (
+          <div style={{ background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: '#2b2b26' }}>{baseline.lapTimeHours} hr baseline set</div>
+            <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
+              Completed {new Date(baseline.completedAt).toLocaleDateString()} &middot; {baseline.acres.toFixed(1)} ac &middot; {baseline.requiredHours}-hr run
+            </div>
+          </div>
+        ) : (
+          <div style={{ background: '#FBEAEA', border: '1px solid #E8B4B4', borderRadius: '8px', padding: '10px 12px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: '#A32D2D' }}>Not completed this season</div>
+            <div style={{ fontSize: '11px', color: '#8A3636', marginTop: '4px' }}>
+              {acres != null
+                ? `This pivot covers ${acres.toFixed(1)} ac, so it needs a ${requiredHours}-hr run at constant speed and direction to set this year's baseline.`
+                : "Needs a long constant-speed run to set this year's baseline."}
+            </div>
+            {episode && baselineProgressPct != null && (
+              <>
+                <div style={{ fontSize: '11px', color: '#8A3636', marginTop: '8px' }}>In progress: {episodeElapsedHours.toFixed(1)} of {requiredHours} hrs so far</div>
+                <div style={{ height: '6px', background: '#F0C4C4', borderRadius: '3px', marginTop: '6px', overflow: 'hidden' }}>
+                  <div style={{ width: `${baselineProgressPct}%`, height: '100%', background: '#A32D2D' }} />
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginBottom: '24px' }}>
+        <div className="editor-label" style={{ marginBottom: '8px' }}>Live lap-time audit</div>
+        <div style={{ background: hasDrift ? '#FBF3E2' : '#f4f2ec', border: hasDrift ? '1px solid #F0D9A8' : 'none', borderRadius: '8px', padding: '10px 12px' }}>
+          {profile && profile.currentLapTimeHours != null ? (
+            <>
+              <div style={{ fontSize: '18px', fontWeight: 600, color: hasDrift ? '#854F0B' : '#2b2b26' }}>
+                {profile.currentLapTimeHours} hr <span style={{ fontSize: '11px', fontWeight: 400, color: '#888' }}>at 100% timer</span>
+              </div>
+              <div style={{ fontSize: '11px', color: hasDrift ? '#6B4108' : '#888', marginTop: '4px' }}>
+                {profile.currentLapTimeIsLive
+                  ? 'Live \u2014 still measuring, same run continuing'
+                  : `Last measured ${profile.currentLapTimeUpdatedAt ? new Date(profile.currentLapTimeUpdatedAt).toLocaleDateString() : ''}`}
+                {hasDrift && baseline && ` \u2014 more than 10% off this season's ${baseline.lapTimeHours} hr baseline`}
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: '12px', color: '#888' }}>No audit result yet &mdash; needs 3 hrs at a constant speed and direction.</div>
+          )}
+          {episode && episodeElapsedHours != null && episodeElapsedHours < 3 && (
+            <div style={{ fontSize: '11px', color: '#888', marginTop: '8px' }}>Auditing now: {episodeElapsedHours.toFixed(1)} of 3 hrs so far</div>
+          )}
+        </div>
       </div>
 
       {error && <p style={{ color: '#A32D2D', fontSize: '13px', marginTop: '16px' }}>{error}</p>}
