@@ -1333,6 +1333,10 @@ exports.syncAgristorReadingsNow = onRequest(
 // everywhere PivotIcon renders) and texted to whoever should know about
 // that farm.
 //
+// This same 10-minute pass also drives the lap-time audit AND (as of this
+// version) wet/dry hours tracking — see the comment above the wet/dry
+// block below for details on that one.
+//
 // Set these once with:
 //   firebase functions:secrets:set TWILIO_ACCOUNT_SID
 //   firebase functions:secrets:set TWILIO_AUTH_TOKEN
@@ -1352,6 +1356,13 @@ const STUCK_POSITION_EPSILON_DEG = 0.5;
 const STALE_DATA_CUTOFF_MINUTES = 60;
 const DEFAULT_STUCK_THRESHOLD_MINUTES = 60;
 const MIN_STUCK_THRESHOLD_MINUTES = 45;
+
+// Wet/dry hours: if a scheduled run gets delayed or one gets skipped
+// outright, don't let the resulting gap get fully credited to whichever
+// state (wet or dry) the pivot happens to be in when the next run finally
+// catches up — cap how much elapsed time any single tick can add to
+// double the normal 10-minute cadence.
+const WET_DRY_MAX_TICK_HOURS = 20 / 60;
 
 async function sendSms(to, body, accountSid, authToken, fromNumber) {
   const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
@@ -1578,6 +1589,46 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
             : false;
         }
       }
+    }
+
+    // ---- Wet/dry hours (running only) -----------------------------------
+    // Wet hours = running with water on. Dry hours = running with water
+    // off. A stopped pivot (regardless of the water valve's position)
+    // counts toward neither — this is about how the pivot's actual
+    // runtime split between productive and wasted-dry, not about total
+    // elapsed time. Reuses isRunningWet/isRunningAtAll from the checks
+    // above rather than re-deriving them.
+    //
+    // Elapsed time is computed from a stored checkpoint
+    // (wetDryLastCheckedAt) rather than assuming a flat 10 minutes per
+    // tick, so a delayed or skipped run doesn't quietly throw the totals
+    // off — and WET_DRY_MAX_TICK_HOURS caps any single tick's
+    // contribution so a longer gap (a paused function, a rough outage)
+    // doesn't get fully credited to one bucket. The checkpoint is cleared
+    // whenever the pivot isn't running, so the moment it stops counts
+    // toward neither bucket, and the moment it starts again begins a
+    // fresh clock rather than attributing the stopped gap to whatever
+    // state it resumes in.
+    const isRunningDry = isRunningAtAll && !isRunningWet;
+
+    if (isRunningWet || isRunningDry) {
+      const lastCheckedAt = profile.wetDryLastCheckedAt ? new Date(profile.wetDryLastCheckedAt) : null;
+      if (lastCheckedAt) {
+        const elapsedHours = Math.min((now.getTime() - lastCheckedAt.getTime()) / 3600000, WET_DRY_MAX_TICK_HOURS);
+        if (elapsedHours > 0) {
+          if (isRunningWet) {
+            updates.wetHours = Math.round(((profile.wetHours || 0) + elapsedHours) * 100) / 100;
+          } else {
+            updates.dryHours = Math.round(((profile.dryHours || 0) + elapsedHours) * 100) / 100;
+          }
+        }
+      }
+      if (!profile.wetDryTrackingSince) {
+        updates.wetDryTrackingSince = now.toISOString();
+      }
+      updates.wetDryLastCheckedAt = now.toISOString();
+    } else if (profile.wetDryLastCheckedAt) {
+      updates.wetDryLastCheckedAt = admin.firestore.FieldValue.delete();
     }
 
     if (Object.keys(updates).length > 0) {
