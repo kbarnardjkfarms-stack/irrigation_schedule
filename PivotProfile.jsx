@@ -16,6 +16,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const [currentSeasonId, setCurrentSeasonId] = useState(null)
   const [currentSeasonName, setCurrentSeasonName] = useState(null)
   const [acres, setAcres] = useState(null)
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
 
   // One-time lookup, not a live listener — this pivot's combined acreage
   // (across every field it maps to) and which season is "current" don't
@@ -118,6 +119,21 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     setTimeout(() => setThresholdSaved(false), 1500)
   }
 
+  async function handleResetWetDry() {
+    setError(null)
+    try {
+      await setDoc(doc(db, 'pivotProfiles', pivotGuid), {
+        wetHours: 0,
+        dryHours: 0,
+        wetDryTrackingSince: new Date().toISOString()
+      }, { merge: true })
+    } catch (err) {
+      setError(err.message || 'Reset failed.')
+    } finally {
+      setShowResetConfirm(false)
+    }
+  }
+
   if (!pivotGuid) return null
 
   const pkg = profile && profile.sprinklerPackage
@@ -131,6 +147,10 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     ? Math.min(100, Math.round((episodeElapsedHours / requiredHours) * 100))
     : null
   const hasDrift = !!(profile && profile.lapTimeDriftFlagged)
+
+  const wetHours = profile && profile.wetHours != null ? profile.wetHours : 0
+  const dryHours = profile && profile.dryHours != null ? profile.dryHours : 0
+  const wetDryTrackingSince = profile && profile.wetDryTrackingSince
 
   return (
     <div style={{ padding: '16px 24px', maxWidth: '480px' }}>
@@ -241,7 +261,43 @@ export default function PivotProfile({ pivotGuid, onBack }) {
         </div>
       </div>
 
+      <div style={{ marginBottom: '24px' }}>
+        <div className="editor-label" style={{ marginBottom: '8px' }}>Wet / dry hours</div>
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '8px' }}>
+          <div style={{ flex: 1, background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px' }}>
+            <div style={{ fontSize: '10px', color: '#888', marginBottom: '2px' }}>Wet hours</div>
+            <div style={{ fontSize: '18px', fontWeight: 600, color: '#2b2b26' }}>{wetHours.toFixed(1)} hr</div>
+          </div>
+          <div style={{ flex: 1, background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px' }}>
+            <div style={{ fontSize: '10px', color: '#888', marginBottom: '2px' }}>Dry hours</div>
+            <div style={{ fontSize: '18px', fontWeight: 600, color: '#2b2b26' }}>{dryHours.toFixed(1)} hr</div>
+          </div>
+        </div>
+        {wetDryTrackingSince && (
+          <div style={{ fontSize: '10px', color: '#888', marginBottom: '8px' }}>Tracking since {new Date(wetDryTrackingSince).toLocaleDateString()}</div>
+        )}
+        <button onClick={() => setShowResetConfirm(true)} style={{ fontSize: '12px' }}>Reset wet/dry hours</button>
+        <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>
+          Counts hours the pivot is running with water on (wet) or running with water off (dry). Time stopped doesn't count toward either.
+        </div>
+      </div>
+
       {error && <p style={{ color: '#A32D2D', fontSize: '13px', marginTop: '16px' }}>{error}</p>}
+
+      {showResetConfirm && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#fff', borderRadius: '10px', padding: '20px', width: '300px', boxShadow: '0 4px 20px rgba(0,0,0,0.2)' }}>
+            <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '8px', color: '#2b2b26' }}>Reset wet/dry hours?</div>
+            <div style={{ fontSize: '13px', color: '#555', lineHeight: 1.5, marginBottom: '16px' }}>
+              This sets {(pivot && pivot.name) || 'this pivot'}'s wet hours ({wetHours.toFixed(1)}) and dry hours ({dryHours.toFixed(1)}) back to zero. This can't be undone.
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowResetConfirm(false)} style={{ fontSize: '13px' }}>Cancel</button>
+              <button onClick={handleResetWetDry} style={{ fontSize: '13px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: '#A32D2D' }}>Reset</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
