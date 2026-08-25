@@ -1559,22 +1559,36 @@ function LiveConditionsCard({ bay }) {
         </div>
         <div style={{ fontSize: 11.5, color: isError ? "#e08787" : "#8790a3", display: "flex", alignItems: "center", gap: 5 }}>
           {isError && <AlertTriangle size={12} />}
-          {isError ? "Network error at sensor" : "OK"} · updated {formatAgristorAge(reading.updatedAt)}
+          {isError ? "Network error at sensor" : `OK · updated ${formatAgristorAge(reading.updatedAt)}`}
         </div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, fontSize: 12.5, color: "#c7cede" }}>
-        <LiveStat label="Plenum" value={reading.plenumTempF != null ? `${reading.plenumTempF}°F` : "—"} sub={reading.plenumRH != null ? `${reading.plenumRH}% RH` : ""} />
-        <LiveStat label="Return air" value={reading.returnAirTempF != null ? `${reading.returnAirTempF}°F` : "—"} sub={reading.returnAirRH != null ? `${reading.returnAirRH}% RH` : ""} />
-        <LiveStat label="Outside air" value={reading.outsideAirTempF != null ? `${reading.outsideAirTempF}°F` : "—"} sub={reading.outsideAirRH != null ? `${reading.outsideAirRH}% RH` : ""} />
-        <LiveStat label="Pile avg" value={reading.pileAvgTempF != null ? `${reading.pileAvgTempF}°F` : "—"} />
-        <LiveStat label="CO2" value={reading.co2Ppm != null ? `${reading.co2Ppm} ppm` : "—"} />
-        <LiveStat
-          label="Fan / Cooling-Refrig"
-          value={[reading.fanPct, reading.coolingPct ?? reading.refrigerationPct]
-            .map((v) => (v != null ? `${v}%` : "—"))
-            .join(" / ")}
-        />
-      </div>
+      {isError ? (
+        // Don't present these numbers as current — the sensor has lost
+        // contact, so whatever last came through could be hours or days
+        // old. reading.lastGoodReadingAt (the vendor's own last-known-good
+        // timestamp, distinct from reading.updatedAt which only reflects
+        // when OUR sync last ran) gives an honest "stale since" age when
+        // the vendor actually sends it; otherwise say so rather than guess.
+        <div style={{ fontSize: 12.5, color: "#e0a3a3" }}>
+          {reading.lastGoodReadingAt
+            ? `Last known-good reading was ${formatAgristorAge(reading.lastGoodReadingAt)} — readings below are hidden until the sensor reconnects.`
+            : "Readings are hidden until the sensor reconnects — age of the last known-good reading isn't available."}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, fontSize: 12.5, color: "#c7cede" }}>
+          <LiveStat label="Plenum" value={reading.plenumTempF != null ? `${reading.plenumTempF}°F` : "—"} sub={reading.plenumRH != null ? `${reading.plenumRH}% RH` : ""} />
+          <LiveStat label="Return air" value={reading.returnAirTempF != null ? `${reading.returnAirTempF}°F` : "—"} sub={reading.returnAirRH != null ? `${reading.returnAirRH}% RH` : ""} />
+          <LiveStat label="Outside air" value={reading.outsideAirTempF != null ? `${reading.outsideAirTempF}°F` : "—"} sub={reading.outsideAirRH != null ? `${reading.outsideAirRH}% RH` : ""} />
+          <LiveStat label="Pile avg" value={reading.pileAvgTempF != null ? `${reading.pileAvgTempF}°F` : "—"} />
+          <LiveStat label="CO2" value={reading.co2Ppm != null ? `${reading.co2Ppm} ppm` : "—"} />
+          <LiveStat
+            label="Fan / Cooling-Refrig"
+            value={[reading.fanPct, reading.coolingPct ?? reading.refrigerationPct]
+              .map((v) => (v != null ? `${v}%` : "—"))
+              .join(" / ")}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -1593,6 +1607,7 @@ function EquipmentStatusPanel({ bay }) {
   const reading = useAgristorReading(bay.agristorBinName);
   if (!bay.agristorBinName || reading === null) return null;
   const loading = reading === undefined;
+  const isError = !loading && reading.status === "network_error";
   const fanPct = reading?.fanPct ?? null;
   const coolPct = reading?.coolingPct ?? reading?.refrigerationPct ?? null;
   const stopped = !loading && (fanPct == null || fanPct <= 0) && (coolPct == null || coolPct <= 0);
@@ -1616,15 +1631,26 @@ function EquipmentStatusPanel({ bay }) {
           {!loading && (
             <div style={{
               display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700,
-              color: stopped ? "#8790a3" : "#8fd19e",
+              color: isError ? "#e08787" : stopped ? "#8790a3" : "#8fd19e",
             }}>
-              <Power size={11} color={stopped ? "#8790a3" : "#8fd19e"} />
-              {stopped ? "STOPPED" : "RUNNING"}
+              {isError ? <AlertTriangle size={11} color="#e08787" /> : <Power size={11} color={stopped ? "#8790a3" : "#8fd19e"} />}
+              {isError ? "NETWORK ERROR" : stopped ? "STOPPED" : "RUNNING"}
             </div>
           )}
         </div>
         {loading ? (
           <div style={{ fontSize: 11, color: "#5b6478" }}>Loading…</div>
+        ) : isError ? (
+          // Same reasoning as LiveConditionsCard: don't show Fan/Refer as
+          // live numbers when the sensor has lost contact — they could be
+          // days stale. reading.lastGoodReadingAt is the vendor's own
+          // last-known-good timestamp; reading.updatedAt is only ever "when
+          // our sync last ran" and would misleadingly look fresh anyway.
+          <div style={{ fontSize: 10.5, color: "#c99", lineHeight: 1.4 }}>
+            {reading.lastGoodReadingAt
+              ? `Stale since ${formatAgristorAge(reading.lastGoodReadingAt)} — hidden until reconnected.`
+              : "Hidden until sensor reconnects."}
+          </div>
         ) : (
           <div style={{ display: "flex", gap: 10 }}>
             <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7 }}>
@@ -1662,6 +1688,19 @@ function EquipmentStatusPanel({ bay }) {
 function YardBayAgristorBadge({ bay }) {
   const reading = useAgristorReading(bay.agristorBinName);
   if (!bay.agristorBinName || reading === null || reading === undefined) return null;
+  // Network error means the sensor has lost contact — whatever numbers came
+  // through with it could be hours or days old, so don't present them as
+  // live in a widget meant to be read at a glance. Flag it instead, with an
+  // honest age when the vendor's own last-known-good timestamp is present.
+  if (reading.status === "network_error") {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, paddingTop: 3, borderTop: "1px solid #2b3549", fontSize: 9.5, color: "#e08787" }}>
+        <AlertTriangle size={10} color="#e08787" />
+        <span style={{ fontWeight: 700, letterSpacing: 0.3 }}>NETWORK ERROR</span>
+        {reading.lastGoodReadingAt && <span style={{ color: "#c99" }}>· stale {formatAgristorAge(reading.lastGoodReadingAt)}</span>}
+      </div>
+    );
+  }
   const fanPct = reading?.fanPct ?? null;
   const coolPct = reading?.coolingPct ?? reading?.refrigerationPct ?? null;
   const fanOn = fanPct != null && fanPct > 0;
@@ -2060,7 +2099,7 @@ function latestByPipe(logs) {
     }))
     .sort((a, b) => a.pipeNumber - b.pipeNumber);
 }
-function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
+function TemperatureTab({ bays, dataById, onAddTemp, onDeleteTemp, readOnly }) {
   const [bayId, setBayId] = useState(bays[0]?.id);
   const bay = bays.find((b) => b.id === bayId);
   const totalPipes = bay ? (bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0)) : 0;
@@ -2220,6 +2259,54 @@ function TemperatureTab({ bays, dataById, onAddTemp, readOnly }) {
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <div style={{ fontWeight: 700, marginBottom: 2, color: "#eef1f6" }}>{bay?.name} — manual entries</div>
+        <div style={{ fontSize: 11, color: "#6f7890", marginBottom: 8 }}>
+          Every reading logged for this bay, most recent first — the "latest by pipe" table above only shows the newest per pipe/position, so delete an individual mis-entered reading here.
+        </div>
+        <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: 300, border: "1px solid #232d40", borderRadius: 10 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: "#141b28", textAlign: "left" }}>
+                <th style={thStyle}>Date</th>
+                <th style={thStyle}>Pipe #</th>
+                <th style={thStyle}>Position</th>
+                <th style={thStyle}>Temp °F</th>
+                {!readOnly && <th style={thStyle}></th>}
+              </tr>
+            </thead>
+            <tbody>
+              {logs.length === 0 && (
+                <tr><td colSpan={readOnly ? 4 : 5} style={{ ...tdStyle, color: "#5b6478" }}>No manual entries logged for this bay yet.</td></tr>
+              )}
+              {logs.map((entry, i) => ({ entry, i })).slice().reverse().map(({ entry, i }) => (
+                <tr key={i} style={{ borderTop: "1px solid #232d40" }}>
+                  <td style={tdStyle}>{entry.date}</td>
+                  <td style={tdStyle}><b style={{ color: "#eef1f6" }}>{entry.pipeNumber}</b></td>
+                  <td style={{ ...tdStyle, color: entry.position === "Top" ? "#f2c14e" : "#3ba8e8" }}>{entry.position}</td>
+                  <td style={tdStyle}>{entry.temp}°F</td>
+                  {!readOnly && (
+                    <td style={{ ...tdStyle, textAlign: "right" }}>
+                      <button
+                        type="button"
+                        title="Delete this entry"
+                        onClick={() => {
+                          if (window.confirm(`Delete this ${entry.position?.toLowerCase()} reading — ${entry.temp}°F, pipe ${entry.pipeNumber}, ${entry.date}? This cannot be undone.`)) {
+                            onDeleteTemp(bayId, i);
+                          }
+                        }}
+                        style={{ background: "none", border: "none", color: "#8790a3", cursor: "pointer", padding: 4, display: "flex", alignItems: "center", marginLeft: "auto" }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -3410,6 +3497,21 @@ export default function PotatoStorage() {
       return next;
     });
   }, [isReadOnly]);
+  // Deletes one manual temperature entry by its position in this bay's
+  // tempLogs array — the array index is how TemperatureTab identifies a
+  // specific row, since older entries (logged before individual delete was
+  // added) don't carry their own id.
+  const onDeleteTemp = useCallback((bayId, index) => {
+    if (isReadOnly) return;
+    setDataById((prev) => {
+      const bayData = prev[bayId] || {};
+      const logs = bayData.tempLogs || [];
+      const nextBayData = { ...bayData, tempLogs: logs.filter((_, i) => i !== index) };
+      const next = { ...prev, [bayId]: nextBayData };
+      saveJSON(bayDataKey(bayId), nextBayData);
+      return next;
+    });
+  }, [isReadOnly]);
   const onAddInspection = useCallback((entry) => {
     if (isReadOnly) return;
     setInspections((prev) => {
@@ -3850,7 +3952,7 @@ export default function PotatoStorage() {
         {tab === "temp" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
-              <TemperatureTab bays={locationBays} dataById={displayDataById} onAddTemp={onAddTemp} readOnly={isReadOnly} />
+              <TemperatureTab bays={locationBays} dataById={displayDataById} onAddTemp={onAddTemp} onDeleteTemp={onDeleteTemp} readOnly={isReadOnly} />
             )}
           </div>
         )}
