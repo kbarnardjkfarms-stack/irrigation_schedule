@@ -5,7 +5,7 @@ import {
   Warehouse, Thermometer, ClipboardCheck, Package, TrendingDown, Map as MapIcon,
   Plus, ChevronRight, MapPin, Gauge, BarChart3, AlertTriangle, Check, Layers, Users, Sprout, Building2, FlaskConical, Trash2,
 } from "lucide-react";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, onSnapshot, collection, query, orderBy, limit } from "firebase/firestore";
 import { db } from "./firebase.js"; // AIO's existing Firebase project — same login, no second sign-in
 
 /* =================================================================
@@ -182,9 +182,6 @@ const slugify = (s) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replac
 const uid = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
 /* ---------------------------------------------------------------
-   Storage helpers
-----------------------------------------------------------------*/
-/* ---------------------------------------------------------------
    Storage helpers — Firestore, same project as the rest of AIO.
    All data lives in one "potatoStorage" collection, one document per
    key, so it can't collide with AIO's own collections (weeks, fields,
@@ -249,9 +246,6 @@ function computeBayStats(bay, bayData) {
    single-bay interior viewer). Buildings are open-frame/cutaway by
    default so the field divisions are visible without clicking in.
 ==================================================================*/
-// A quad built from 4 explicit corner points, in order around the perimeter.
-// Used for the sloped wall panels — safer than rotating a PlaneGeometry when
-// the tilt direction has to be exactly right.
 function quadMesh(p0, p1, p2, p3, material) {
   const geo = new THREE.BufferGeometry();
   const v = [p0, p1, p2, p0, p2, p3].flatMap((p) => [p.x, p.y, p.z]);
@@ -260,9 +254,6 @@ function quadMesh(p0, p1, p2, p3, material) {
   return new THREE.Mesh(geo, material);
 }
 
-// A thin structural member connecting two arbitrary points (used for the
-// slanted corner posts) — oriented via quaternion so the lean is always right
-// regardless of which corner it's for.
 function strutMesh(p0, p1, material, thickness = 0.22) {
   const dir = new THREE.Vector3().subVectors(p1, p0);
   const length = dir.length();
@@ -273,10 +264,6 @@ function strutMesh(p0, p1, material, thickness = 0.22) {
   return mesh;
 }
 
-// Frustum pile geometry: full width top-to-bottom (no taper across the bay),
-// but the two lengthwise ends slope inward as it rises — like a real potato
-// pile's natural angle of repose. Spans Y from 0 (floor) to 1 (scaled later
-// for fill level).
 function buildPileFrustumGeometry(widthBottom, widthTop, depthBottom, depthTop) {
   const hwb = widthBottom / 2, hwt = widthTop / 2, hdb = depthBottom / 2, hdt = depthTop / 2;
   const b0 = new THREE.Vector3(-hwb, 0, -hdb), b1 = new THREE.Vector3(hwb, 0, -hdb);
@@ -284,12 +271,12 @@ function buildPileFrustumGeometry(widthBottom, widthTop, depthBottom, depthTop) 
   const t0 = new THREE.Vector3(-hwt, 1, -hdt), t1 = new THREE.Vector3(hwt, 1, -hdt);
   const t2 = new THREE.Vector3(hwt, 1, hdt), t3 = new THREE.Vector3(-hwt, 1, hdt);
   const tris = [
-    [t0, t1, t2], [t0, t2, t3],   // top
-    [b0, b1, t1], [b0, t1, t0],   // front (sloped) end
-    [b2, b3, t3], [b2, t3, t2],   // back (sloped) end
-    [b3, b0, t0], [b3, t0, t3],   // left side
-    [b1, b2, t2], [b1, t2, t1],   // right side
-    [b0, b3, b2], [b0, b2, b1],   // bottom
+    [t0, t1, t2], [t0, t2, t3],
+    [b0, b1, t1], [b0, t1, t0],
+    [b2, b3, t3], [b2, t3, t2],
+    [b3, b0, t0], [b3, t0, t3],
+    [b1, b2, t2], [b1, t2, t1],
+    [b0, b3, b2], [b0, b2, b1],
   ];
   const positions = tris.flat().flatMap((p) => [p.x, p.y, p.z]);
   const geo = new THREE.BufferGeometry();
@@ -298,13 +285,12 @@ function buildPileFrustumGeometry(widthBottom, widthTop, depthBottom, depthTop) 
   return geo;
 }
 
-const PILE_TAPER = 0.62; // shared by the building's wall lean and the pile's natural end slope
+const PILE_TAPER = 0.62;
 
 function buildBayGroup(bay, dims) {
   const { W, H, L } = dims;
   const g = new THREE.Group();
 
-  // Building tapers inward as it rises — widest at the floor, narrower at the eave.
   const TOP_RATIO = PILE_TAPER;
   const baseHalfW = W / 2, topHalfW = (W * TOP_RATIO) / 2;
 
@@ -336,7 +322,6 @@ function buildBayGroup(bay, dims) {
   roof.position.set(0, H, 0);
   g.add(roof);
 
-  // back (gable) wall — a trapezoid, wide at the floor, narrow at the eave
   const backWall = quadMesh(
     new THREE.Vector3(-baseHalfW, 0, -L / 2), new THREE.Vector3(baseHalfW, 0, -L / 2),
     new THREE.Vector3(topHalfW, H, -L / 2), new THREE.Vector3(-topHalfW, H, -L / 2),
@@ -344,7 +329,6 @@ function buildBayGroup(bay, dims) {
   );
   g.add(backWall);
 
-  // side walls — lean inward uniformly along their full length
   const sideMat = new THREE.MeshStandardMaterial({ color: "#c7ccd4", roughness: 0.7, transparent: true, opacity: 0.07, side: THREE.DoubleSide });
   [-1, 1].forEach((side) => {
     const wall = quadMesh(
@@ -370,16 +354,14 @@ function buildBayGroup(bay, dims) {
     const varietyColor = getVarietyColor(zone.variety);
     const customerColor = getCustomerColor(zone.customer);
     const pileDepth = Math.max(0.3, depth - 0.3);
-    const pileTopDepth = pileDepth * TOP_RATIO;     // ends slope inward, same ratio as the walls
-    const pileTopWidth = innerW * TOP_RATIO;         // sides slope inward too, matching the building taper
+    const pileTopDepth = pileDepth * TOP_RATIO;
+    const pileTopWidth = innerW * TOP_RATIO;
 
     const mat = new THREE.MeshStandardMaterial({ color: varietyColor, roughness: 0.95, side: THREE.DoubleSide });
     const pile = new THREE.Mesh(buildPileFrustumGeometry(innerW, pileTopWidth, pileDepth, pileTopDepth), mat);
     pile.castShadow = true;
     pile.position.set(0, 0, zCursor + depth / 2);
 
-    // customer cap — thin colored slab that rides on the (narrower) top of the
-    // pile as it fills, so variety (body) and customer (cap) both read at a glance
     const capMat = new THREE.MeshStandardMaterial({ color: customerColor, roughness: 0.6, metalness: 0.1 });
     const cap = new THREE.Mesh(new THREE.BoxGeometry(pileTopWidth * 0.94, 0.28, pileTopDepth * 0.9), capMat);
     cap.position.set(0, 0.14, zCursor + depth / 2);
@@ -418,11 +400,6 @@ function applyZoneFill(zoneMeshes, zoneStatsById, maxH) {
     const stats = zoneStatsById[zoneId];
     const fillPct = stats?.fillPct || 0;
 
-    // The pile stays topped out near full height and instead recedes along the
-    // bay's length as it's pulled out — draining from the low-Z (near) end,
-    // which matches the exposed-tube end below, toward the untouched far end.
-    // Both the leading (draining) edge and the far edge keep the natural
-    // sloped taper, so the front is always a diagonal, not a flat cut.
     const remainingDepth = Math.max(0.35, fillPct * m.depth);
     const topWidth = m.innerW * PILE_TAPER;
     const topDepth = remainingDepth * PILE_TAPER;
@@ -607,7 +584,6 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
         }
       });
       if (mode === "yard") {
-        // one label per building, centered over the bays that belong to it
         let gi = 0;
         while (gi < bays.length) {
           const bId = bays[gi].buildingId;
@@ -760,7 +736,7 @@ function MapTab({ location, bays, statsById, onSelect }) {
     let cancelled = false;
     loadLeaflet().then((L) => {
       if (cancelled || !mountRef.current || mapRef.current) return;
-      if (mountRef.current._leaflet_id) delete mountRef.current._leaflet_id; // guard against a stray re-init on a reused container
+      if (mountRef.current._leaflet_id) delete mountRef.current._leaflet_id;
       const map = L.map(mountRef.current, { zoomControl: true }).setView([location.lat, location.lng], 18);
 
       const imagery = L.tileLayer(
@@ -864,13 +840,13 @@ const inputStyle = {
 };
 function customerOptions(customers, currentValue) {
   const opts = ["Unassigned", ...customers];
-  if (currentValue && !opts.includes(currentValue)) opts.push(currentValue); // keep legacy values visible
+  if (currentValue && !opts.includes(currentValue)) opts.push(currentValue);
   return opts;
 }
 
 function varietyOptions(varieties, currentValue) {
   const opts = [...varieties];
-  if (currentValue && !opts.includes(currentValue)) opts.push(currentValue); // keep legacy values visible
+  if (currentValue && !opts.includes(currentValue)) opts.push(currentValue);
   return opts;
 }
 
@@ -965,9 +941,6 @@ function Button({ children, onClick, variant = "primary", style, disabled }) {
   return <button disabled={disabled} onClick={onClick} style={{ ...base, ...variants[variant], ...style }}>{children}</button>;
 }
 
-// Uncontrolled inline-editable field — saves on blur (or Enter), and resets
-// its displayed value whenever the underlying prop changes (e.g. after a
-// successful save round-trip), via the `key`.
 function EditableInline({ value, onSave, type = "text", width, disabled, placeholder }) {
   const commit = (e) => {
     const raw = e.target.value;
@@ -990,6 +963,181 @@ function EditableInline({ value, onSave, type = "text", width, disabled, placeho
         width: width || "auto", boxSizing: "border-box",
       }}
     />
+  );
+}
+
+/* =================================================================
+   Agri-Stor live conditions — reads agristorReadings/{binId}, kept in
+   sync by the syncAgristorReadings Cloud Function (functions/index.js).
+   agristorDocId() below must produce the exact same id that function's
+   agristorNormalizeBinName() does, or the two sides never match up.
+==================================================================*/
+function agristorDocId(binName) {
+  return (binName || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+// undefined = still loading, null = no reading found for this bin at all
+// (either no bin configured, or the name doesn't match anything Agri-Stor has).
+function useAgristorReading(binName) {
+  const [reading, setReading] = useState(undefined);
+  useEffect(() => {
+    if (!binName) { setReading(null); return; }
+    const binId = agristorDocId(binName);
+    const unsub = onSnapshot(
+      doc(db, "agristorReadings", binId),
+      (snap) => setReading(snap.exists() ? snap.data() : null),
+      () => setReading(null)
+    );
+    return () => unsub();
+  }, [binName]);
+  return reading;
+}
+
+// Pulls the last ~400 hourly history points (functions/index.js writes one
+// per bin per successful sync) for the small trend chart below.
+function useAgristorHistory(binName) {
+  const [history, setHistory] = useState([]);
+  useEffect(() => {
+    if (!binName) { setHistory([]); return; }
+    const binId = agristorDocId(binName);
+    const q = query(collection(db, "agristorReadings", binId, "history"), orderBy("recordedAt", "desc"), limit(400));
+    const unsub = onSnapshot(q, (snap) => {
+      const docs = [];
+      snap.forEach((d) => docs.push(d.data()));
+      setHistory(docs);
+    }, () => setHistory([]));
+    return () => unsub();
+  }, [binName]);
+  return history;
+}
+
+// Same day-averaging pattern as buildBayDaySeries below, applied to the
+// Agri-Stor history points instead of manual pipe checks.
+function buildAgristorDaySeries(history) {
+  const dayMap = new Map();
+  history.forEach((h) => {
+    if (!h.date) return;
+    if (!dayMap.has(h.date)) dayMap.set(h.date, { plenumSum: 0, plenumCount: 0, returnSum: 0, returnCount: 0 });
+    const d = dayMap.get(h.date);
+    if (h.plenumTempF != null) { d.plenumSum += h.plenumTempF; d.plenumCount++; }
+    if (h.returnAirTempF != null) { d.returnSum += h.returnAirTempF; d.returnCount++; }
+  });
+  return Array.from(dayMap.entries())
+    .map(([date, d]) => ({
+      date,
+      plenumTempF: d.plenumCount ? Math.round((d.plenumSum / d.plenumCount) * 10) / 10 : null,
+      returnAirTempF: d.returnCount ? Math.round((d.returnSum / d.returnCount) * 10) / 10 : null,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// Turns a Firestore Timestamp (or ISO string) into "4d 8h" style duration,
+// matching the format Agri-Stor's own dashboard uses for "how long down."
+function timeSince(timestamp) {
+  if (!timestamp) return null;
+  const then = typeof timestamp.toDate === "function" ? timestamp.toDate() : new Date(timestamp);
+  const totalMinutes = Math.floor((Date.now() - then.getTime()) / 60000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+// Fan/Cooling read from Agri-Stor as null (no such equipment), 0 (idle), or
+// a percentage — matches the pctOrFlag() convention in the Cloud Function.
+function pctLabel(v) {
+  if (v == null) return "n/a";
+  if (v === 0) return "Off";
+  return `${v}%`;
+}
+
+function AgristorLiveCard({ binName }) {
+  const reading = useAgristorReading(binName);
+  const history = useAgristorHistory(binName);
+  const series = useMemo(() => buildAgristorDaySeries(history), [history]);
+
+  if (!binName) return null; // bay has no Agri-Stor bin linked — card doesn't render at all
+
+  if (reading === undefined) {
+    return (
+      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
+        <div style={{ fontSize: 12, color: "#5b6478" }}>Loading live conditions…</div>
+      </div>
+    );
+  }
+
+  if (reading === null) {
+    return (
+      <div style={{ background: "#141b28", border: "1px solid #3a2230", borderRadius: 10, padding: 16 }}>
+        <div style={{ fontSize: 12, color: "#e08787", display: "flex", alignItems: "center", gap: 6 }}>
+          <AlertTriangle size={14} /> No Agri-Stor data found for bin "{binName}" — check the bin name matches Agri-Stor exactly (Manage Sites).
+        </div>
+      </div>
+    );
+  }
+
+  const isStale = reading.status === "network_error";
+
+  return (
+    <div style={{ background: "#141b28", border: `1px solid ${isStale ? "#5a3a1a" : "#232d40"}`, borderRadius: 10, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
+          <Thermometer size={16} color="#f2c14e" /> Live conditions — {reading.binName || binName}
+        </div>
+        {isStale ? (
+          <span style={{ fontSize: 12, color: "#e0a63e", display: "flex", alignItems: "center", gap: 5, background: "rgba(224,166,62,0.12)", padding: "3px 10px", borderRadius: 20 }}>
+            <AlertTriangle size={12} /> Stale — offline {timeSince(reading.networkErrorSince) || "unknown"}
+          </span>
+        ) : (
+          <span style={{ fontSize: 12, color: "#8fd19e", display: "flex", alignItems: "center", gap: 5, background: "rgba(143,209,158,0.1)", padding: "3px 10px", borderRadius: 20 }}>
+            <Check size={12} /> Online
+          </span>
+        )}
+      </div>
+
+      {isStale && (
+        <div style={{ fontSize: 12, color: "#8790a3", marginBottom: 12 }}>
+          Showing the last known-good reading below — Agri-Stor's panel hasn't reported in for this bin, so these numbers aren't current.
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 14, opacity: isStale ? 0.55 : 1 }}>
+        <StatBlock label="Plenum" value={reading.plenumTempF != null ? `${reading.plenumTempF}°F` : "—"} sub={reading.plenumRH != null ? `${reading.plenumRH}% RH` : undefined} />
+        <StatBlock label="Return air" value={reading.returnAirTempF != null ? `${reading.returnAirTempF}°F` : "—"} sub={reading.returnAirRH != null ? `${reading.returnAirRH}% RH` : undefined} />
+        <StatBlock label="Outside air" value={reading.outsideAirTempF != null ? `${reading.outsideAirTempF}°F` : "—"} sub={reading.outsideAirRH != null ? `${reading.outsideAirRH}% RH` : undefined} />
+        <StatBlock label="Pile avg" value={reading.pileAvgTempF != null ? `${reading.pileAvgTempF}°F` : "—"} />
+        <StatBlock label="Return vs plenum" value={reading.returnVsPlenumF != null ? `${reading.returnVsPlenumF > 0 ? "+" : ""}${reading.returnVsPlenumF.toFixed(1)}°` : "—"} />
+        <StatBlock label="CO2" value={reading.co2Ppm != null ? `${fmt(reading.co2Ppm)} ppm` : "—"} />
+        <StatBlock label="Fan" value={pctLabel(reading.fanPct)} />
+        <StatBlock label="Cooling / refrigeration" value={pctLabel(reading.coolingPct ?? reading.refrigerationPct)} />
+      </div>
+
+      {series.length > 1 && (
+        <div style={{ marginTop: 16, height: 160 }}>
+          <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 6 }}>Plenum vs. return air, last {series.length} day{series.length === 1 ? "" : "s"}</div>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={series}>
+              <CartesianGrid stroke="#232d40" strokeDasharray="3 3" />
+              <XAxis dataKey="date" stroke="#8790a3" fontSize={10} />
+              <YAxis stroke="#8790a3" fontSize={10} domain={["dataMin - 2", "dataMax + 2"]} />
+              <Tooltip contentStyle={{ background: "#0e1420", border: "1px solid #2b3549", fontSize: 12 }} labelStyle={{ color: "#eef1f6" }} />
+              <Line type="monotone" dataKey="plenumTempF" stroke="#f2c14e" strokeWidth={2} dot={false} name="Plenum °F" connectNulls />
+              <Line type="monotone" dataKey="returnAirTempF" stroke="#5fb0d6" strokeWidth={2} dot={false} name="Return air °F" connectNulls />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      <div style={{ fontSize: 10.5, color: "#5b6478", marginTop: 10 }}>
+        Synced hourly from Agri-Stor.{reading.firmwareVersion ? ` Panel firmware v${reading.firmwareVersion}.` : ""}
+      </div>
+    </div>
   );
 }
 
@@ -1033,6 +1181,8 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddTube
           Filled {bay.fillDate} · {bay.zones.length} field{bay.zones.length > 1 ? "s" : ""} · {bay.zones.reduce((s, z) => s + z.tubeCount, 0)} tubes total
         </div>
       </div>
+
+      <AgristorLiveCard binName={bay.agristorBinName} />
 
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <StatBlock label="Bay inventory" value={`${fmt(stats.currentCwt)} cwt`} sub={`${Math.round(stats.fillPct * 100)}% of ${fmt(stats.capacityCwt)} cwt`} accent="#f2c14e" />
@@ -1173,13 +1323,6 @@ function deltaStatus(delta, daysIn) {
   return { level: "ok", color: "#8fd19e", note: "within normal range (target ~1.5°F)" };
 }
 
-// Averages same-day readings per position, then pairs top/bottom by nearest
-// date rather than requiring an exact match — so a top reading on Monday and
-// a bottom reading on Wednesday still produce a delta.
-// Aggregates every reading for a bay by date, regardless of which pipe it
-// came from. Same-day readings of the same position are averaged; Δ T only
-// needs a Top reading and a Bottom reading recorded on the same date — they
-// can come from entirely different pipes.
 function buildBayDaySeries(logs) {
   const dayMap = new Map();
   logs.forEach((l) => {
@@ -1198,8 +1341,6 @@ function buildBayDaySeries(logs) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-// Simple per-pipe reference table: most recent Top and most recent Bottom
-// logged at each individual pipe, whatever dates those happen to be.
 function latestByPipe(logs) {
   const map = new Map();
   logs.forEach((l) => {
@@ -1722,7 +1863,6 @@ function VarietiesTab({ varieties, bays, onAdd }) {
    (with their fields) without touching code.
 ----------------------------------------------------------------*/
 function ManageTab({ locations, buildings, bays, varieties, customers, readOnly, onAddLocation, onAddBuilding, onAddBay, onUpdateLocation, onUpdateBuilding, onUpdateBayMeta, onUpdateZoneMeta }) {
-  // --- add location ---
   const [locName, setLocName] = useState("");
   const [locAddress, setLocAddress] = useState("");
   const [locLat, setLocLat] = useState("");
@@ -1742,7 +1882,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
     setLocName(""); setLocAddress(""); setLocLat(""); setLocLng(""); setLocError("");
   };
 
-  // --- add building ---
   const [bldgLocationId, setBldgLocationId] = useState(locations[0]?.id || "");
   const [bldgName, setBldgName] = useState("");
   const [bldgError, setBldgError] = useState("");
@@ -1757,7 +1896,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
     setBldgName(""); setBldgError("");
   };
 
-  // --- add bay (with zones) ---
   const [bayLocationId, setBayLocationId] = useState(locations[0]?.id || "");
   const buildingsHere = buildings.filter((b) => b.locationId === bayLocationId);
   const [bayBuildingId, setBayBuildingId] = useState(buildingsHere[0]?.id || "");
@@ -1768,6 +1906,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
 
   const [bayName, setBayName] = useState("");
   const [bayFillDate, setBayFillDate] = useState(todayStr());
+  const [bayAgristorBinName, setBayAgristorBinName] = useState("");
   const [zoneRows, setZoneRows] = useState([{ name: "Field 1", variety: varieties[0] || "", customer: "Unassigned", tubeCount: "30", cwtPerTube: "" }]);
   const [bayError, setBayError] = useState("");
 
@@ -1791,16 +1930,18 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
     }));
     onAddBay({
       id: bayId, name: trimmed, buildingId: bayBuildingId, fillDate: bayFillDate,
-      cwtPerTube: zones.every((z) => z.cwtPerTube) ? null : 2500, zones,
+      cwtPerTube: zones.every((z) => z.cwtPerTube) ? null : 2500,
+      agristorBinName: bayAgristorBinName.trim() || null,
+      zones,
     });
-    setBayName(""); setZoneRows([{ name: "Field 1", variety: varieties[0] || "", customer: "Unassigned", tubeCount: "30", cwtPerTube: "" }]);
+    setBayName(""); setBayAgristorBinName("");
+    setZoneRows([{ name: "Field 1", variety: varieties[0] || "", customer: "Unassigned", tubeCount: "30", cwtPerTube: "" }]);
     setBayError("");
   };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24, maxWidth: 900 }}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
-        {/* Location */}
         <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
           <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
             <MapPin size={16} color="#f2c14e" /> Add a location (complex)
@@ -1815,7 +1956,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
           <Button onClick={submitLocation}><Plus size={14} /> Add location</Button>
         </div>
 
-        {/* Building */}
         <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
           <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
             <Building2 size={16} color="#f2c14e" /> Add a building
@@ -1831,7 +1971,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
         </div>
       </div>
 
-      {/* Bay + fields */}
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
           <Package size={16} color="#f2c14e" /> Add a bay
@@ -1850,6 +1989,9 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
           </Field>
           <Field label="Bay name"><input value={bayName} onChange={(e) => setBayName(e.target.value)} style={inputStyle} placeholder="e.g. Hidden Valley #1" /></Field>
           <Field label="Fill date"><input type="date" value={bayFillDate} onChange={(e) => setBayFillDate(e.target.value)} style={inputStyle} /></Field>
+          <Field label="Agri-Stor bin name (optional)">
+            <input value={bayAgristorBinName} onChange={(e) => setBayAgristorBinName(e.target.value)} style={inputStyle} placeholder="must match Agri-Stor exactly" />
+          </Field>
         </div>
 
         <div style={{ fontSize: 11, color: "#8790a3", margin: "10px 0 6px", letterSpacing: 0.3 }}>FIELDS IN THIS BAY</div>
@@ -1884,7 +2026,6 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
         </div>
       </div>
 
-      {/* existing structure — click into any field to edit it */}
       <div>
         <div style={{ fontWeight: 700, marginBottom: 4, color: "#eef1f6" }}>Current sites</div>
         <div style={{ fontSize: 11.5, color: "#6f7890", marginBottom: 10 }}>Click any name or value below to rename or correct it — changes save when you click away.</div>
@@ -1915,6 +2056,8 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                             <EditableInline value={bay.fillDate} type="date" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { fillDate: v })} width={140} />
                             <span style={{ fontSize: 11, color: "#6f7890" }}>cwt/tube (bay default)</span>
                             <EditableInline value={bay.cwtPerTube ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { cwtPerTube: v })} width={90} placeholder="—" />
+                            <span style={{ fontSize: 11, color: "#6f7890" }}>Agri-Stor bin</span>
+                            <EditableInline value={bay.agristorBinName || ""} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { agristorBinName: v })} width={140} placeholder="not linked" />
                           </div>
                           <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
                             {bay.zones.map((z) => (
