@@ -1565,14 +1565,15 @@ function LiveConditionsCard({ bay }) {
       {isError ? (
         // Don't present these numbers as current — the sensor has lost
         // contact, so whatever last came through could be hours or days
-        // old. reading.lastGoodReadingAt (the vendor's own last-known-good
-        // timestamp, distinct from reading.updatedAt which only reflects
-        // when OUR sync last ran) gives an honest "stale since" age when
-        // the vendor actually sends it; otherwise say so rather than guess.
+        // old. NOTE: reading.lastGoodReadingAt (parsed from the vendor's
+        // raw.time_stamp) turned out NOT to be a reliable per-bin "last
+        // known good" age — confirmed against live data showing the exact
+        // same timestamp on every bin regardless of that bin's actual
+        // status, so it can't be tracking individual sensor freshness.
+        // Don't use it here until a real per-bin freshness field is found;
+        // flagging the error itself is honest, a fabricated age isn't.
         <div style={{ fontSize: 12.5, color: "#e0a3a3" }}>
-          {reading.lastGoodReadingAt
-            ? `Last known-good reading was ${formatAgristorAge(reading.lastGoodReadingAt)} — readings below are hidden until the sensor reconnects.`
-            : "Readings are hidden until the sensor reconnects — age of the last known-good reading isn't available."}
+          Readings are hidden until the sensor reconnects.
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, fontSize: 12.5, color: "#c7cede" }}>
@@ -1643,13 +1644,13 @@ function EquipmentStatusPanel({ bay }) {
         ) : isError ? (
           // Same reasoning as LiveConditionsCard: don't show Fan/Refer as
           // live numbers when the sensor has lost contact — they could be
-          // days stale. reading.lastGoodReadingAt is the vendor's own
-          // last-known-good timestamp; reading.updatedAt is only ever "when
-          // our sync last ran" and would misleadingly look fresh anyway.
+          // stale by an unknown amount. NOT using reading.lastGoodReadingAt
+          // here — confirmed against live data that it returns the same
+          // timestamp for every bin regardless of that bin's own status, so
+          // it isn't actually tracking per-bin freshness. Flag the error
+          // plainly instead of attaching a fabricated age to it.
           <div style={{ fontSize: 10.5, color: "#c99", lineHeight: 1.4 }}>
-            {reading.lastGoodReadingAt
-              ? `Stale since ${formatAgristorAge(reading.lastGoodReadingAt)} — hidden until reconnected.`
-              : "Hidden until sensor reconnects."}
+            Hidden until sensor reconnects.
           </div>
         ) : (
           <div style={{ display: "flex", gap: 10 }}>
@@ -1689,15 +1690,18 @@ function YardBayAgristorBadge({ bay }) {
   const reading = useAgristorReading(bay.agristorBinName);
   if (!bay.agristorBinName || reading === null || reading === undefined) return null;
   // Network error means the sensor has lost contact — whatever numbers came
-  // through with it could be hours or days old, so don't present them as
-  // live in a widget meant to be read at a glance. Flag it instead, with an
-  // honest age when the vendor's own last-known-good timestamp is present.
+  // through with it could be stale by an unknown amount, so don't present
+  // them as live in a widget meant to be read at a glance. Flag it instead.
+  // NOT showing an age here: reading.lastGoodReadingAt (parsed from the
+  // vendor's raw.time_stamp) turned out to return the same timestamp for
+  // every bin regardless of that bin's own status — confirmed against live
+  // data — so it isn't actually a per-bin freshness signal. Better to flag
+  // the error plainly than attach a fabricated age to it.
   if (reading.status === "network_error") {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, paddingTop: 3, borderTop: "1px solid #2b3549", fontSize: 9.5, color: "#e08787" }}>
         <AlertTriangle size={10} color="#e08787" />
         <span style={{ fontWeight: 700, letterSpacing: 0.3 }}>NETWORK ERROR</span>
-        {reading.lastGoodReadingAt && <span style={{ color: "#c99" }}>· stale {formatAgristorAge(reading.lastGoodReadingAt)}</span>}
       </div>
     );
   }
