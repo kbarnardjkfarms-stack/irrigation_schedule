@@ -538,40 +538,16 @@ const STUKENHOLTZ_BASE_URL = 'https://reporting.stukenholtz.com/api';
 // a GET by some HTTP clients (including Node's fetch), which is what
 // caused the "405 Method Not Allowed" on /results before this fix.
 
-// A short pause helper for the retry logic below.
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// Shared retry wrapper: on a 429 (rate limited), waits and retries with
-// exponential backoff (2s, 4s, 8s, 16s) rather than failing the whole
-// sync outright. Hit this in practice once the backfill was calling
-// Stukenholtz's API in tight succession (every request loop, ~5 calls
-// each - 1 /contacts + 4 /results, one per sample type) - reasonable for
-// them to push back on, so the sync needs to slow down and retry rather
-// than error out.
-async function fetchWithRetry(url, options) {
-  const maxAttempts = 5;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const res = await fetch(url, options);
-    if (res.status !== 429) return res;
-    if (attempt === maxAttempts) return res; // give up and let the caller's !res.ok handling report it
-    const backoffMs = 2000 * Math.pow(2, attempt - 1);
-    console.warn(`Stukenholtz rate limited (429) on attempt ${attempt}/${maxAttempts} - waiting ${backoffMs}ms before retry.`);
-    await sleep(backoffMs);
-  }
-}
-
 async function stukenholtzGet(path, apikey) {
   const url = `${STUKENHOLTZ_BASE_URL}${path}?apikey=${apikey}`;
-  const res = await fetchWithRetry(url, { headers: { accept: 'application/json' } });
+  const res = await fetch(url, { headers: { accept: 'application/json' } });
   if (!res.ok) throw new Error(`Stukenholtz API error ${res.status} on ${path}: ${await res.text()}`);
   return res.json();
 }
 
 async function stukenholtzPost(path, body, apikey) {
   const url = `${STUKENHOLTZ_BASE_URL}${path}?apikey=${apikey}`;
-  const res = await fetchWithRetry(url, {
+  const res = await fetch(url, {
     method: 'POST',
     headers: { accept: 'application/json', 'content-type': 'application/json' },
     body: JSON.stringify(body)
@@ -671,30 +647,18 @@ function mapResultToSample(result, fieldLookup) {
   // (e.g. "SHOP S"). FieldID is Stukenholtz's own internal number (won't
   // match Agworld-sourced field docs), and Grower is the farm/company
   // name, not a specific field - both kept only as fallbacks.
-  //
-  // Compost is the one type this doesn't apply to at all: those samples
-  // identify a compost SOURCE (a supplier/batch name), not a field in
-  // the crop rotation. Matching a source name against field names would
-  // be pointless at best, and a real risk at worst - a source happening
-  // to share a name close to a real field could fuzzy-match onto it
-  // wrongly. rawFieldLabel below still holds the source name either way;
-  // it's just never treated as a field to match.
   const fieldLabel = result.Sample || result.field || result.fieldName || result.FieldID || result.Grower || null;
-  let fieldId = null;
-  let fieldMatchType = null;
-  if (type !== 'compost' && fieldLabel) {
-    const normalizedLabel = normalizeFieldLabel(fieldLabel);
-    fieldId = fieldLookup[normalizedLabel] || null;
-    // fieldMatchType lets the cleanup tool distinguish a confident exact
-    // match from an auto-corrected guess worth a human glance, from
-    // nothing found at all.
-    fieldMatchType = fieldId ? 'exact' : null;
-    if (!fieldId) {
-      const fuzzyMatch = findFuzzyFieldMatch(normalizedLabel, fieldLookup);
-      if (fuzzyMatch) {
-        fieldId = fuzzyMatch;
-        fieldMatchType = 'fuzzy';
-      }
+  const normalizedLabel = fieldLabel ? normalizeFieldLabel(fieldLabel) : null;
+  let fieldId = normalizedLabel ? fieldLookup[normalizedLabel] || null : null;
+  // fieldMatchType lets the cleanup tool distinguish a confident exact
+  // match from an auto-corrected guess worth a human glance, from
+  // nothing found at all.
+  let fieldMatchType = fieldId ? 'exact' : null;
+  if (!fieldId && normalizedLabel) {
+    const fuzzyMatch = findFuzzyFieldMatch(normalizedLabel, fieldLookup);
+    if (fuzzyMatch) {
+      fieldId = fuzzyMatch;
+      fieldMatchType = 'fuzzy';
     }
   }
 
@@ -794,13 +758,6 @@ exports.testStukenholtzDateRange = onRequest(
       const results = await fetchResultsSince(since, contactIds, apikey, until, sampleTypeCode);
       const dates = results.map((r) => r.ReceivedDt).filter(Boolean).sort();
       const withResults = results.filter((r) => r.Results && Object.keys(r.Results).length > 0);
-      // Union of every key seen across every Results object in this whole
-      // batch, not just one example - settles whether fields like %P/%K/
-      // Sulfur exist anywhere in this data (maybe only on certain
-      // Test/ProductCode records) rather than guessing from a single
-      // sample that might happen to be a narrower test.
-      const allResultsKeysSeen = new Set();
-      withResults.forEach((r) => Object.keys(r.Results).forEach((k) => allResultsKeysSeen.add(k)));
       res.status(200).json({
         requestedSince: since,
         requestedUntil: until,
@@ -809,13 +766,7 @@ exports.testStukenholtzDateRange = onRequest(
         earliestReceivedDt: dates[0] || null,
         latestReceivedDt: dates[dates.length - 1] || null,
         samplesWithPopulatedResults: withResults.length,
-        exampleResults: withResults[0]?.Results || results[0]?.Results || null,
-        allResultsKeysSeenAcrossBatch: [...allResultsKeysSeen],
-        // If different Test/ProductCode values map to different Results
-        // shapes, this shows which ones exist in this batch - useful for
-        // spotting a full-panel test mixed in among quick NO3-only ones.
-        distinctTestsSeen: [...new Set(results.map((r) => r.Test).filter(Boolean))],
-        distinctProductCodesSeen: [...new Set(results.map((r) => r.ProductCode).filter(Boolean))]
+        exampleResults: withResults[0]?.Results || results[0]?.Results || null
       });
     } catch (err) {
       console.error(err);
@@ -881,27 +832,14 @@ async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
 }
 
 // Runs hourly, resuming from wherever the last successful sync left off -
-// Runs hourly, checking a rolling lookback window rather than an
-// ever-advancing cursor. This matters because Stukenholtz's own
-// ReceivedDt and ApproveDt can be a day or more apart - confirmed on a
-// real sample (ReceivedDt 8/13, ApproveDt 8/14) - meaning a sample
-// received several days ago might only become available through the API
-// today. An advancing "only check since last successful run" cursor
-// would push right past that sample's ReceivedDt before it's ever
-// approved, silently and permanently excluding it. Re-checking the same
-// rolling window every run costs nothing extra (writes are upserts by
-// report id), so this trades a bit of redundant querying for actually
-// catching late-approved results.
-//
-// NOTE: still doesn't paginate past 1000 per type - if a single type
-// ever produced 1000+ results within the lookback window (soil alone hit
-// exactly 1000 in one month during backfill testing, so this isn't
-// impossible), anything past the cap would be missed until the backlog
-// thinned out. Shorten STUKENHOLTZ_HOURLY_LOOKBACK_DAYS if that ever
-// shows up as unmapped/missing data, or add windowed pagination here
-// too, matching the backfill's approach.
-const STUKENHOLTZ_HOURLY_LOOKBACK_DAYS = 14;
-
+// not a rolling "last N hours" window - so a slow run or a missed
+// invocation never creates a gap. First run ever falls back to the last
+// 24 hours. NOTE: no ending bound is passed (open-ended to "now"), and
+// this doesn't paginate - if a single hour ever genuinely produced 1000+
+// new samples (essentially impossible at real-world volumes), anything
+// past the cap would be silently missed until the following hour's run
+// happened to catch it via an overlapping window. Not handled here since
+// it's not a realistic hourly volume.
 exports.syncStukenholtzSamplesHourly = onSchedule(
   {
     schedule: 'every 1 hours',
@@ -912,15 +850,13 @@ exports.syncStukenholtzSamplesHourly = onSchedule(
   },
   async () => {
     const db = admin.firestore();
-    const lookbackStart = new Date(
-      Date.now() - STUKENHOLTZ_HOURLY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
-    ).toISOString();
-    const result = await syncOneStukenholtzBatch(lookbackStart);
-    // Kept for visibility/debugging (e.g. confirming the schedule is
-    // actually firing) - no longer used to compute the next query's
-    // starting point.
+    const stateDoc = await db.collection('syncState').doc('stukenholtz').get();
+    const lastSyncedAt = stateDoc.exists && stateDoc.data().lastSyncedAt
+      ? stateDoc.data().lastSyncedAt.toDate().toISOString()
+      : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const result = await syncOneStukenholtzBatch(lastSyncedAt);
     await db.collection('syncState').doc('stukenholtz').set(
-      { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp(), lookbackStart },
+      { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp() },
       { merge: true }
     );
     console.log(`Stukenholtz sync: fetched ${result.fetched}, wrote ${result.written}, ${result.unmapped} unmapped.`);
@@ -936,141 +872,110 @@ exports.syncStukenholtzSamplesHourly = onSchedule(
 // retried; if a window comes back comfortably under the cap, the window
 // grows for the next call, so sparse older periods don't need as many
 // round trips as dense recent ones.
+//
+// Call this same URL repeatedly (no query params needed after the first
+// time) - each call handles one window and saves progress in
+// syncState/stukenholtzBackfill. Returns JSON with a "done" field: keep
+// calling until that's true. Once done, it bumps syncState/stukenholtz's
+// lastSyncedAt so the hourly job picks up seamlessly from there.
+//
+// First-ever call: pass ?since=2015-01-01 (or any date) to set the
+// starting point - defaults to 2015-01-01 if omitted. Add ?reset=true to
+// restart from scratch.
 const STUKENHOLTZ_INITIAL_WINDOW_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 const STUKENHOLTZ_MIN_WINDOW_MS = 24 * 60 * 60 * 1000; // 1 day floor - avoids shrinking forever
 const STUKENHOLTZ_MAX_WINDOW_MS = 2 * 365 * 24 * 60 * 60 * 1000; // 2 years ceiling
 
-// Does exactly one window's worth of work and returns a plain result
-// object - shared by the manual HTTP endpoint below (handy for on-demand
-// testing) and the scheduled version further down (which needs no
-// browser tab, Cloud Shell, or manual URL-clicking to keep going -
-// Cloud Shell sessions get discarded after about an hour of inactivity,
-// which isn't reliable for something that can take hours across ~30k
-// records).
-async function runOneStukenholtzBackfillStep(sinceOverride, forceReset) {
-  const db = admin.firestore();
-  const stateRef = db.collection('syncState').doc('stukenholtzBackfill');
-  const stateSnap = await stateRef.get();
-
-  let rangeCursor, windowSizeMs;
-  if (forceReset || !stateSnap.exists) {
-    // Bare dates like "2015-01-01" get rejected by Stukenholtz's API,
-    // which wants a full ISO datetime - always normalize.
-    rangeCursor = new Date(sinceOverride || '2015-01-01T00:00:00.000Z').toISOString();
-    windowSizeMs = STUKENHOLTZ_INITIAL_WINDOW_MS;
-  } else if (stateSnap.data().done) {
-    return {
-      done: true,
-      message: `Backfill already completed as of ${stateSnap.data().rangeCursor}. Pass reset=true to run again from scratch.`
-    };
-  } else {
-    rangeCursor = stateSnap.data().rangeCursor;
-    windowSizeMs = stateSnap.data().windowSizeMs || STUKENHOLTZ_INITIAL_WINDOW_MS;
-  }
-
-  const cursorDate = new Date(rangeCursor);
-  const now = new Date();
-
-  const windowEnd = new Date(Math.min(cursorDate.getTime() + windowSizeMs, now.getTime()));
-  const result = await syncOneStukenholtzBatch(rangeCursor, windowEnd.toISOString());
-  // maxFetchedForAnyType, not result.fetched - fetched is now a sum
-  // across all four type codes, so it can legitimately exceed 1000
-  // without any single type having actually hit its own cap.
-  const windowTruncated = result.maxFetchedForAnyType >= STUKENHOLTZ_PAGE_SIZE;
-
-  let nextCursor = rangeCursor;
-  let nextWindowSizeMs = windowSizeMs;
-
-  if (windowTruncated && windowSizeMs > STUKENHOLTZ_MIN_WINDOW_MS) {
-    // Likely truncated at the cap - shrink the window and retry the
-    // same starting point next call, rather than advancing past data
-    // that wasn't fully captured.
-    nextWindowSizeMs = Math.max(STUKENHOLTZ_MIN_WINDOW_MS, Math.floor(windowSizeMs / 2));
-  } else {
-    // Fully captured (or already at the minimum window and still
-    // hitting the cap - extremely unlikely, but proceed rather than
-    // loop forever). Advance past this window, and grow the window a
-    // bit in case the next period is sparser.
-    nextCursor = windowEnd.toISOString();
-    nextWindowSizeMs = Math.min(STUKENHOLTZ_MAX_WINDOW_MS, Math.floor(windowSizeMs * 1.5));
-  }
-
-  const done = new Date(nextCursor).getTime() >= now.getTime() && !windowTruncated;
-
-  await stateRef.set({
-    rangeCursor: nextCursor,
-    windowSizeMs: nextWindowSizeMs,
-    done,
-    lastRunAt: admin.firestore.FieldValue.serverTimestamp()
-  });
-
-  if (done) {
-    await db.collection('syncState').doc('stukenholtz').set(
-      { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    );
-  }
-
-  return {
-    done,
-    windowStart: rangeCursor,
-    windowEnd: windowEnd.toISOString(),
-    fetchedThisBatch: result.fetched,
-    writtenThisBatch: result.written,
-    unmappedThisBatch: result.unmapped,
-    windowTruncated,
-    nextCursor,
-    nextWindowSizeDays: Math.round(nextWindowSizeMs / (24 * 60 * 60 * 1000)),
-    message: done
-      ? 'Backfill complete - the hourly sync will take over from here.'
-      : windowTruncated
-      ? `Window ${rangeCursor} to ${windowEnd.toISOString()} hit the ${STUKENHOLTZ_PAGE_SIZE} cap - shrinking window and retrying the same start point.`
-      : `Captured ${result.fetched} records from ${rangeCursor} to ${windowEnd.toISOString()} - continuing from ${nextCursor}.`
-  };
-}
-
-// Manual/on-demand version - handy for testing a single step, or for
-// checking status by eye. Not the primary way to run the full backfill
-// anymore; see stukenholtzBackfillScheduler below for the
-// no-browser-required version.
-//
-// Call this URL to see one step's result. ?since=2015-01-01 sets the
-// starting point on first-ever call (defaults to 2015-01-01). Add
-// ?reset=true to restart from scratch.
 exports.backfillStukenholtzSamplesNow = onRequest(
   { secrets: [STUKENHOLTZ_API_KEY], timeoutSeconds: 540, memory: '1GiB' },
   async (req, res) => {
     try {
-      const result = await runOneStukenholtzBackfillStep(req.query.since, req.query.reset === 'true');
-      res.status(200).json(result);
+      const db = admin.firestore();
+      const stateRef = db.collection('syncState').doc('stukenholtzBackfill');
+      const stateSnap = await stateRef.get();
+      const forceReset = req.query.reset === 'true';
+
+      let rangeCursor, windowSizeMs;
+      if (forceReset || !stateSnap.exists) {
+        // Same normalization as testStukenholtzDateRange - a bare date
+        // like "2015-01-01" gets rejected by Stukenholtz's API, which
+        // wants a full ISO datetime.
+        rangeCursor = new Date(req.query.since || '2015-01-01T00:00:00.000Z').toISOString();
+        windowSizeMs = STUKENHOLTZ_INITIAL_WINDOW_MS;
+      } else if (stateSnap.data().done) {
+        res.status(200).json({
+          done: true,
+          message: `Backfill already completed as of ${stateSnap.data().rangeCursor}. Add ?reset=true to run again from scratch.`
+        });
+        return;
+      } else {
+        rangeCursor = stateSnap.data().rangeCursor;
+        windowSizeMs = stateSnap.data().windowSizeMs || STUKENHOLTZ_INITIAL_WINDOW_MS;
+      }
+
+      const cursorDate = new Date(rangeCursor);
+      const now = new Date();
+
+      const windowEnd = new Date(Math.min(cursorDate.getTime() + windowSizeMs, now.getTime()));
+      const result = await syncOneStukenholtzBatch(rangeCursor, windowEnd.toISOString());
+      // maxFetchedForAnyType, not result.fetched - fetched is now a sum
+      // across all four type codes, so it can legitimately exceed 1000
+      // without any single type having actually hit its own cap.
+      const windowTruncated = result.maxFetchedForAnyType >= STUKENHOLTZ_PAGE_SIZE;
+
+      let nextCursor = rangeCursor;
+      let nextWindowSizeMs = windowSizeMs;
+
+      if (windowTruncated && windowSizeMs > STUKENHOLTZ_MIN_WINDOW_MS) {
+        // Likely truncated at the cap - shrink the window and retry the
+        // same starting point next call, rather than advancing past data
+        // that wasn't fully captured.
+        nextWindowSizeMs = Math.max(STUKENHOLTZ_MIN_WINDOW_MS, Math.floor(windowSizeMs / 2));
+      } else {
+        // Fully captured (or already at the minimum window and still
+        // hitting the cap - extremely unlikely, but proceed rather than
+        // loop forever). Advance past this window, and grow the window a
+        // bit in case the next period is sparser.
+        nextCursor = windowEnd.toISOString();
+        nextWindowSizeMs = Math.min(STUKENHOLTZ_MAX_WINDOW_MS, Math.floor(windowSizeMs * 1.5));
+      }
+
+      const done = new Date(nextCursor).getTime() >= now.getTime() && !windowTruncated;
+
+      await stateRef.set({
+        rangeCursor: nextCursor,
+        windowSizeMs: nextWindowSizeMs,
+        done,
+        lastRunAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      if (done) {
+        await db.collection('syncState').doc('stukenholtz').set(
+          { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
+      }
+
+      res.status(200).json({
+        done,
+        windowStart: rangeCursor,
+        windowEnd: windowEnd.toISOString(),
+        fetchedThisBatch: result.fetched,
+        writtenThisBatch: result.written,
+        unmappedThisBatch: result.unmapped,
+        windowTruncated,
+        nextCursor,
+        nextWindowSizeDays: Math.round(nextWindowSizeMs / (24 * 60 * 60 * 1000)),
+        message: done
+          ? 'Backfill complete - the hourly sync will take over from here.'
+          : windowTruncated
+          ? `Window ${rangeCursor} to ${windowEnd.toISOString()} hit the ${STUKENHOLTZ_PAGE_SIZE} cap - shrinking window and retrying the same start point.`
+          : `Captured ${result.fetched} records from ${rangeCursor} to ${windowEnd.toISOString()} - call this same URL again to continue from ${nextCursor}.`
+      });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
     }
-  }
-);
-
-// Runs automatically every 5 minutes and does nothing once the backfill
-// is marked done - no browser tab, Cloud Shell session, or manual URL
-// visits required. This is the actual way the full history gets pulled
-// in now; backfillStukenholtzSamplesNow above is just for manual
-// spot-checks. 5 minutes keeps enough breathing room between calls to
-// avoid the 429 rate limiting hit during the earlier Cloud Shell loop
-// (that was calling every 1-5 seconds - this is roughly 60-300x gentler).
-exports.stukenholtzBackfillScheduler = onSchedule(
-  {
-    schedule: 'every 5 minutes',
-    timeZone: 'America/Denver',
-    secrets: [STUKENHOLTZ_API_KEY],
-    timeoutSeconds: 540,
-    memory: '1GiB'
-  },
-  async () => {
-    const result = await runOneStukenholtzBackfillStep(null, false);
-    console.log(
-      `Stukenholtz backfill step: done=${result.done}, fetched=${result.fetchedThisBatch ?? 0}, ` +
-      `written=${result.writtenThisBatch ?? 0}, unmapped=${result.unmappedThisBatch ?? 0}. ${result.message}`
-    );
   }
 );
 
@@ -1105,3 +1010,387 @@ exports.reassignSampleField = onCall(async (request) => {
 
   return { ok: true };
 });
+
+// ---------------------------------------------------------------------
+// Agri-Stor sync — PHASE 1 (READ-ONLY)
+//
+// Polls the Agri-Stor monitoring panel (https://agristor-companies.com)
+// roughly every hour and writes one normalized reading doc per bin into
+// Firestore, under agristorReadings/{binId}. PotatoStorage.jsx listens to
+// that same collection (see useAgristorReading / agristorDocId in that
+// file) and shows it as a "Live conditions" card on any bay whose
+// "Agri-Stor bin name" field matches a bin name here exactly.
+//
+// This function never writes anything back to Agri-Stor — it only reads.
+//
+// STATUS: everything below is confirmed against live data (captured from
+// an authenticated browser tab, with a redacted request/response monitor
+// that never surfaced actual credential/token/cookie values) — data
+// shape, sensor field mapping, account scoping, and the login mechanism.
+// One caveat: whether a CSRF header is actually required on the login
+// POST wasn't directly observable (only body shape + status codes were
+// captured, on purpose). agristorAuthenticate() below sends one
+// defensively if it finds a csrftoken cookie; if the first real deploy's
+// test run fails at the auth step, that's the first thing to check.
+// ---------------------------------------------------------------------
+
+// Set these once with:
+//   firebase functions:secrets:set AGRISTOR_USERNAME
+//   firebase functions:secrets:set AGRISTOR_PASSWORD
+const AGRISTOR_USERNAME = defineSecret('AGRISTOR_USERNAME');
+const AGRISTOR_PASSWORD = defineSecret('AGRISTOR_PASSWORD');
+
+const AGRISTOR_BASE_URL = 'https://agristor-companies.com';
+
+// Confirmed: at the domain root, NOT under /api/.
+const AGRISTOR_LOGIN_PATH = '/login/';
+
+// Bare GET returns a JSON array of every iot-client the logged-in account
+// can see (~23 entries for this account — NOT all of them belong to this
+// account, see AGRISTOR_SITES_PATH below), each shaped like:
+//   { id, name, is_active, time_stamp, front_matter: { main: [...], misc: [...], AlarmData: [...] }, ... }
+const AGRISTOR_DATA_PATH = '/api/iot-clients/';
+
+// Returns this account's own sites, each with an iot_devices[] array of
+// device IDs that belong to it — used to filter AGRISTOR_DATA_PATH's list
+// down to just this account's own bins (see agristorFetchAllowedDeviceIds).
+const AGRISTOR_SITES_PATH = '/api/usersites/my_sites/';
+
+// Pulls every Set-Cookie the response sent (Node 18.14+/20+ fetch exposes
+// getSetCookie() for this; older runtimes only expose one combined
+// "set-cookie" header via .get(), so fall back to that as a single-entry
+// array).
+function agristorParseSetCookies(res) {
+  const raw =
+    typeof res.headers.getSetCookie === 'function'
+      ? res.headers.getSetCookie()
+      : [res.headers.get('set-cookie')].filter(Boolean);
+  const jar = {};
+  for (const line of raw) {
+    const pair = line.split(';')[0];
+    const idx = pair.indexOf('=');
+    if (idx > -1) jar[pair.slice(0, idx).trim()] = pair.slice(idx + 1).trim();
+  }
+  return jar;
+}
+function agristorCookieHeader(jar) {
+  return Object.entries(jar)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('; ');
+}
+
+/**
+ * Cookie-based session login (confirmed live — no token comes back in the
+ * response body; the whole "session" is the cookie jar built up here).
+ */
+async function agristorAuthenticate() {
+  const username = AGRISTOR_USERNAME.value();
+  const password = AGRISTOR_PASSWORD.value();
+
+  // Step 1: prime cookies. Not confirmed whether this GET actually issues a
+  // csrftoken cookie (request headers weren't captured, on purpose), but
+  // it's a cheap, harmless first step if Django expects one before a POST.
+  const primeRes = await fetch(`${AGRISTOR_BASE_URL}${AGRISTOR_LOGIN_PATH}`, { method: 'GET' });
+  let jar = agristorParseSetCookies(primeRes);
+
+  // Step 2: submit credentials. Forward any csrftoken picked up as both the
+  // cookie and the X-CSRFToken header, the standard Django pattern — if
+  // it's not actually required here, sending it is a no-op.
+  const loginRes = await fetch(`${AGRISTOR_BASE_URL}${AGRISTOR_LOGIN_PATH}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(jar.csrftoken ? { 'X-CSRFToken': jar.csrftoken, Cookie: agristorCookieHeader(jar) } : {})
+    },
+    body: JSON.stringify({ username, password })
+  });
+  if (!loginRes.ok) {
+    throw new Error(`Agri-Stor login failed: ${loginRes.status} ${await loginRes.text()}`);
+  }
+  jar = { ...jar, ...agristorParseSetCookies(loginRes) };
+
+  if (!Object.keys(jar).length) {
+    throw new Error("Agri-Stor login didn't return a session cookie — check for a CSRF rejection or a changed login flow.");
+  }
+  return { Cookie: agristorCookieHeader(jar) };
+}
+
+async function agristorGet(path, authHeaders) {
+  const res = await fetch(`${AGRISTOR_BASE_URL}${path}`, { headers: authHeaders });
+  if (!res.ok) throw new Error(`Agri-Stor API error ${res.status} on ${path}: ${await res.text()}`);
+  return res.json();
+}
+
+/**
+ * Returns the Set of iot-client device IDs that actually belong to this
+ * account, so AGRISTOR_DATA_PATH's list (which includes bins from other
+ * accounts, e.g. "Elliot 1") can be filtered down before writing anything.
+ */
+async function agristorFetchAllowedDeviceIds(authHeaders) {
+  const sites = await agristorGet(AGRISTOR_SITES_PATH, authHeaders);
+  const ids = new Set();
+  for (const site of Array.isArray(sites) ? sites : []) {
+    for (const deviceId of site.iot_devices || []) ids.add(deviceId);
+  }
+  return ids;
+}
+
+// Firestore doc IDs can't contain "/" and this must produce the exact same
+// id PotatoStorage.jsx's agristorDocId() produces for the same bin name —
+// keep these two functions in sync if either one changes.
+function agristorNormalizeBinName(binName) {
+  return (binName || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * The payload has no named fields for sensor values — everything lives in
+ * a positional array at front_matter.main[index]. Confirmed directly
+ * against live data, cross-checked across four bins (Hidden Valley 1-2,
+ * 3-4, 5, and 6):
+ *
+ *   2/3   -> plenum temp #1/#2 (°F)      5/6  -> plenum RH #1/#2 (%)
+ *   7/8   -> outside air temp/RH         9/10 -> return air temp/RH
+ *           (index 10 can be the string "dis" when that sensor is disabled)
+ *   13    -> pile avg temp (°F)          17   -> CO2 (ppm)
+ *   14    -> Fan % ("Off" when idle, a number when running)
+ *   15    -> Cooling/Refrigeration % (same shape as Fan — "Off", "--" when
+ *            the bin has no such equipment, or a number). The dashboard
+ *            label ("Cooling" vs "Refrigeration") differs per bin, but
+ *            it's the same array slot — both fields below read from it.
+ *
+ * "Return vs Plenum" on the dashboard is computed, not raw: returnAirTemp
+ * minus plenum temp #1.
+ *
+ * Indices 11, 12, 26, 27, 28 are confirmed to be static site-wide config
+ * (identical across all four bins checked, despite very different live
+ * temps/CO2) — almost certainly alarm setpoints, deliberately left out
+ * since they'd just duplicate the same numbers on every bin.
+ */
+// raw.time_stamp is documented in the payload shape (see AGRISTOR_DATA_PATH
+// above) but its exact wire format was never confirmed against a live
+// "network_error" bin, so this parses defensively rather than assuming one
+// shape: an ISO-ish string (most likely, given the Django-cookie login
+// flow), or a numeric epoch in either seconds or milliseconds. Returns null
+// — rather than a wrong date — for anything that doesn't parse cleanly, so
+// a bad guess here can never show a confidently-wrong "stale since" age;
+// worth spot-checking against a real network_error bin once deployed.
+function agristorParseTimeStamp(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') {
+    // 10-digit ~ seconds (through year 2286), 13-digit ~ milliseconds.
+    const ms = v < 1e12 ? v * 1000 : v;
+    const d = new Date(ms);
+    return Number.isFinite(d.getTime()) ? d : null;
+  }
+  const d = new Date(v);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+function agristorNormalizeBinReading(raw) {
+  const main = raw?.front_matter?.main || [];
+  const misc = raw?.front_matter?.misc || [];
+  const num = (v) => {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  // Fan/Cooling read as "Off" (idle, still valid — treat as 0%), "--" (no
+  // such equipment on this bin — treat as not-applicable/null), or a plain
+  // number string when actively running.
+  const pctOrFlag = (v) => {
+    if (v == null || v === '--') return null;
+    if (v === 'Off' || v === 'off') return 0;
+    return num(v);
+  };
+  const plenumTempF = num(main[2]);
+  const returnAirTempF = num(main[9]);
+  const lastGoodReadingDate = agristorParseTimeStamp(raw?.time_stamp);
+  return {
+    binName: raw.name ?? null,
+    status: raw?.is_active === false ? 'network_error' : 'ok',
+    // CONFIRMED WRONG (Aug 2026, live data): this was meant to be the
+    // vendor's own per-bin last-known-good reading time, to power a
+    // "stale since Xd Yh" age in the app. It isn't that — Kent found every
+    // bin in a sync carrying the exact same lastGoodReadingAt regardless of
+    // that bin's own live status (one bin showed 4 days stale here while
+    // its actual vendor panel was reporting fine "now"). So raw.time_stamp
+    // is most likely a batch/account-level timestamp (e.g. when this API
+    // response was generated), not a per-device value. Kept as-is for now
+    // since it's harmless to store, but nothing should read this field to
+    // mean "how stale is this specific bin" — the app no longer does.
+    // Whatever field actually drives the vendor dashboard's own per-bin
+    // "Network Error — Xd Yh" badge is still unidentified; would need a
+    // raw-payload dump of an actual network_error bin to find it.
+    lastGoodReadingAt: lastGoodReadingDate ? admin.firestore.Timestamp.fromDate(lastGoodReadingDate) : null,
+    firmwareVersion: misc[2] ?? null,
+    plenumTempF,
+    plenumTemp2F: num(main[3]),
+    plenumRH: num(main[5]),
+    plenumRH2: num(main[6]),
+    fanPct: pctOrFlag(main[14]),
+    coolingPct: pctOrFlag(main[15]),
+    refrigerationPct: pctOrFlag(main[15]),
+    returnAirTempF,
+    returnAirRH: main[10] === 'dis' ? null : num(main[10]),
+    outsideAirTempF: num(main[7]),
+    outsideAirRH: num(main[8]),
+    co2Ppm: num(main[17]),
+    returnVsPlenumF: returnAirTempF != null && plenumTempF != null ? returnAirTempF - plenumTempF : null,
+    pileAvgTempF: num(main[13]),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  };
+}
+
+async function syncAgristorReadingsOnce() {
+  const db = admin.firestore();
+  const authHeaders = await agristorAuthenticate();
+
+  const allowedIds = await agristorFetchAllowedDeviceIds(authHeaders);
+
+  const payload = await agristorGet(AGRISTOR_DATA_PATH, authHeaders);
+  const allBins = Array.isArray(payload) ? payload : [];
+  // Confirmed live: iot-clients/ includes bins from other accounts (e.g.
+  // "Elliot 1") — only keep the ones this account's own sites claim.
+  const bins = allBins.filter((b) => allowedIds.has(b.id));
+
+  if (allBins.length && !bins.length) {
+    console.warn(
+      `Agri-Stor sync: got ${allBins.length} bin(s) but none matched this account's own sites — check AGRISTOR_SITES_PATH scoping before trusting this.`
+    );
+    return { written: 0, total: allBins.length, inScope: 0 };
+  }
+  if (bins.length === 0) {
+    console.warn('Agri-Stor sync: response contained no bins — check AGRISTOR_DATA_PATH and the payload shape.');
+    return { written: 0, total: allBins.length, inScope: 0 };
+  }
+
+  const batch = db.batch();
+  let written = 0;
+  // Same UTC "YYYY-MM-DD" shape PotatoStorage.jsx uses everywhere else
+  // (new Date().toISOString().slice(0,10)) — keeps the two sides trivially
+  // comparable without a timezone conversion at read time.
+  const todayStr = new Date().toISOString().slice(0, 10);
+  for (const raw of bins) {
+    const reading = agristorNormalizeBinReading(raw);
+    if (!reading.binName) continue;
+    const binId = agristorNormalizeBinName(reading.binName);
+    const ref = db.collection('agristorReadings').doc(binId);
+    batch.set(ref, reading, { merge: true });
+    // History point — PHASE 2 addition. The doc above is merge:true and
+    // only ever holds the LATEST reading per bin, so without this there is
+    // no way to chart plenum/return-air/panel-Δ-T over time (only "right
+    // now"). One small doc per bin per hourly run, filed under that day's
+    // date so the client can average same-day points the same way it
+    // already averages same-day physical pipe checks (see
+    // buildBayDaySeries / buildAgristorDaySeries in PotatoStorage.jsx).
+    // Auto-ID keeps concurrent/retried runs from clobbering each other;
+    // the `date` field (not the doc id) is what the client groups on.
+    const historyRef = db.collection('agristorReadings').doc(binId).collection('history').doc();
+    batch.set(historyRef, {
+      date: todayStr,
+      plenumTempF: reading.plenumTempF,
+      returnAirTempF: reading.returnAirTempF,
+      returnVsPlenumF: reading.returnVsPlenumF,
+      recordedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    written++;
+  }
+  await batch.commit();
+  return { written, total: allBins.length, inScope: bins.length };
+}
+// NOTE ON DEPLOYING THIS CHANGE: the history write above only starts
+// accumulating data from the moment this updated function is deployed —
+// there is no way to retroactively backfill the trend chart in
+// PotatoStorage.jsx before that point. It also grows one small doc per bin
+// per hour indefinitely (~730/bin/month); fine for a single storage
+// season, but worth adding a scheduled cleanup (delete history docs older
+// than N days) before running this across multiple seasons unattended.
+
+// Runs automatically every hour so bay "Live conditions" cards stay
+// current without anyone having to refresh anything by hand.
+exports.syncAgristorReadings = onSchedule(
+  {
+    schedule: 'every 60 minutes',
+    secrets: [AGRISTOR_USERNAME, AGRISTOR_PASSWORD],
+    // Keep failures visible rather than silently retrying forever — an
+    // hourly job that quietly stops working is worse than one that alerts.
+    retryCount: 1,
+    timeoutSeconds: 60,
+    memory: '256MiB'
+  },
+  async () => {
+    try {
+      const result = await syncAgristorReadingsOnce();
+      console.log(
+        `Agri-Stor sync: wrote ${result.written} of ${result.inScope} in-scope bin reading(s) (${result.total} total returned, ${result.total - result.inScope} filtered out as not belonging to this account).`
+      );
+    } catch (err) {
+      console.error('Agri-Stor sync failed:', err);
+    }
+  }
+);
+
+// A manual trigger, useful for testing right after deploy or forcing an
+// on-demand refresh. Visiting this URL in a browser (once deployed) runs
+// the same sync immediately.
+exports.syncAgristorReadingsNow = onRequest(
+  { secrets: [AGRISTOR_USERNAME, AGRISTOR_PASSWORD], timeoutSeconds: 60, memory: '256MiB' },
+  async (req, res) => {
+    try {
+      const result = await syncAgristorReadingsOnce();
+      res
+        .status(200)
+        .send(
+          `Agri-Stor sync: wrote ${result.written} of ${result.inScope} in-scope bin reading(s) (${result.total} total returned, ${result.total - result.inScope} filtered out as not belonging to this account).`
+        );
+    } catch (err) {
+      console.error(err);
+      res.status(500).send(err.message);
+    }
+  }
+);
+
+// TEMPORARY diagnostic - not wired into the sync itself, doesn't write
+// anything to Firestore. Exists to answer one open question: raw.time_stamp
+// (see agristorParseTimeStamp's comment above) turned out to be identical
+// across every bin in a batch, so it can't be the per-bin "last known good
+// reading" field that powers the vendor dashboard's own "Network Error —
+// Xd Yh" badge. This dumps the full raw object for one bin (matched
+// case-insensitively against the bin name) so the real field, if one
+// exists in this payload, can be spotted by eye - ideally called against a
+// bin the vendor dashboard is CURRENTLY showing as a network error, since
+// that's when a real "last good reading" field would differ from "now".
+// Usage: ?bin=Watco%20B%203-4 (bin name, or a distinctive substring of it -
+// case-insensitive). Omit ?bin to list every in-scope bin's name + id
+// instead of full detail, so you can find the exact name to target.
+exports.debugAgristorRawBin = onRequest(
+  { secrets: [AGRISTOR_USERNAME, AGRISTOR_PASSWORD], timeoutSeconds: 60, memory: '256MiB' },
+  async (req, res) => {
+    try {
+      const authHeaders = await agristorAuthenticate();
+      const allowedIds = await agristorFetchAllowedDeviceIds(authHeaders);
+      const payload = await agristorGet(AGRISTOR_DATA_PATH, authHeaders);
+      const allBins = Array.isArray(payload) ? payload : [];
+      const bins = allBins.filter((b) => allowedIds.has(b.id));
+      const wantedName = (req.query.bin || '').toLowerCase();
+      if (!wantedName) {
+        res.status(200).json({
+          message: 'Pass ?bin=<name or substring> to see one bin\'s full raw payload.',
+          bins: bins.map((b) => ({ id: b.id, name: b.name, is_active: b.is_active, time_stamp: b.time_stamp }))
+        });
+        return;
+      }
+      const matches = bins.filter((b) => (b.name || '').toLowerCase().includes(wantedName));
+      if (!matches.length) {
+        res.status(404).json({ error: `No in-scope bin name matched "${req.query.bin}".` });
+        return;
+      }
+      res.status(200).json({ matchCount: matches.length, bins: matches });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
