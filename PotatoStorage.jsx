@@ -4,7 +4,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import {
   Warehouse, Thermometer, ClipboardCheck, Package, TrendingDown, Map as MapIcon,
   Plus, ChevronRight, MapPin, Gauge, BarChart3, AlertTriangle, Check, Layers, Users, Sprout, Building2, FlaskConical, Trash2,
-  Fan, Snowflake, Power,
+  Fan, Snowflake, Power, WifiOff, Wifi,
 } from "lucide-react";
 import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, query, where, getDocs, onSnapshot } from "firebase/firestore";
 import { db } from "./firebase.js"; // AIO's existing Firebase project — same login, no second sign-in
@@ -288,6 +288,43 @@ async function saveJSON(key, value) {
 async function deleteJSON(key) {
   try { await deleteDoc(doc(db, "potatoStorage", key)); }
   catch (e) { console.error("storage delete failed", key, e); }
+}
+// firebase.js already turns on Firestore's persistent local cache, so every
+// read/write above already keeps working with no signal — a log entry made
+// offline sits queued on the device and syncs on its own once the connection
+// comes back, with no extra plumbing. This hook is purely the VISIBLE half
+// of that: without it, someone standing in a cellar with no bars has no way
+// to tell "this saved locally and will sync later" from "this silently
+// failed," which is exactly the trust problem worth closing. `justReconnected`
+// stays true for a few seconds after coming back online so there's a moment
+// of visible confirmation, then clears itself.
+function useOnlineStatus() {
+  const [online, setOnline] = useState(() => (typeof navigator !== "undefined" ? navigator.onLine : true));
+  const [justReconnected, setJustReconnected] = useState(false);
+  const wasOfflineRef = useRef(!online);
+  useEffect(() => {
+    let timer;
+    const goOnline = () => {
+      setOnline(true);
+      if (wasOfflineRef.current) {
+        setJustReconnected(true);
+        timer = setTimeout(() => setJustReconnected(false), 6000);
+      }
+      wasOfflineRef.current = false;
+    };
+    const goOffline = () => {
+      setOnline(false);
+      wasOfflineRef.current = true;
+    };
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => {
+      window.removeEventListener("online", goOnline);
+      window.removeEventListener("offline", goOffline);
+      clearTimeout(timer);
+    };
+  }, []);
+  return { online, justReconnected };
 }
 /* ---------------------------------------------------------------
    Derived stats — per zone (field), then rolled up per bay
@@ -3678,6 +3715,7 @@ export default function PotatoStorage() {
   // site switches, so "show me Gala" stays in effect while you move around
   // looking for it.
   const [invFilter, setInvFilter] = useState(EMPTY_INV_FILTER);
+  const { online, justReconnected } = useOnlineStatus();
   useEffect(() => {
     (async () => {
       const locs0 = await loadJSON(LOCATIONS_KEY, null);
@@ -4190,6 +4228,16 @@ export default function PotatoStorage() {
           onCancel={() => setShowNewSeason(false)}
           onConfirm={(label) => { onStartNewSeason(label); setShowNewSeason(false); }}
         />
+      )}
+      {!online && (
+        <div style={{ background: "rgba(224,166,62,0.1)", borderBottom: "1px solid #3a3320", padding: "8px 20px", fontSize: 12.5, color: "#f2c14e", display: "flex", alignItems: "center", gap: 8 }}>
+          <WifiOff size={13} /> No connection — anything you log now (temperatures, pipe checks, cwt runs) is saved on this device and syncs automatically once you're back in range.
+        </div>
+      )}
+      {online && justReconnected && (
+        <div style={{ background: "rgba(143,209,158,0.1)", borderBottom: "1px solid #2f4a35", padding: "8px 20px", fontSize: 12.5, color: "#8fd19e", display: "flex", alignItems: "center", gap: 8 }}>
+          <Wifi size={13} /> Back online — anything logged while you were out is syncing now.
+        </div>
       )}
       {isReadOnly && (
         <div style={{ background: "rgba(224,166,62,0.1)", borderBottom: "1px solid #3a3320", padding: "8px 20px", fontSize: 12.5, color: "#f2c14e", display: "flex", alignItems: "center", gap: 8 }}>
