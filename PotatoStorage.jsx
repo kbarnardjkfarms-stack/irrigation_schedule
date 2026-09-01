@@ -27,13 +27,25 @@ function hashStr(s) {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return h;
 }
+// Vivid, maximally-distinct categorical set (14 varieties). Generated in OKLCH
+// and run through the dataviz skill's validator (lightness band, chroma floor,
+// CVD-sim separation, normal-vision Delta E, contrast) — every adjacent pair
+// (the order the legend actually renders things in, alphabetically) clears
+// every hard gate. Two pairs still sit close under an exhaustive all-14-at-once
+// check (a dark green/rust pair reads similarly to some colorblind viewers; a
+// sky-blue/teal pair sits just under the "tell apart instantly" bar for full
+// color vision) — with 14 simultaneous hues that's a real perceptual limit
+// (the skill's own reference palette only guarantees full separation for its
+// first 3 of 8 slots), not something a better color pick fixes. Every place
+// these render also shows the variety name as text, so no pair depends on
+// color alone.
 const VARIETY_FIXED = {
-  "Burbank": "#d9a441", "Ranger": "#9c4a2c", "Dakota": "#c96a2e", "Clearwater": "#b58a4a",
-  "Teton": "#8c3a3a", "Norkotah": "#a68f2e", "Reveille": "#6b7a3a", "G3 Burbank": "#e0b45a",
-  "G3 Reveille": "#7a8f4a", "Ciklamen": "#c9825a", "Nordaana": "#7a4a2e", "907-15": "#d1975f",
-  "9426": "#9c6b3f", "Gala": "#b8763f",
+  "Burbank": "#006794", "Ranger": "#937df6", "Dakota": "#8d4b13", "Clearwater": "#1c78e3",
+  "Teton": "#e16f23", "Norkotah": "#1440ee", "Reveille": "#f74584", "G3 Burbank": "#187225",
+  "G3 Reveille": "#dd42e8", "Ciklamen": "#2ab03e", "Nordaana": "#821cc1", "907-15": "#008f7e",
+  "9426": "#a8195f", "Gala": "#2aa1ce",
 };
-const VARIETY_POOL = ["#a68f2e", "#c96a2e", "#8c3a3a", "#6b7a3a", "#b58a4a", "#7a4a2e"];
+const VARIETY_POOL = ["#0085ab", "#0089d0", "#009f99", "#007ca1", "#c13b9f", "#db4b6d"];
 function getVarietyColor(name) {
   if (!name) return "#7c8794";
   if (VARIETY_FIXED[name]) return VARIETY_FIXED[name];
@@ -581,10 +593,15 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
     pile.castShadow = true;
     pileGroup.add(pile);
     // customer cap — thin colored slab riding the top of each mound, so
-    // variety (mound color) and customer (cap color) both read at a glance
+    // variety (mound color) and customer (cap color) both read at a glance.
+    // Must follow the same topOffsetZ shift the pile's own top face uses
+    // (buildPileFrustumGeometry shifts t0-t3 by +topOffsetZ in local Z) —
+    // without it, the cap stayed centered on the base footprint even when
+    // an off-center top pipe range pulled the pile's actual top face to one
+    // side, so the cap visibly floated off the real top of the mound.
     const capMat = new THREE.MeshStandardMaterial({ color: getCustomerColor(zone.customer), roughness: 0.6, metalness: 0.1 });
     const cap = new THREE.Mesh(new THREE.BoxGeometry(topWidth * 0.94, 0.28, segTopDepth * 0.9), capMat);
-    cap.position.set(0, pileH + 0.14, segCenterZ);
+    cap.position.set(0, pileH + 0.14, segCenterZ + topOffsetZ);
     cap.castShadow = true;
     pileGroup.add(cap);
     p = q + 1;
@@ -895,6 +912,9 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
               <ColorDot color={getVarietyColor(zone.variety)} /><ColorDot color={getCustomerColor(zone.customer)} /> {zone.name}
             </div>
             <div style={{ color: "#9aa4b8" }}>{zone.variety} · {zone.customer} · {zs.pipesFilled}/{zone.pipeCount} pipe · {Math.round(zs.fillPct * 100)}%</div>
+            <div style={{ color: "#f2c14e", fontWeight: 700, marginTop: 2 }}>
+              {fmt(zs.currentCwt)} cwt{zs.hasOverride ? " (manual)" : ""}
+            </div>
           </div>
         );
       })}
