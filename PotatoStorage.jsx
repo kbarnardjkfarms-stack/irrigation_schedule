@@ -3707,6 +3707,14 @@ export default function PotatoStorage() {
   const [seasons, setSeasons] = useState(DEFAULT_SEASONS);
   const [selectedSeasonId, setSelectedSeasonId] = useState(DEFAULT_SEASONS[0].id);
   const [loaded, setLoaded] = useState(false);
+  // The initial load screen used to just say "loading cellar data…" forever
+  // if any one of the startup reads (locations/buildings/bays, then every
+  // bay's own data doc) hung on a slow or flaky connection — no error, no
+  // timeout, no way to tell what was wrong. loadTakingAwhile flips on after
+  // a few seconds so a slow load at least says so and offers a reload;
+  // loadFailed covers the rarer case where the load actually throws.
+  const [loadTakingAwhile, setLoadTakingAwhile] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [tab, setTab] = useState("yard");
   const [selectedLocationId, setSelectedLocationId] = useState(DEFAULT_LOCATIONS[0].id);
   const [selectedId, setSelectedId] = useState(DEFAULT_BAYS[0].id);
@@ -3717,50 +3725,73 @@ export default function PotatoStorage() {
   const [invFilter, setInvFilter] = useState(EMPTY_INV_FILTER);
   const { online, justReconnected } = useOnlineStatus();
   useEffect(() => {
+    let cancelled = false;
+    // Was a straight chain of ~10+ sequential awaits (plus a one-bay-at-a-time
+    // loop for bay data) — every one of those was a separate Firestore round
+    // trip, so on a slow or flaky connection the WHOLE app just sat on
+    // "loading cellar data…" until every single one finished, with no
+    // timeout to fall back on. None of these reads depend on each other
+    // except the per-bay data loop needing the bay list first, so they now
+    // fire together instead of queued one after another — much less total
+    // waiting, and one slow read no longer blocks the others.
+    const slowTimer = setTimeout(() => { if (!cancelled) setLoadTakingAwhile(true); }, 6000);
     (async () => {
-      const locs0 = await loadJSON(LOCATIONS_KEY, null);
-      const locList = locs0 && Array.isArray(locs0) && locs0.length ? locs0 : DEFAULT_LOCATIONS;
-      if (!locs0) await saveJSON(LOCATIONS_KEY, DEFAULT_LOCATIONS);
-      setLocations(locList);
-      const blds0 = await loadJSON(BUILDINGS_KEY, null);
-      const bldList = blds0 && Array.isArray(blds0) && blds0.length ? blds0 : DEFAULT_BUILDINGS;
-      if (!blds0) await saveJSON(BUILDINGS_KEY, DEFAULT_BUILDINGS);
-      setBuildings(bldList);
-      const cfg = await loadJSON(CONFIG_KEY, null);
-      const bayList = cfg && Array.isArray(cfg) && cfg.length ? cfg : DEFAULT_BAYS;
-      if (!cfg) await saveJSON(CONFIG_KEY, DEFAULT_BAYS);
-      setBays(bayList);
-      const dataEntries = {};
-      for (const b of bayList) {
-        dataEntries[b.id] = await loadJSON(bayDataKey(b.id), emptyBayData(b));
+      try {
+        const [locs0, blds0, cfg, insp, custs0, varList0, prods0, apps0, seasons0] = await Promise.all([
+          loadJSON(LOCATIONS_KEY, null),
+          loadJSON(BUILDINGS_KEY, null),
+          loadJSON(CONFIG_KEY, null),
+          loadJSON(INSPECTIONS_KEY, []),
+          loadJSON(CUSTOMERS_KEY, null),
+          loadJSON(VARIETIES_KEY, null),
+          loadJSON(PRODUCTS_KEY, null),
+          loadJSON(APPLICATORS_KEY, null),
+          loadJSON(SEASONS_KEY, null),
+        ]);
+        const locList = locs0 && Array.isArray(locs0) && locs0.length ? locs0 : DEFAULT_LOCATIONS;
+        const bldList = blds0 && Array.isArray(blds0) && blds0.length ? blds0 : DEFAULT_BUILDINGS;
+        const bayList = cfg && Array.isArray(cfg) && cfg.length ? cfg : DEFAULT_BAYS;
+        const custList = custs0 && Array.isArray(custs0) && custs0.length ? custs0 : DEFAULT_CUSTOMERS;
+        const varList = varList0 && Array.isArray(varList0) && varList0.length ? varList0 : DEFAULT_VARIETIES;
+        const prodList = prods0 && Array.isArray(prods0) && prods0.length ? prods0 : DEFAULT_PRODUCTS;
+        const appList = apps0 && Array.isArray(apps0) ? apps0 : DEFAULT_APPLICATORS;
+        const seasonList = seasons0 && Array.isArray(seasons0) && seasons0.length ? seasons0 : DEFAULT_SEASONS;
+        // Re-seed anything that came back empty — fire-and-forget (saveJSON
+        // already catches its own errors), no reason to make the crew wait
+        // on a write when what they need is to just see their data.
+        if (!locs0) saveJSON(LOCATIONS_KEY, DEFAULT_LOCATIONS);
+        if (!blds0) saveJSON(BUILDINGS_KEY, DEFAULT_BUILDINGS);
+        if (!cfg) saveJSON(CONFIG_KEY, DEFAULT_BAYS);
+        if (!custs0) saveJSON(CUSTOMERS_KEY, DEFAULT_CUSTOMERS);
+        if (!varList0) saveJSON(VARIETIES_KEY, DEFAULT_VARIETIES);
+        if (!prods0) saveJSON(PRODUCTS_KEY, DEFAULT_PRODUCTS);
+        if (!apps0) saveJSON(APPLICATORS_KEY, DEFAULT_APPLICATORS);
+        if (!seasons0) saveJSON(SEASONS_KEY, DEFAULT_SEASONS);
+        if (cancelled) return;
+        setLocations(locList);
+        setBuildings(bldList);
+        setBays(bayList);
+        setInspections(insp);
+        setCustomers(custList);
+        setVarieties(varList);
+        setProducts(prodList);
+        setApplicators(appList);
+        setSeasons(seasonList);
+        const dataEntries = {};
+        await Promise.all(bayList.map(async (b) => {
+          dataEntries[b.id] = await loadJSON(bayDataKey(b.id), emptyBayData(b));
+        }));
+        if (cancelled) return;
+        setDataById(dataEntries);
+        const active = seasonList.find((s) => s.snapshot === null) || seasonList[seasonList.length - 1];
+        setSelectedSeasonId(active.id);
+        setLoaded(true);
+      } catch (err) {
+        console.error("Initial load failed:", err);
+        if (!cancelled) setLoadFailed(true);
       }
-      setDataById(dataEntries);
-      const insp = await loadJSON(INSPECTIONS_KEY, []);
-      setInspections(insp);
-      const custs = await loadJSON(CUSTOMERS_KEY, null);
-      const custList = custs && Array.isArray(custs) && custs.length ? custs : DEFAULT_CUSTOMERS;
-      if (!custs) await saveJSON(CUSTOMERS_KEY, DEFAULT_CUSTOMERS);
-      setCustomers(custList);
-      const varList0 = await loadJSON(VARIETIES_KEY, null);
-      const varList = varList0 && Array.isArray(varList0) && varList0.length ? varList0 : DEFAULT_VARIETIES;
-      if (!varList0) await saveJSON(VARIETIES_KEY, DEFAULT_VARIETIES);
-      setVarieties(varList);
-      const prods0 = await loadJSON(PRODUCTS_KEY, null);
-      const prodList = prods0 && Array.isArray(prods0) && prods0.length ? prods0 : DEFAULT_PRODUCTS;
-      if (!prods0) await saveJSON(PRODUCTS_KEY, DEFAULT_PRODUCTS);
-      setProducts(prodList);
-      const apps0 = await loadJSON(APPLICATORS_KEY, null);
-      const appList = apps0 && Array.isArray(apps0) ? apps0 : DEFAULT_APPLICATORS;
-      if (!apps0) await saveJSON(APPLICATORS_KEY, DEFAULT_APPLICATORS);
-      setApplicators(appList);
-      const seasons0 = await loadJSON(SEASONS_KEY, null);
-      const seasonList = seasons0 && Array.isArray(seasons0) && seasons0.length ? seasons0 : DEFAULT_SEASONS;
-      if (!seasons0) await saveJSON(SEASONS_KEY, DEFAULT_SEASONS);
-      setSeasons(seasonList);
-      const active = seasonList.find((s) => s.snapshot === null) || seasonList[seasonList.length - 1];
-      setSelectedSeasonId(active.id);
-      setLoaded(true);
     })();
+    return () => { cancelled = true; clearTimeout(slowTimer); };
   }, []);
   const activeSeason = useMemo(() => seasons.find((s) => s.snapshot === null) || seasons[seasons.length - 1], [seasons]);
   const isReadOnly = activeSeason ? selectedSeasonId !== activeSeason.id : false;
@@ -4168,8 +4199,29 @@ export default function PotatoStorage() {
   ];
   if (!loaded) {
     return (
-      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#0e1420", color: "#8790a3", fontFamily: "'JetBrains Mono', monospace" }}>
-        loading cellar data…
+      <div style={{
+        height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10,
+        background: "#0e1420", color: "#8790a3", fontFamily: "'JetBrains Mono', monospace", padding: 24, textAlign: "center",
+      }}>
+        <div>{loadFailed ? "Couldn't load your storage data." : "loading cellar data…"}</div>
+        {loadTakingAwhile && !loadFailed && (
+          <div style={{ fontSize: 12, color: "#6f7890", maxWidth: 340 }}>
+            Taking longer than usual — this can happen on a weak connection. Still trying, or you can reload.
+          </div>
+        )}
+        {loadFailed && (
+          <div style={{ fontSize: 12, color: "#6f7890", maxWidth: 340 }}>
+            Check your connection and try again.
+          </div>
+        )}
+        {(loadTakingAwhile || loadFailed) && (
+          <button onClick={() => window.location.reload()} style={{
+            border: "1px solid #2b3549", background: "transparent", color: "#c7cede", borderRadius: 6,
+            padding: "8px 16px", cursor: "pointer", fontSize: 12.5, fontWeight: 600, marginTop: 4,
+          }}>
+            Reload
+          </button>
+        )}
       </div>
     );
   }
