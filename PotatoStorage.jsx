@@ -1224,6 +1224,13 @@ function agworldTabStyle(active) {
     borderRadius: 6, padding: "5px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600,
   };
 }
+// Picks one or more Agworld fields to attach to a bay. Multi-select exists
+// specifically so two (or more) Agworld fields that are physically stored
+// together — e.g. "Power Plant Main" and "Power Plant Mini" sharing one pile
+// — can be combined into a single zone/pile instead of forcing a separate
+// pipe range and mound per Agworld field. Checking boxes doesn't apply
+// anything by itself; "Use N selected" hands the whole batch to onPick at
+// once so AddZoneForm can fold them into one combined field name.
 function AgworldFieldPicker({ onPick }) {
   const seasons = useAgworldSeasons();
   const [seasonId, setSeasonId] = useState("");
@@ -1232,7 +1239,16 @@ function AgworldFieldPicker({ onPick }) {
   }, [seasons]); // eslint-disable-line react-hooks/exhaustive-deps
   const fields = useAgworldFields(seasonId);
   const [search, setSearch] = useState("");
+  const [selectedIds, setSelectedIds] = useState([]);
+  useEffect(() => { setSelectedIds([]); }, [seasonId]);
   const filtered = (fields || []).filter((f) => !search || (f.name || "").toLowerCase().includes(search.toLowerCase()));
+  const toggle = (id) => setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const applySelection = () => {
+    const selected = (fields || []).filter((f) => selectedIds.includes(f.id));
+    if (!selected.length) return;
+    onPick(selected);
+    setSelectedIds([]);
+  };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1255,21 +1271,39 @@ function AgworldFieldPicker({ onPick }) {
             No potato fields synced from Agworld for this season. Try another season, or switch to "Enter manually" below.
           </div>
         ) : (
-          filtered.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => onPick(f)}
-              style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", borderBottom: "1px solid #1c2434", color: "#eef1f6", padding: "8px 10px", fontSize: 12.5, cursor: "pointer" }}
-            >
-              <div style={{ fontWeight: 600 }}>{f.name}</div>
-              <div style={{ color: "#8790a3", fontSize: 11 }}>
-                {f.farmName || "—"} · {f.varietyName || "variety unknown"} · {f.acres ? `${Math.round(f.acres)} ac` : "—"}
-              </div>
-            </button>
-          ))
+          filtered.map((f) => {
+            const checked = selectedIds.includes(f.id);
+            return (
+              <label
+                key={f.id}
+                style={{
+                  display: "flex", alignItems: "center", gap: 9, width: "100%", boxSizing: "border-box",
+                  background: checked ? "rgba(224,166,62,0.1)" : "transparent",
+                  borderBottom: "1px solid #1c2434", padding: "8px 10px", cursor: "pointer",
+                }}
+              >
+                <input type="checkbox" checked={checked} onChange={() => toggle(f.id)} style={{ marginTop: 2, flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontWeight: 600, color: "#eef1f6", fontSize: 12.5 }}>{f.name}</div>
+                  <div style={{ color: "#8790a3", fontSize: 11 }}>
+                    {f.farmName || "—"} · {f.varietyName || "variety unknown"} · {f.acres ? `${Math.round(f.acres)} ac` : "—"}
+                  </div>
+                </div>
+              </label>
+            );
+          })
         )}
       </div>
+      {selectedIds.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Button onClick={applySelection} style={{ fontSize: 12, padding: "6px 12px" }}>
+            {selectedIds.length > 1 ? `Combine ${selectedIds.length} fields into one pile` : "Use selected field"}
+          </Button>
+          <button type="button" onClick={() => setSelectedIds([])} style={{ background: "none", border: "none", color: "#8790a3", fontSize: 11.5, cursor: "pointer", textDecoration: "underline", padding: 0 }}>
+            clear selection
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1300,15 +1334,27 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
   const [actualCwt, setActualCwt] = useState("");
   const [error, setError] = useState("");
   const [fromAgworld, setFromAgworld] = useState(false);
+  // Set when the current name came from combining 2+ Agworld fields into one
+  // pile (e.g. "Power Plant Main + Power Plant Mini") — kept on the zone as
+  // `sourceFields` so it still traces back to the real Agworld field names
+  // instead of just being one opaque combined label.
+  const [sourceFields, setSourceFields] = useState([]);
   // A bay without its own total yet falls back to whatever's already
   // assigned to other fields — so validation still catches an obviously
   // out-of-range pipe number even before someone's entered the bay's total.
   const bayPipeBound = bay.pipeCount || bay.zones.reduce((s, z) => s + zonePipeCount(z), 0) || null;
   const takenPipes = pipeRangeSet(bay.zones.flatMap((z) => z.pipeRanges || []));
-  const applyAgworldField = (f) => {
-    setName(f.name || nextName);
-    if (f.varietyName) setVariety(f.varietyName);
+  // Accepts either one Agworld field (single pick) or several at once
+  // (combined pile) — either way it lands here as an array.
+  const applyAgworldField = (picked) => {
+    const list = Array.isArray(picked) ? picked : [picked];
+    if (!list.length) return;
+    const names = list.map((f) => f.name).filter(Boolean);
+    setName(names.join(" + ") || nextName);
+    const varietyMatch = list.find((f) => f.varietyName)?.varietyName;
+    if (varietyMatch) setVariety(varietyMatch);
     setFromAgworld(true);
+    setSourceFields(names.length > 1 ? names : []);
     setError("");
   };
   const submit = () => {
@@ -1334,10 +1380,11 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
       ...(topRange ? { topPipeRanges: [topRange] } : {}),
       ...(cwtPerPipe ? { cwtPerPipe: Number(cwtPerPipe) } : {}),
       ...(actualCwt !== "" ? { actualCwtOverride: Number(actualCwt) } : {}),
+      ...(sourceFields.length > 1 ? { sourceFields } : {}),
     });
     setName(nextName); setVariety(varieties[0] || ""); setCustomer("Unassigned");
     setPipeFrom(""); setPipeTo(""); setTopPipeFrom(""); setTopPipeTo("");
-    setCwtPerPipe(""); setActualCwt(""); setError(""); setFromAgworld(false);
+    setCwtPerPipe(""); setActualCwt(""); setError(""); setFromAgworld(false); setSourceFields([]);
   };
   const overlap = pipeFrom !== "" && pipeTo !== ""
     ? Array.from(pipeRangeSet([{ from: pipeFrom, to: pipeTo }])).filter((p) => takenPipes.has(p))
@@ -1351,7 +1398,7 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
       {source === "agworld" && <AgworldFieldPicker onPick={applyAgworldField} />}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
         <Field label="Field name">
-          <input value={name} onChange={(e) => { setName(e.target.value); setFromAgworld(false); }} style={{ ...inputStyle, width: 140 }} />
+          <input value={name} onChange={(e) => { setName(e.target.value); setFromAgworld(false); setSourceFields([]); }} style={{ ...inputStyle, width: 220 }} />
         </Field>
         <Field label="Variety">
           <select value={variety} onChange={(e) => setVariety(e.target.value)} style={{ ...inputStyle, width: 130 }}>
@@ -1392,7 +1439,13 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
       {overlap.length > 0 && (
         <div style={{ fontSize: 11, color: "#e0a63e" }}>Heads up: pipe {formatPipeRanges([{ from: Math.min(...overlap), to: Math.max(...overlap) }])} is already assigned to another field in this bay.</div>
       )}
-      {fromAgworld && <div style={{ fontSize: 11, color: "#8fd19e" }}>Loaded from Agworld — adjust anything above before adding.</div>}
+      {sourceFields.length > 1 ? (
+        <div style={{ fontSize: 11, color: "#8fd19e" }}>
+          Combining {sourceFields.length} Agworld fields into one pile: {sourceFields.join(", ")} — adjust anything above before adding.
+        </div>
+      ) : fromAgworld && (
+        <div style={{ fontSize: 11, color: "#8fd19e" }}>Loaded from Agworld — adjust anything above before adding.</div>
+      )}
       {error && <div style={{ width: "100%", fontSize: 12, color: "#e08787" }}>{error}</div>}
     </div>
   );
@@ -2053,7 +2106,9 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
               display: "inline-flex", alignItems: "center", gap: 6,
               opacity: matchesFilter ? 1 : 0.4,
             }}>
-              <button onClick={() => setZoneId(z.id)} style={{
+              <button onClick={() => setZoneId(z.id)}
+                title={z.sourceFields?.length ? `Combined from Agworld: ${z.sourceFields.join(", ")}` : undefined}
+                style={{
                 border: "none", background: "none", padding: 0, cursor: "pointer", fontWeight: 600, fontSize: 12.5,
                 color: z.id === zoneId ? "#f2c14e" : "#8790a3", display: "inline-flex", alignItems: "center", gap: 6,
               }}>
@@ -3385,6 +3440,30 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
   const [dims, setDims] = useState(["variety"]);
   const ledger = useMemo(() => buildLedger(bays, statsById, buildingsById, locationsById), [bays, statsById, buildingsById, locationsById]);
   const filteredLedger = useMemo(() => ledger.filter((row) => ledgerRowMatchesFilter(row, invFilter)), [ledger, invFilter]);
+  // "Search a field, pull up exactly what bay it's in" — a separate, quick
+  // find that sits alongside (but doesn't disturb) the filter/group-by
+  // controls below. Matches on field, bay, location, variety, or customer;
+  // one row per distinct field+bay+variety+customer combo it finds within
+  // whatever the filter bar above has already narrowed down to.
+  const [fieldSearch, setFieldSearch] = useState("");
+  const fieldSearchResults = useMemo(() => {
+    const term = fieldSearch.trim().toLowerCase();
+    if (!term) return null;
+    const byKey = new Map();
+    filteredLedger.forEach((row) => {
+      if (row.metric !== "In Storage" && row.metric !== "Capacity") return;
+      const haystack = `${row.field} ${row.bay} ${row.location} ${row.variety} ${row.customer}`.toLowerCase();
+      if (!haystack.includes(term)) return;
+      const key = `${row.location}·${row.bay}·${row.field}·${row.variety}·${row.customer}`;
+      if (!byKey.has(key)) {
+        byKey.set(key, { location: row.location, bay: row.bay, field: row.field, variety: row.variety, customer: row.customer, inStorage: 0, capacity: 0 });
+      }
+      const r = byKey.get(key);
+      if (row.metric === "In Storage") r.inStorage += row.cwt;
+      if (row.metric === "Capacity") r.capacity += row.cwt;
+    });
+    return Array.from(byKey.values()).sort((a, b) => naturalCompare(a.field, b.field));
+  }, [fieldSearch, filteredLedger]);
   const toggleDim = (key) => setDims((d) => (d.includes(key) ? d.filter((k) => k !== key) : [...d, key]));
   const grouped = useMemo(() => {
     const map = new Map();
@@ -3409,6 +3488,48 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
       {onFilterChange && (
         <InventoryFilterBar bays={bays} buildingsById={buildingsById} locationsById={locationsById}
           filter={invFilter} onChange={onFilterChange} dims={["variety", "customer", "location", "bay", "field"]} />
+      )}
+      <div>
+        <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 8, letterSpacing: 0.3 }}>SEARCH A FIELD</div>
+        <input
+          value={fieldSearch}
+          onChange={(e) => setFieldSearch(e.target.value)}
+          placeholder="type a field, bay, variety, or customer…"
+          style={{ ...inputStyle, width: 300 }}
+        />
+      </div>
+      {fieldSearchResults && (
+        <div style={{ overflowX: "auto", border: "1px solid #232d40", borderRadius: 10 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: "#141b28", textAlign: "left" }}>
+                <th style={thStyle}>Field</th>
+                <th style={thStyle}>Bay</th>
+                <th style={thStyle}>Location</th>
+                <th style={thStyle}>Variety</th>
+                <th style={thStyle}>Customer</th>
+                <th style={thStyle}>In Storage (cwt)</th>
+                <th style={thStyle}>Fill %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fieldSearchResults.map((r, i) => (
+                <tr key={i} style={{ borderTop: "1px solid #232d40" }}>
+                  <td style={{ ...tdStyle, fontWeight: 700, color: "#eef1f6" }}>{r.field}</td>
+                  <td style={tdStyle}>{r.bay}</td>
+                  <td style={tdStyle}>{r.location}</td>
+                  <td style={tdStyle}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><ColorDot color={getVarietyColor(r.variety)} /> {r.variety}</span></td>
+                  <td style={tdStyle}><span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><ColorDot color={getCustomerColor(r.customer)} /> {r.customer}</span></td>
+                  <td style={{ ...tdStyle, color: "#f2c14e" }}>{fmt(r.inStorage)}</td>
+                  <td style={tdStyle}>{r.capacity ? Math.round((r.inStorage / r.capacity) * 100) : 0}%</td>
+                </tr>
+              ))}
+              {fieldSearchResults.length === 0 && (
+                <tr><td colSpan={7} style={{ ...tdStyle, color: "#5b6478" }}>No fields match "{fieldSearch}".</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       )}
       <div>
         <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 8, letterSpacing: 0.3 }}>GROUP BY (toggle any combination)</div>
