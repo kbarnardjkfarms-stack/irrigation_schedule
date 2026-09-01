@@ -73,6 +73,70 @@ function allCustomers(bays) {
   return Array.from(set.entries()).sort((a, b) => naturalCompare(a[0], b[0]));
 }
 /* ---------------------------------------------------------------
+   Shared inventory filter — variety / customer / location / bay /
+   field, usable across every inventory-viewing screen (yard, bay
+   detail, summary). Deliberately NOT wired into Temperature or
+   Sprout Nip — those are logging tools, not inventory views. Each
+   dimension is a list of selected values; empty = no restriction on
+   that dimension. Selections OR together within a dimension ("Gala"
+   or "Burbank") and AND across dimensions ("Gala" AND "Simplot").
+----------------------------------------------------------------*/
+const EMPTY_INV_FILTER = { variety: [], customer: [], location: [], bay: [], field: [] };
+function isFilterActive(filter) {
+  return !!filter && (filter.variety.length || filter.customer.length || filter.location.length || filter.bay.length || filter.field.length);
+}
+function zoneLocationName(bay, buildingsById, locationsById) {
+  const building = buildingsById?.[bay.buildingId];
+  return (building && locationsById?.[building.locationId]?.name) || "Unknown";
+}
+function zoneMatchesFilter(zone, bay, buildingsById, locationsById, filter) {
+  if (!isFilterActive(filter)) return true;
+  if (filter.variety.length && !filter.variety.includes(zone.variety)) return false;
+  if (filter.customer.length && !filter.customer.includes(zone.customer)) return false;
+  if (filter.field.length && !filter.field.includes(zone.name)) return false;
+  if (filter.bay.length && !filter.bay.includes(bay.name)) return false;
+  if (filter.location.length && !filter.location.includes(zoneLocationName(bay, buildingsById, locationsById))) return false;
+  return true;
+}
+// A bay with no fields yet has nothing for variety/customer/field to match
+// against, so it only counts as a match when those dimensions aren't in play.
+function bayMatchesFilter(bay, buildingsById, locationsById, filter) {
+  if (!isFilterActive(filter)) return true;
+  if (filter.bay.length && !filter.bay.includes(bay.name)) return false;
+  if (filter.location.length && !filter.location.includes(zoneLocationName(bay, buildingsById, locationsById))) return false;
+  if (bay.zones.length === 0) return !(filter.variety.length || filter.customer.length || filter.field.length);
+  return bay.zones.some((z) => zoneMatchesFilter(z, bay, buildingsById, locationsById, filter));
+}
+function ledgerRowMatchesFilter(row, filter) {
+  if (!isFilterActive(filter)) return true;
+  if (filter.variety.length && !filter.variety.includes(row.variety)) return false;
+  if (filter.customer.length && !filter.customer.includes(row.customer)) return false;
+  if (filter.field.length && !filter.field.includes(row.field)) return false;
+  if (filter.bay.length && !filter.bay.includes(row.bay)) return false;
+  if (filter.location.length && !filter.location.includes(row.location)) return false;
+  return true;
+}
+const FILTER_DIM_META = {
+  variety: { label: "Variety", colorFor: getVarietyColor },
+  customer: { label: "Customer", colorFor: getCustomerColor },
+  location: { label: "Location", colorFor: null },
+  bay: { label: "Bay", colorFor: null },
+  field: { label: "Field", colorFor: null },
+};
+function optionsForFilterDim(bays, buildingsById, locationsById, dimKey) {
+  const set = new Set();
+  bays.forEach((bay) => {
+    if (dimKey === "location") { set.add(zoneLocationName(bay, buildingsById, locationsById)); return; }
+    if (dimKey === "bay") { set.add(bay.name); return; }
+    bay.zones.forEach((z) => {
+      if (dimKey === "variety") set.add(z.variety);
+      if (dimKey === "customer") set.add(z.customer);
+      if (dimKey === "field") set.add(z.name);
+    });
+  });
+  return sortByNatural(Array.from(set));
+}
+/* ---------------------------------------------------------------
    Site hierarchy: Location (complex) > Building > Bay > Zone (field)
 ----------------------------------------------------------------*/
 const DEFAULT_LOCATIONS = [
@@ -528,7 +592,7 @@ function buildPipeSlotOwnership(bay, zoneStatsById, totalPipes) {
   });
   return { owner, full };
 }
-function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
+function applyZoneFill(bayMesh, bay, zoneStatsById, maxH, filterCtx) {
   const { pileGroup, dividerGroup, stripGroup, totalPipes, pipeWidth, zStart, innerW } = bayMesh;
   const { owner, full } = buildPipeSlotOwnership(bay, zoneStatsById, totalPipes);
   // The building shell (maxH) always renders at the same eave height — a 9'
@@ -586,7 +650,15 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
       segTopDepth = segDepth * PILE_TAPER;
       topOffsetZ = 0;
     }
-    const mat = new THREE.MeshStandardMaterial({ color: getVarietyColor(zone.variety), roughness: 0.95, side: THREE.DoubleSide });
+    // Inventory filter (variety/customer/location/bay/field) — non-matching
+    // fields stay in place (so the yard's layout doesn't jump around) but
+    // fade to a translucent ghost of themselves rather than disappearing,
+    // so "show me Gala" reads as a highlight, not a puzzle about what moved.
+    const matchesFilter = !filterCtx || zoneMatchesFilter(zone, bay, filterCtx.buildingsById, filterCtx.locationsById, filterCtx.invFilter);
+    const mat = new THREE.MeshStandardMaterial({
+      color: getVarietyColor(zone.variety), roughness: 0.95, side: THREE.DoubleSide,
+      transparent: !matchesFilter, opacity: matchesFilter ? 1 : 0.16,
+    });
     const pile = new THREE.Mesh(buildPileFrustumGeometry(innerW, topWidth, segDepth, segTopDepth, topOffsetZ), mat);
     pile.scale.set(1, pileH, 1);
     pile.position.set(0, 0, segCenterZ);
@@ -599,7 +671,10 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
     // without it, the cap stayed centered on the base footprint even when
     // an off-center top pipe range pulled the pile's actual top face to one
     // side, so the cap visibly floated off the real top of the mound.
-    const capMat = new THREE.MeshStandardMaterial({ color: getCustomerColor(zone.customer), roughness: 0.6, metalness: 0.1 });
+    const capMat = new THREE.MeshStandardMaterial({
+      color: getCustomerColor(zone.customer), roughness: 0.6, metalness: 0.1,
+      transparent: !matchesFilter, opacity: matchesFilter ? 1 : 0.16,
+    });
     const cap = new THREE.Mesh(new THREE.BoxGeometry(topWidth * 0.94, 0.28, segTopDepth * 0.9), capMat);
     cap.position.set(0, pileH + 0.14, segCenterZ + topOffsetZ);
     cap.castShadow = true;
@@ -631,7 +706,7 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH) {
 /* ---------------------------------------------------------------
    Generic orbiting 3D canvas (used for both yard + interior modes)
 ----------------------------------------------------------------*/
-function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildingsById = {} }) {
+function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildingsById = {}, locationsById = {}, invFilter }) {
   const mountRef = useRef(null);
   const stateRef = useRef({});
   const [labels, setLabels] = useState([]);
@@ -848,10 +923,10 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       const m = bm[bay.id];
       if (!m) return;
       const bayStats = statsById[bay.id];
-      if (bayStats) applyZoneFill(m, bay, bayStats.zoneStats, m.maxH);
+      if (bayStats) applyZoneFill(m, bay, bayStats.zoneStats, m.maxH, invFilter ? { invFilter, buildingsById, locationsById } : null);
       if (m.ring) m.ring.visible = mode === "yard" && bay.id === selectedId;
     });
-  }, [bays, statsById, selectedId, mode]);
+  }, [bays, statsById, selectedId, mode, invFilter, buildingsById, locationsById]);
   return (
     <div ref={mountRef} style={{ position: "relative", width: "100%", height: "100%", cursor: "grab" }}>
       {labels.map((l) => {
@@ -1379,6 +1454,81 @@ function Legend({ bays }) {
     </div>
   );
 }
+// Shared filter bar for the inventory-viewing screens (yard, bay detail,
+// summary). `dims` controls which of the 5 dimensions this screen offers —
+// e.g. yard/detail skip "location" since they're already scoped to one site
+// via the SITE selector up top, so a second location control there would
+// just be confusing. Renders a row of toggle chips; clicking one opens a
+// checkbox list of every value currently present in `bays` for that
+// dimension. Selections live in the parent (`filter`/`onChange`) so the
+// same filter state can follow the user across tabs.
+function InventoryFilterBar({ bays, buildingsById, locationsById, filter, onChange, dims }) {
+  const [openDim, setOpenDim] = useState(null);
+  const activeCount = filter.variety.length + filter.customer.length + filter.location.length + filter.bay.length + filter.field.length;
+  const toggleValue = (dimKey, value) => {
+    onChange((prev) => {
+      const cur = prev[dimKey];
+      const next = cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value];
+      return { ...prev, [dimKey]: next };
+    });
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 11, color: "#6f7890", letterSpacing: 0.4, display: "flex", alignItems: "center", gap: 4 }}>FILTER</span>
+      {dims.map((dimKey) => {
+        const meta = FILTER_DIM_META[dimKey];
+        const options = optionsForFilterDim(bays, buildingsById, locationsById, dimKey);
+        const selected = filter[dimKey];
+        const isOpen = openDim === dimKey;
+        return (
+          <div key={dimKey} style={{ position: "relative" }}>
+            <button
+              onClick={() => setOpenDim(isOpen ? null : dimKey)}
+              style={{
+                border: `1px solid ${selected.length ? "#e0a63e" : "#232d40"}`,
+                background: selected.length ? "rgba(224,166,62,0.14)" : "transparent",
+                color: selected.length ? "#f2c14e" : "#8790a3",
+                borderRadius: 20, padding: "6px 12px", fontSize: 12.5, cursor: "pointer", fontWeight: 600,
+                display: "flex", alignItems: "center", gap: 6,
+              }}
+            >
+              {meta.label}{selected.length ? ` (${selected.length})` : ""}
+              <ChevronRight size={11} style={{ transform: isOpen ? "rotate(90deg)" : "rotate(0deg)" }} />
+            </button>
+            {isOpen && (
+              <>
+                <div onClick={() => setOpenDim(null)} style={{ position: "fixed", inset: 0, zIndex: 19 }} />
+                <div style={{
+                  position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 20, minWidth: 190, maxHeight: 260, overflowY: "auto",
+                  background: "#141b28", border: "1px solid #2b3549", borderRadius: 8, padding: 8, boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+                }}>
+                  {options.length === 0 && <div style={{ color: "#5b6478", fontSize: 12, padding: 6 }}>Nothing here yet.</div>}
+                  {options.map((opt) => (
+                    <label key={opt} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 6px", fontSize: 12.5, color: "#c7cede", cursor: "pointer", borderRadius: 5 }}>
+                      <input type="checkbox" checked={selected.includes(opt)} onChange={() => toggleValue(dimKey, opt)} />
+                      {meta.colorFor && <ColorDot color={meta.colorFor(opt)} size={7} />}
+                      {opt}
+                    </label>
+                  ))}
+                  {selected.length > 0 && (
+                    <button onClick={() => onChange((prev) => ({ ...prev, [dimKey]: [] }))} style={{ marginTop: 4, background: "none", border: "none", color: "#8790a3", fontSize: 11.5, cursor: "pointer", textDecoration: "underline", padding: "2px 6px" }}>
+                      Clear {meta.label.toLowerCase()}
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })}
+      {activeCount > 0 && (
+        <button onClick={() => onChange(EMPTY_INV_FILTER)} style={{ background: "none", border: "none", color: "#e08787", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
+          Clear all
+        </button>
+      )}
+    </div>
+  );
+}
 function Button({ children, onClick, variant = "primary", style, disabled }) {
   const base = { border: "none", borderRadius: 6, padding: "8px 14px", fontSize: 13, fontWeight: 600, cursor: disabled ? "default" : "pointer", display: "inline-flex", alignItems: "center", gap: 6, opacity: disabled ? 0.5 : 1 };
   const variants = {
@@ -1766,7 +1916,7 @@ function LiveStat({ label, value, sub }) {
 /* ---------------------------------------------------------------
    Bay detail panel (per-zone pipe checks + cwt runs) + interior 3D
 ----------------------------------------------------------------*/
-function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipeCheck, onAddCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay, onUpdateZoneMeta, onEmptyBay, onDeleteZone }) {
+function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipeCheck, onAddCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay, onUpdateZoneMeta, onEmptyBay, onDeleteZone, invFilter = EMPTY_INV_FILTER, buildingsById, locationsById }) {
   const [zoneId, setZoneId] = useState(bay.zones[0]?.id ?? null);
   useEffect(() => { setZoneId(bay.zones[0]?.id ?? null); }, [bay.id]);
   const [showAddZone, setShowAddZone] = useState(false);
@@ -1885,19 +2035,23 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
           <Layers size={13} /> INTERIOR VIEW — FIELD DIVISION
         </div>
         <div style={{ position: "relative", height: 300, background: "#0e1420", border: "1px solid #232d40", borderRadius: 10, overflow: "hidden" }}>
-          <Scene3D bays={[bay]} statsById={{ [bay.id]: stats }} mode="interior" onSelect={() => {}} />
+          <Scene3D bays={[bay]} statsById={{ [bay.id]: stats }} mode="interior" onSelect={() => {}}
+            invFilter={invFilter} buildingsById={buildingsById} locationsById={locationsById} />
           <EquipmentStatusPanel bay={bay} />
         </div>
         <div style={{ marginTop: 8 }}><Legend bays={[bay]} /></div>
       </div>
       {bay.zones.length > 0 && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          {bay.zones.map((z) => (
+          {bay.zones.map((z) => {
+            const matchesFilter = isFilterActive(invFilter) ? zoneMatchesFilter(z, bay, buildingsById, locationsById, invFilter) : true;
+            return (
             <div key={z.id} style={{
               border: `1px solid ${z.id === zoneId ? "#e0a63e" : "#232d40"}`,
               background: z.id === zoneId ? "rgba(224,166,62,0.12)" : "transparent",
               borderRadius: 20, padding: "6px 8px 6px 14px", fontSize: 12.5, fontWeight: 600,
               display: "inline-flex", alignItems: "center", gap: 6,
+              opacity: matchesFilter ? 1 : 0.4,
             }}>
               <button onClick={() => setZoneId(z.id)} style={{
                 border: "none", background: "none", padding: 0, cursor: "pointer", fontWeight: 600, fontSize: 12.5,
@@ -1920,7 +2074,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
                 </button>
               )}
             </div>
-          ))}
+          );})}
           {!readOnly && (
             <Button variant="ghost" onClick={() => setShowAddZone((v) => !v)}>
               <Plus size={13} /> {showAddZone ? "Cancel" : "Add product"}
@@ -3225,14 +3379,16 @@ const DIM_OPTIONS = [
   { key: "customer", label: "Customer" },
   { key: "location", label: "Location" },
   { key: "bay", label: "Bay" },
+  { key: "field", label: "Field" },
 ];
-function SummaryTab({ bays, statsById, buildingsById, locationsById }) {
+function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter = EMPTY_INV_FILTER, onFilterChange }) {
   const [dims, setDims] = useState(["variety"]);
   const ledger = useMemo(() => buildLedger(bays, statsById, buildingsById, locationsById), [bays, statsById, buildingsById, locationsById]);
+  const filteredLedger = useMemo(() => ledger.filter((row) => ledgerRowMatchesFilter(row, invFilter)), [ledger, invFilter]);
   const toggleDim = (key) => setDims((d) => (d.includes(key) ? d.filter((k) => k !== key) : [...d, key]));
   const grouped = useMemo(() => {
     const map = new Map();
-    ledger.forEach((row) => {
+    filteredLedger.forEach((row) => {
       const keyParts = dims.length ? dims.map((d) => row[d]) : ["All"];
       const key = keyParts.join(" · ");
       if (!map.has(key)) map.set(key, { key, labelParts: keyParts, capacity: 0, inStorage: 0, shipped: 0, shrink: 0 });
@@ -3243,13 +3399,17 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById }) {
       if (row.metric === "Shrink") g.shrink += row.cwt;
     });
     return Array.from(map.values()).sort((a, b) => b.capacity - a.capacity);
-  }, [ledger, dims]);
+  }, [filteredLedger, dims]);
   const totals = grouped.reduce((acc, g) => ({
     capacity: acc.capacity + g.capacity, inStorage: acc.inStorage + g.inStorage,
     shipped: acc.shipped + g.shipped, shrink: acc.shrink + g.shrink,
   }), { capacity: 0, inStorage: 0, shipped: 0, shrink: 0 });
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {onFilterChange && (
+        <InventoryFilterBar bays={bays} buildingsById={buildingsById} locationsById={locationsById}
+          filter={invFilter} onChange={onFilterChange} dims={["variety", "customer", "location", "bay", "field"]} />
+      )}
       <div>
         <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 8, letterSpacing: 0.3 }}>GROUP BY (toggle any combination)</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -3319,10 +3479,19 @@ const tdStyle = { padding: "9px 12px", color: "#c7cede" };
 /* ---------------------------------------------------------------
    Overview cards (yard tab footer)
 ----------------------------------------------------------------*/
-function OverviewCards({ bays, statsById, onSelect }) {
+function OverviewCards({ bays, statsById, onSelect, invFilter = EMPTY_INV_FILTER, buildingsById, locationsById }) {
+  const filterActive = isFilterActive(invFilter);
+  // Bays with no field at all matching the filter drop out of the grid
+  // entirely (nothing here to look at); a bay that's kept can still have
+  // individual fields inside it that don't match — those fade instead of
+  // vanishing, so the bay's overall fill picture stays intact.
+  const visibleBays = filterActive ? bays.filter((b) => bayMatchesFilter(b, buildingsById, locationsById, invFilter)) : bays;
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
-      {bays.map((b) => {
+      {visibleBays.length === 0 && (
+        <div style={{ gridColumn: "1 / -1", color: "#5b6478", fontSize: 13, padding: "8px 2px" }}>No fields match the current filter.</div>
+      )}
+      {visibleBays.map((b) => {
         const s = statsById[b.id] || {};
         return (
           <div key={b.id} onClick={() => onSelect(b.id)} style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 14, cursor: "pointer" }}>
@@ -3331,20 +3500,25 @@ function OverviewCards({ bays, statsById, onSelect }) {
               <ChevronRight size={15} color="#5b6478" />
             </div>
             <div style={{ fontSize: 11.5, color: "#8790a3", marginBottom: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {b.zones.map((z) => (
-                <span key={z.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                  <ColorDot color={getVarietyColor(z.variety)} size={7} /><ColorDot color={getCustomerColor(z.customer)} size={7} /> {z.variety}
-                </span>
-              ))}
+              {b.zones.map((z) => {
+                const matches = !filterActive || zoneMatchesFilter(z, b, buildingsById, locationsById, invFilter);
+                return (
+                  <span key={z.id} style={{ display: "flex", alignItems: "center", gap: 4, opacity: matches ? 1 : 0.32 }}>
+                    <ColorDot color={getVarietyColor(z.variety)} size={7} /><ColorDot color={getCustomerColor(z.customer)} size={7} /> {z.variety}
+                  </span>
+                );
+              })}
             </div>
             <div style={{ height: 8, background: "#0e1420", borderRadius: 4, overflow: "hidden", display: "flex" }}>
               {b.zones.map((z) => {
                 const zs = (s.zoneStats || {})[z.id];
                 const pct = s.capacityCwt ? ((zs?.currentCwt || 0) / s.capacityCwt) * 100 : 0;
+                const matches = !filterActive || zoneMatchesFilter(z, b, buildingsById, locationsById, invFilter);
                 return (
                   <div key={z.id} style={{
                     width: `${pct}%`, height: "100%", background: getVarietyColor(z.variety),
                     borderBottom: `2px solid ${getCustomerColor(z.customer)}`, boxSizing: "border-box",
+                    opacity: matches ? 1 : 0.32,
                   }} />
                 );
               })}
@@ -3379,6 +3553,10 @@ export default function PotatoStorage() {
   const [selectedLocationId, setSelectedLocationId] = useState(DEFAULT_LOCATIONS[0].id);
   const [selectedId, setSelectedId] = useState(DEFAULT_BAYS[0].id);
   const [showNewSeason, setShowNewSeason] = useState(false);
+  // Shared across yard/detail/summary — deliberately not reset on tab or
+  // site switches, so "show me Gala" stays in effect while you move around
+  // looking for it.
+  const [invFilter, setInvFilter] = useState(EMPTY_INV_FILTER);
   useEffect(() => {
     (async () => {
       const locs0 = await loadJSON(LOCATIONS_KEY, null);
@@ -3907,13 +4085,19 @@ export default function PotatoStorage() {
               <EmptySiteNotice onManage={() => setTab("manage")} />
             ) : (
               <>
+                <div style={{ padding: "12px 16px 0" }}>
+                  <InventoryFilterBar bays={locationBays} buildingsById={buildingsById} locationsById={locationsById}
+                    filter={invFilter} onChange={setInvFilter} dims={["variety", "customer", "bay", "field"]} />
+                </div>
                 <div style={{ flex: 1, minHeight: 380 }}>
                   <Scene3D key={selectedLocationId} bays={locationBays} statsById={statsById} selectedId={selectedId} mode="yard" buildingsById={buildingsById}
+                    locationsById={locationsById} invFilter={invFilter}
                     onSelect={(id) => { setSelectedId(id); setTab("detail"); }} />
                 </div>
                 <div style={{ padding: 16, borderTop: "1px solid #232d40", display: "flex", flexDirection: "column", gap: 14 }}>
                   <Legend bays={locationBays} />
-                  <OverviewCards bays={locationBays} statsById={statsById} onSelect={(id) => { setSelectedId(id); setTab("detail"); }} />
+                  <OverviewCards bays={locationBays} statsById={statsById} invFilter={invFilter} buildingsById={buildingsById} locationsById={locationsById}
+                    onSelect={(id) => { setSelectedId(id); setTab("detail"); }} />
                 </div>
               </>
             )}
@@ -3931,27 +4115,36 @@ export default function PotatoStorage() {
               <EmptySiteNotice onManage={() => setTab("manage")} />
             ) : selectedBay && (
               <>
+                <div style={{ marginBottom: 14 }}>
+                  <InventoryFilterBar bays={locationBays} buildingsById={buildingsById} locationsById={locationsById}
+                    filter={invFilter} onChange={setInvFilter} dims={["variety", "customer", "bay", "field"]} />
+                </div>
                 <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-                  {locationBays.map((b) => (
+                  {locationBays.map((b) => {
+                    const matchesFilter = isFilterActive(invFilter) ? bayMatchesFilter(b, buildingsById, locationsById, invFilter) : true;
+                    return (
                     <button key={b.id} onClick={() => setSelectedId(b.id)} style={{
                       border: `1px solid ${b.id === selectedId ? "#e0a63e" : "#232d40"}`,
                       background: b.id === selectedId ? "rgba(224,166,62,0.12)" : "transparent",
                       color: b.id === selectedId ? "#f2c14e" : "#8790a3",
                       borderRadius: 20, padding: "5px 12px", fontSize: 12.5, cursor: "pointer", fontWeight: 600,
+                      opacity: matchesFilter ? 1 : 0.35,
                     }}>{b.name}</button>
-                  ))}
+                  );})}
                 </div>
                 <BayDetail bay={selectedBay} data={displayDataById[selectedBay.id] || emptyBayData(selectedBay)} stats={statsById[selectedBay.id]}
                   customers={sortedCustomers} varieties={sortedVarieties} readOnly={isReadOnly} onAddPipeCheck={onAddPipeCheck} onAddCwtRun={onAddCwtRun}
                   onUpdateZoneCustomer={onUpdateZoneCustomer} onUpdateZoneVariety={onUpdateZoneVariety} onAddZoneToBay={onAddZoneToBay}
-                  onUpdateZoneMeta={onUpdateZoneMeta} onEmptyBay={onEmptyBay} onDeleteZone={onDeleteZone} />
+                  onUpdateZoneMeta={onUpdateZoneMeta} onEmptyBay={onEmptyBay} onDeleteZone={onDeleteZone}
+                  invFilter={invFilter} buildingsById={buildingsById} locationsById={locationsById} />
               </>
             )}
           </div>
         )}
         {tab === "summary" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-            <SummaryTab bays={displayBays} statsById={statsById} buildingsById={buildingsById} locationsById={locationsById} />
+            <SummaryTab bays={displayBays} statsById={statsById} buildingsById={buildingsById} locationsById={locationsById}
+              invFilter={invFilter} onFilterChange={setInvFilter} />
           </div>
         )}
         {tab === "manage" && (
