@@ -2087,7 +2087,12 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
         <div>
           <h2 style={{ margin: 0, fontSize: 22, color: "#eef1f6" }}>{bay.name}</h2>
           <div style={{ color: "#8790a3", fontSize: 12.5, marginTop: 3 }}>
-            Filled {bay.fillDate} · {bay.zones.length} field{bay.zones.length !== 1 ? "s" : ""} · {bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0)} pipes total · {bay.pileHeight || 18}' pile
+            Filled {bay.fillDate}{bay.emptyDate ? ` · Emptied ${bay.emptyDate}` : ""}
+            {bay.fillDate && (() => {
+              const days = daysSince(bay.fillDate, bay.emptyDate || todayStr());
+              return days != null ? ` · ${days} day${days === 1 ? "" : "s"}${bay.emptyDate ? " in storage" : " in storage so far"}` : "";
+            })()}
+            {" · "}{bay.zones.length} field{bay.zones.length !== 1 ? "s" : ""} · {bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0)} pipes total · {bay.pileHeight || 18}' pile
           </div>
         </div>
         {!readOnly && bay.zones.length > 0 && (
@@ -2196,6 +2201,17 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
                 placeholder={fmt(zs.calculatedCwt)}
                 onSave={(v) => onUpdateZoneMeta(bay.id, zone.id, { actualCwtOverride: v })}
               />
+            </div>
+            <div>
+              <div style={{ fontSize: 10.5, letterSpacing: 1, textTransform: "uppercase", color: "#8790a3" }}>Initial fill cwt</div>
+              <EditableInline
+                value={zone.initialFillCwt ?? ""} type="number" disabled={readOnly} width={110}
+                placeholder={fmt(zs.capacityCwt)}
+                onSave={(v) => onUpdateZoneMeta(bay.id, zone.id, { initialFillCwt: v })}
+              />
+              <div style={{ fontSize: 10, color: "#5b6478", marginTop: 3, maxWidth: 140 }}>
+                Shrink is measured against this — set it once at fill time, otherwise it defaults to full bin capacity.
+              </div>
             </div>
             <div>
               <div style={{ fontSize: 10.5, letterSpacing: 1, textTransform: "uppercase", color: "#8790a3" }}>Variety</div>
@@ -3017,6 +3033,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   }, [bayLocationId, buildings]);
   const [bayName, setBayName] = useState("");
   const [bayFillDate, setBayFillDate] = useState(todayStr());
+  const [bayEmptyDate, setBayEmptyDate] = useState("");
   const [bayPipeCount, setBayPipeCount] = useState("");
   const [bayCwtPerPipe, setBayCwtPerPipe] = useState("");
   const [bayPileHeight, setBayPileHeight] = useState(18);
@@ -3067,7 +3084,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
       };
     });
     onAddBay({
-      id: bayId, name: trimmed, buildingId: bayBuildingId, fillDate: bayFillDate,
+      id: bayId, name: trimmed, buildingId: bayBuildingId, fillDate: bayFillDate, emptyDate: bayEmptyDate || null,
       pipeCount: bayPipeBound ?? (zoneRowPipeSum || null),
       cwtPerPipe: bayCwtPerPipe !== "" ? Number(bayCwtPerPipe) : 2500,
       pileHeight: bayPileHeight,
@@ -3143,6 +3160,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
           </Field>
           <Field label="Bay name"><input value={bayName} onChange={(e) => setBayName(e.target.value)} style={inputStyle} placeholder="e.g. Hidden Valley #1" /></Field>
           <Field label="Fill date"><input type="date" value={bayFillDate} onChange={(e) => setBayFillDate(e.target.value)} style={inputStyle} /></Field>
+          <Field label="Empty date (optional)"><input type="date" value={bayEmptyDate} onChange={(e) => setBayEmptyDate(e.target.value)} style={inputStyle} /></Field>
           <Field label="Total pipe in this bay">
             <input type="number" min="1" value={bayPipeCount} onChange={(e) => setBayPipeCount(e.target.value)} style={{ ...inputStyle, width: 110 }} placeholder={zoneRowPipeSum ? String(zoneRowPipeSum) : "e.g. 40"} />
           </Field>
@@ -3336,6 +3354,8 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
         <EditableInline value={bay.name} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { name: v })} width={140} />
         <span style={{ fontSize: 11, color: "#6f7890" }}>filled</span>
         <EditableInline value={bay.fillDate} type="date" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { fillDate: v })} width={140} />
+        <span style={{ fontSize: 11, color: "#6f7890" }}>emptied</span>
+        <EditableInline value={bay.emptyDate || ""} type="date" disabled={readOnly} placeholder="still active" onSave={(v) => onUpdateBayMeta(bay.id, { emptyDate: v })} width={140} />
         <span style={{ fontSize: 11, color: "#6f7890" }}>total pipe</span>
         <EditableInline value={bay.pipeCount ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { pipeCount: v })} width={70} placeholder="—" />
         <span style={{ fontSize: 11, color: "#6f7890" }}>cwt/pipe at 18' (bay default)</span>
@@ -4058,7 +4078,7 @@ export default function PotatoStorage() {
   const onEmptyBay = useCallback((bayId) => {
     if (isReadOnly) return;
     setBays((prev) => {
-      const next = prev.map((b) => b.id === bayId ? { ...b, zones: [], fillDate: "" } : b);
+      const next = prev.map((b) => b.id === bayId ? { ...b, zones: [], fillDate: "", emptyDate: "" } : b);
       saveJSON(CONFIG_KEY, next);
       return next;
     });
@@ -4072,7 +4092,7 @@ export default function PotatoStorage() {
   const onEmptyAllBays = useCallback(() => {
     if (isReadOnly) return;
     setBays((prev) => {
-      const next = prev.map((b) => ({ ...b, zones: [], fillDate: "" }));
+      const next = prev.map((b) => ({ ...b, zones: [], fillDate: "", emptyDate: "" }));
       saveJSON(CONFIG_KEY, next);
       return next;
     });
