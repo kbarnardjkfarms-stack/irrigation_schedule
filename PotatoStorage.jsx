@@ -2006,7 +2006,7 @@ function LiveStat({ label, value, sub }) {
 /* ---------------------------------------------------------------
    Bay detail panel (per-zone pipe checks + cwt runs) + interior 3D
 ----------------------------------------------------------------*/
-function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipeCheck, onAddCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay, onUpdateZoneMeta, onEmptyBay, onDeleteZone, invFilter = EMPTY_INV_FILTER, buildingsById, locationsById }) {
+function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipeCheck, onAddCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay, onUpdateZoneMeta, onUpdateBayMeta, onEmptyBay, onDeleteZone, invFilter = EMPTY_INV_FILTER, buildingsById, locationsById }) {
   const [zoneId, setZoneId] = useState(bay.zones[0]?.id ?? null);
   useEffect(() => { setZoneId(bay.zones[0]?.id ?? null); }, [bay.id]);
   const [showAddZone, setShowAddZone] = useState(false);
@@ -2086,13 +2086,23 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 22, color: "#eef1f6" }}>{bay.name}</h2>
-          <div style={{ color: "#8790a3", fontSize: 12.5, marginTop: 3 }}>
-            Filled {bay.fillDate}{bay.emptyDate ? ` · Emptied ${bay.emptyDate}` : ""}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+            <span style={{ fontSize: 11, color: "#8790a3" }}>Filled</span>
+            <EditableInline value={bay.fillDate} type="date" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { fillDate: v })} width={130} />
+            <span style={{ fontSize: 11, color: "#8790a3" }}>Emptied</span>
+            <EditableInline value={bay.emptyDate || ""} type="date" disabled={readOnly} placeholder="still active" onSave={(v) => onUpdateBayMeta(bay.id, { emptyDate: v })} width={130} />
             {bay.fillDate && (() => {
               const days = daysSince(bay.fillDate, bay.emptyDate || todayStr());
-              return days != null ? ` · ${days} day${days === 1 ? "" : "s"}${bay.emptyDate ? " in storage" : " in storage so far"}` : "";
+              if (days == null) return null;
+              return (
+                <span style={{ fontSize: 12.5, fontWeight: 700, color: "#f2c14e", background: "rgba(242,193,78,0.1)", border: "1px solid rgba(242,193,78,0.3)", padding: "4px 10px", borderRadius: 20 }}>
+                  {days} day{days === 1 ? "" : "s"}{bay.emptyDate ? " in storage" : " in storage so far"}
+                </span>
+              );
             })()}
-            {" · "}{bay.zones.length} field{bay.zones.length !== 1 ? "s" : ""} · {bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0)} pipes total · {bay.pileHeight || 18}' pile
+          </div>
+          <div style={{ color: "#8790a3", fontSize: 12.5, marginTop: 6 }}>
+            {bay.zones.length} field{bay.zones.length !== 1 ? "s" : ""} · {bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0)} pipes total · {bay.pileHeight || 18}' pile
           </div>
         </div>
         {!readOnly && bay.zones.length > 0 && (
@@ -3352,10 +3362,6 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <Package size={12} color="#8790a3" />
         <EditableInline value={bay.name} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { name: v })} width={140} />
-        <span style={{ fontSize: 11, color: "#6f7890" }}>filled</span>
-        <EditableInline value={bay.fillDate} type="date" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { fillDate: v })} width={140} />
-        <span style={{ fontSize: 11, color: "#6f7890" }}>emptied</span>
-        <EditableInline value={bay.emptyDate || ""} type="date" disabled={readOnly} placeholder="still active" onSave={(v) => onUpdateBayMeta(bay.id, { emptyDate: v })} width={140} />
         <span style={{ fontSize: 11, color: "#6f7890" }}>total pipe</span>
         <EditableInline value={bay.pipeCount ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { pipeCount: v })} width={70} placeholder="—" />
         <span style={{ fontSize: 11, color: "#6f7890" }}>cwt/pipe at 18' (bay default)</span>
@@ -4376,7 +4382,7 @@ export default function PotatoStorage() {
                 <BayDetail bay={selectedBay} data={displayDataById[selectedBay.id] || emptyBayData(selectedBay)} stats={statsById[selectedBay.id]}
                   customers={sortedCustomers} varieties={sortedVarieties} readOnly={isReadOnly} onAddPipeCheck={onAddPipeCheck} onAddCwtRun={onAddCwtRun}
                   onUpdateZoneCustomer={onUpdateZoneCustomer} onUpdateZoneVariety={onUpdateZoneVariety} onAddZoneToBay={onAddZoneToBay}
-                  onUpdateZoneMeta={onUpdateZoneMeta} onEmptyBay={onEmptyBay} onDeleteZone={onDeleteZone}
+                  onUpdateZoneMeta={onUpdateZoneMeta} onUpdateBayMeta={onUpdateBayMeta} onEmptyBay={onEmptyBay} onDeleteZone={onDeleteZone}
                   invFilter={invFilter} buildingsById={buildingsById} locationsById={locationsById} />
               </>
             )}
