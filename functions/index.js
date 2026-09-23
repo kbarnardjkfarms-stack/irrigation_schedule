@@ -831,15 +831,27 @@ async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
   return { fetched: totalFetched, written, unmapped, maxFetchedForAnyType };
 }
 
-// Runs hourly, resuming from wherever the last successful sync left off -
-// not a rolling "last N hours" window - so a slow run or a missed
-// invocation never creates a gap. First run ever falls back to the last
-// 24 hours. NOTE: no ending bound is passed (open-ended to "now"), and
-// this doesn't paginate - if a single hour ever genuinely produced 1000+
-// new samples (essentially impossible at real-world volumes), anything
-// past the cap would be silently missed until the following hour's run
-// happened to catch it via an overlapping window. Not handled here since
-// it's not a realistic hourly volume.
+// Runs hourly, checking a rolling lookback window rather than an
+// ever-advancing cursor. This matters because Stukenholtz's own
+// ReceivedDt and ApproveDt can be a day or more apart - confirmed on a
+// real sample (ReceivedDt 8/13, ApproveDt 8/14) - meaning a sample
+// received several days ago might only become available through the API
+// today. An advancing "only check since last successful run" cursor
+// would push right past that sample's ReceivedDt before it's ever
+// approved, silently and permanently excluding it. Re-checking the same
+// rolling window every run costs nothing extra (writes are upserts by
+// report id), so this trades a bit of redundant querying for actually
+// catching late-approved results.
+//
+// NOTE: still doesn't paginate past 1000 per type - if a single type
+// ever produced 1000+ results within the lookback window (soil alone hit
+// exactly 1000 in one month during backfill testing, so this isn't
+// impossible), anything past the cap would be missed until the backlog
+// thinned out. Shorten STUKENHOLTZ_HOURLY_LOOKBACK_DAYS if that ever
+// shows up as unmapped/missing data, or add windowed pagination here
+// too, matching the backfill's approach.
+const STUKENHOLTZ_HOURLY_LOOKBACK_DAYS = 14;
+
 exports.syncStukenholtzSamplesHourly = onSchedule(
   {
     schedule: 'every 1 hours',
@@ -850,13 +862,15 @@ exports.syncStukenholtzSamplesHourly = onSchedule(
   },
   async () => {
     const db = admin.firestore();
-    const stateDoc = await db.collection('syncState').doc('stukenholtz').get();
-    const lastSyncedAt = stateDoc.exists && stateDoc.data().lastSyncedAt
-      ? stateDoc.data().lastSyncedAt.toDate().toISOString()
-      : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const result = await syncOneStukenholtzBatch(lastSyncedAt);
+    const lookbackStart = new Date(
+      Date.now() - STUKENHOLTZ_HOURLY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
+    ).toISOString();
+    const result = await syncOneStukenholtzBatch(lookbackStart);
+    // Kept for visibility/debugging (e.g. confirming the schedule is
+    // actually firing) - no longer used to compute the next query's
+    // starting point.
     await db.collection('syncState').doc('stukenholtz').set(
-      { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp(), lookbackStart },
       { merge: true }
     );
     console.log(`Stukenholtz sync: fetched ${result.fetched}, wrote ${result.written}, ${result.unmapped} unmapped.`);
