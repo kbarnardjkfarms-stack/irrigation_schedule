@@ -228,14 +228,32 @@ thead th.sticky-col { top: 0; z-index: 4; }
   margin-bottom: 8px;
 }
 
-.agronomy-column-picker label {
+.agronomy-column-picker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 0;
+}
+
+.agronomy-column-picker-row label {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  padding: 3px 0;
   cursor: pointer;
   white-space: nowrap;
+}
+
+.agronomy-column-picker-move {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.agronomy-column-picker-move button {
+  padding: 1px 6px;
+  font-size: 10px;
 }
 
 .agronomy-compost-layout {
@@ -281,6 +299,20 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .agronomy-wide-table td {
   white-space: nowrap;
   padding: 6px 10px;
+}
+
+/* Frozen header - stays visible while scrolling down through rows.
+   .table-scroll (the wrapping div) is the sticky positioning context,
+   since it's the nearest ancestor with overflow-y set - same technique
+   already used for .day-head/.shift-head in the irrigation schedule
+   table. Needs an explicit background since sticky elements are
+   otherwise transparent, which would let scrolled-past rows show through
+   underneath the header. */
+.agronomy-wide-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #fff;
 }
 
 .agronomy-sortable {
