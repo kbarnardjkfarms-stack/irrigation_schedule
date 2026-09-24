@@ -176,6 +176,34 @@ export default function AgronomySampleDatabase({ fields }) {
     return list
   }, [visibleSamples, sortColumn, sortDir, fieldById])
 
+  // null = default order (whatever valueColumns naturally computes to).
+  // Once reordered, this holds the person's chosen key order; new keys
+  // that show up later (e.g. a fuller panel appears in newly loaded data)
+  // get appended at the end rather than disrupting the custom order.
+  const [columnOrder, setColumnOrder] = useState(null)
+
+  const orderedColumns = useMemo(() => {
+    if (!columnOrder) return valueColumns
+    const byKey = Object.fromEntries(valueColumns.map((c) => [c.key, c]))
+    const ordered = columnOrder.filter((k) => byKey[k]).map((k) => byKey[k])
+    const orderedKeys = new Set(columnOrder)
+    const remaining = valueColumns.filter((c) => !orderedKeys.has(c.key))
+    return [...ordered, ...remaining]
+  }, [valueColumns, columnOrder])
+
+  function moveColumn(key, direction) {
+    setColumnOrder((prev) => {
+      const base = prev || orderedColumns.map((c) => c.key)
+      const idx = base.indexOf(key)
+      if (idx === -1) return base
+      const newIdx = idx + direction
+      if (newIdx < 0 || newIdx >= base.length) return base
+      const next = [...base]
+      ;[next[idx], next[newIdx]] = [next[newIdx], next[idx]]
+      return next
+    })
+  }
+
   // null = show all columns (default). Once the person toggles anything,
   // this becomes a real Set and only those columns show. Reset whenever
   // the type changes, so a column selection made while looking at
@@ -183,7 +211,7 @@ export default function AgronomySampleDatabase({ fields }) {
   // when switching back to Soil's 2.
   const [visibleColumnKeys, setVisibleColumnKeys] = useState(null)
   const [columnPickerOpen, setColumnPickerOpen] = useState(false)
-  useEffect(() => { setVisibleColumnKeys(null); setColumnPickerOpen(false) }, [type])
+  useEffect(() => { setVisibleColumnKeys(null); setColumnOrder(null); setColumnPickerOpen(false) }, [type])
 
   function toggleColumn(key) {
     setVisibleColumnKeys((prev) => {
@@ -196,9 +224,9 @@ export default function AgronomySampleDatabase({ fields }) {
   }
 
   const displayedColumns = useMemo(() => {
-    if (!visibleColumnKeys) return valueColumns
-    return valueColumns.filter((c) => visibleColumnKeys.has(c.key))
-  }, [valueColumns, visibleColumnKeys])
+    if (!visibleColumnKeys) return orderedColumns
+    return orderedColumns.filter((c) => visibleColumnKeys.has(c.key))
+  }, [orderedColumns, visibleColumnKeys])
 
   const totalColumns = 3 + displayedColumns.length
 
@@ -249,16 +277,35 @@ export default function AgronomySampleDatabase({ fields }) {
                 <div className="agronomy-column-picker-actions">
                   <button onClick={() => setVisibleColumnKeys(new Set(valueColumns.map((c) => c.key)))}>All</button>
                   <button onClick={() => setVisibleColumnKeys(new Set())}>None</button>
+                  <button onClick={() => setColumnOrder(null)}>Reset order</button>
                 </div>
-                {valueColumns.map((col) => (
-                  <label key={col.key}>
-                    <input
-                      type="checkbox"
-                      checked={!visibleColumnKeys || visibleColumnKeys.has(col.key)}
-                      onChange={() => toggleColumn(col.key)}
-                    />
-                    {col.label}
-                  </label>
+                {orderedColumns.map((col, i) => (
+                  <div key={col.key} className="agronomy-column-picker-row">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={!visibleColumnKeys || visibleColumnKeys.has(col.key)}
+                        onChange={() => toggleColumn(col.key)}
+                      />
+                      {col.label}
+                    </label>
+                    <span className="agronomy-column-picker-move">
+                      <button
+                        disabled={i === 0}
+                        onClick={() => moveColumn(col.key, -1)}
+                        title="Move earlier"
+                      >
+                        {'\u2191'}
+                      </button>
+                      <button
+                        disabled={i === orderedColumns.length - 1}
+                        onClick={() => moveColumn(col.key, 1)}
+                        title="Move later"
+                      >
+                        {'\u2193'}
+                      </button>
+                    </span>
+                  </div>
                 ))}
               </div>
             )}
