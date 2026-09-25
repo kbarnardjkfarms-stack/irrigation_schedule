@@ -27,36 +27,37 @@ function hashStr(s) {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return h;
 }
-// Vivid, maximally-distinct categorical set (14 varieties). Generated in OKLCH
-// and run through the dataviz skill's validator (lightness band, chroma floor,
-// CVD-sim separation, normal-vision Delta E, contrast) — every adjacent pair
-// (the order the legend actually renders things in, alphabetically) clears
-// every hard gate. Two pairs still sit close under an exhaustive all-14-at-once
-// check (a dark green/rust pair reads similarly to some colorblind viewers; a
-// sky-blue/teal pair sits just under the "tell apart instantly" bar for full
-// color vision) — with 14 simultaneous hues that's a real perceptual limit
-// (the skill's own reference palette only guarantees full separation for its
-// first 3 of 8 slots), not something a better color pick fixes. Every place
-// these render also shows the variety name as text, so no pair depends on
-// color alone.
+// Two-channel color encoding: variety and customer both need to read at a
+// glance, and stand apart from EACH OTHER, not just from their own kind.
+// Fix: variety stays entirely in the warm/neutral half of the wheel (reds,
+// rusts, golds, ambers, browns, one muted plum) — no blue, no green, no
+// violet. Customer stays entirely in the cool half (teal through blue to
+// violet/purple) — no warm hues. That split alone makes "which channel is
+// this" obvious without reading the legend. Within each family, hues are
+// spread across as much of that half of the wheel as the palette will
+// allow, varying lightness/saturation too so near neighbors in hue still
+// read as genuinely different colors, not shades of one color.
+// Every place these render also shows the name as text, so no pair
+// depends on color alone even where 14+ items still leaves some hues
+// closer together than an 8-color colorblind-safe palette could manage.
 const VARIETY_FIXED = {
-  "Burbank": "#006794", "Ranger": "#937df6", "Dakota": "#8d4b13", "Clearwater": "#1c78e3",
-  "Teton": "#e16f23", "Norkotah": "#1440ee", "Reveille": "#f74584", "G3 Burbank": "#187225",
-  "G3 Reveille": "#dd42e8", "Ciklamen": "#2ab03e", "Nordaana": "#821cc1", "907-15": "#008f7e",
-  "9426": "#a8195f", "Gala": "#2aa1ce",
+  "Burbank": "#d9a441", "Ranger": "#8a2e2e", "Dakota": "#5c3a1e", "Clearwater": "#e8d060",
+  "Teton": "#b23d6b", "Norkotah": "#c9622e", "Reveille": "#d9704a", "G3 Burbank": "#f0b429",
+  "G3 Reveille": "#6b2450", "Ciklamen": "#8a9c3f", "Nordaana": "#7a4a2e", "907-15": "#c23f3f",
+  "9426": "#9c8a6b", "Gala": "#c77b3f",
 };
-const VARIETY_POOL = ["#0085ab", "#0089d0", "#009f99", "#007ca1", "#c13b9f", "#db4b6d"];
+const VARIETY_POOL = ["#a15a2e", "#d94f6b", "#8a6b2e", "#c73f2e", "#6b3d5a", "#b8942e"];
 function getVarietyColor(name) {
   if (!name) return "#7c8794";
   if (VARIETY_FIXED[name]) return VARIETY_FIXED[name];
   return VARIETY_POOL[hashStr(name) % VARIETY_POOL.length];
 }
 const CUSTOMER_FIXED = {
-  "Lamb Weston": "#4a7fc7", "Simplot": "#3fae8a", "McCain": "#9b6bd6",
-  "Mart Fresh": "#d65f8a", "Mart Frozen": "#5fb0d6", "Grimmway": "#c7974a",
+  "Lamb Weston": "#2389c2", "Simplot": "#1f9e8a", "McCain": "#6259d9",
+  "Mart Fresh": "#8a4fd9", "Mart Frozen": "#3f6ed9", "Grimmway": "#a83fc2",
   "Unassigned": "#6b7280",
 };
-const CUSTOMER_POOL = ["#c7974a", "#e0637a", "#7fb0a0", "#b08cd6", "#d69a5f", "#6ba8c9"];
+const CUSTOMER_POOL = ["#2e8ab8", "#7a3fc7", "#3fa88a", "#5a6bc7", "#9c3fa8", "#3f9ec7"];
 function getCustomerColor(name) {
   if (!name) return CUSTOMER_FIXED.Unassigned;
   if (CUSTOMER_FIXED[name]) return CUSTOMER_FIXED[name];
