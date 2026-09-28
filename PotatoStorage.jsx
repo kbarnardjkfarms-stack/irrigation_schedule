@@ -1022,7 +1022,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
             fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, whiteSpace: "nowrap",
           }}>
             <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}>
-              <ColorDot color={getVarietyColor(zone.variety)} /><ColorDot color={getCustomerColor(zone.customer)} /> {zone.name}
+              <ColorDot color={getVarietyColor(zone.variety)} /><ColorDot color={getCustomerColor(zone.customer)} /> {zone.name}{zone.customerFieldCode ? ` — ${zone.customerFieldCode}` : ""}
             </div>
             <div style={{ color: "#9aa4b8" }}>{zone.variety} · {zone.customer} · {zs.pipesFilled}/{zone.pipeCount} pipe · {Math.round(zs.fillPct * 100)}%</div>
             <div style={{ color: "#f2c14e", fontWeight: 700, marginTop: 2 }}>
@@ -3472,7 +3472,7 @@ function buildLedger(bays, statsById, buildingsById, locationsById) {
     let zonesCapacitySum = 0;
     bay.zones.forEach((zone) => {
       const zs = bs.zoneStats[zone.id];
-      const base = { location: locationName, bay: bay.name, field: zone.name, variety: zone.variety };
+      const base = { location: locationName, bay: bay.name, field: `${zone.name}${zone.customerFieldCode ? ` — ${zone.customerFieldCode}` : ""}`, variety: zone.variety };
       zonesCapacitySum += zs.capacityCwt;
       rows.push({ ...base, customer: zone.customer, metric: "In Storage", cwt: zs.currentCwt });
       rows.push({ ...base, customer: zone.customer, metric: "Capacity", cwt: zs.capacityCwt });
@@ -3693,7 +3693,8 @@ function OverviewCards({ bays, statsById, onSelect, invFilter = EMPTY_INV_FILTER
                 const matches = !filterActive || zoneMatchesFilter(z, b, buildingsById, locationsById, invFilter);
                 return (
                   <span key={z.id} style={{ display: "flex", alignItems: "center", gap: 4, opacity: matches ? 1 : 0.32 }}>
-                    <ColorDot color={getVarietyColor(z.variety)} size={7} /><ColorDot color={getCustomerColor(z.customer)} size={7} /> {z.variety}
+                    <ColorDot color={getVarietyColor(z.variety)} size={7} /><ColorDot color={getCustomerColor(z.customer)} size={7} />
+                    {z.name}{z.customerFieldCode ? ` — ${z.customerFieldCode}` : ""} · {z.variety}
                   </span>
                 );
               })}
