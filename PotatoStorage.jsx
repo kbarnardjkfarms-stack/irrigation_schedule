@@ -2166,7 +2166,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
                 color: z.id === zoneId ? "#f2c14e" : "#8790a3", display: "inline-flex", alignItems: "center", gap: 6,
               }}>
                 <ColorDot color={getVarietyColor(z.variety)} /><ColorDot color={getCustomerColor(z.customer)} />
-                {z.name} <span style={{ opacity: 0.7 }}>· {z.variety} · {z.customer}</span>
+                {z.name}{z.customerFieldCode ? ` — ${z.customerFieldCode}` : ""} <span style={{ opacity: 0.7 }}>· {z.variety} · {z.customer}</span>
               </button>
               {!readOnly && (
                 <button
@@ -2200,7 +2200,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
       {zone && zs && (
         <>
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
-            <StatBlock label={`${zone.name} inventory`} value={`${fmt(zs.currentCwt)} cwt`}
+            <StatBlock label={`${zone.name}${zone.customerFieldCode ? ` — ${zone.customerFieldCode}` : ""} inventory`} value={`${fmt(zs.currentCwt)} cwt`}
               sub={zs.hasOverride
                 ? `manual · calculated from checks: ${fmt(zs.calculatedCwt)} cwt · ${zs.pipesFilled}/${zone.pipeCount} pipe`
                 : `${Math.round(zs.fillPct * 100)}% of ${fmt(zs.capacityCwt)} cwt · ${zs.pipesFilled}/${zone.pipeCount} pipe`}
@@ -2243,7 +2243,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
             <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
               <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
-                <Gauge size={16} color="#f2c14e" /> Log pipe — {zone.name}
+                <Gauge size={16} color="#f2c14e" /> Log pipe — {zone.name}{zone.customerFieldCode ? ` — ${zone.customerFieldCode}` : ""}
               </div>
               <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
                 <button type="button" onClick={() => setLogType("haul")} style={agworldTabStyle(logType === "haul")}>Hauling out</button>
@@ -2310,7 +2310,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
             </div>
             <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
               <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
-                <TrendingDown size={16} color="#f2c14e" /> Log cwt run out — {zone.name}
+                <TrendingDown size={16} color="#f2c14e" /> Log cwt run out — {zone.name}{zone.customerFieldCode ? ` — ${zone.customerFieldCode}` : ""}
               </div>
               <Field label="Date"><input type="date" value={runDate} onChange={(e) => setRunDate(e.target.value)} style={inputStyle} /></Field>
               <Field label="Destination / buyer">
@@ -2802,7 +2802,7 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
           </Field>
           <Field label="Field">
             <select value={zoneId} onChange={(e) => setZoneId(e.target.value)} style={inputStyle}>
-              {(bay?.zones || []).map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
+              {(bay?.zones || []).map((z) => <option key={z.id} value={z.id}>{z.name}{z.customerFieldCode ? ` — ${z.customerFieldCode}` : ""}</option>)}
             </select>
           </Field>
           <Field label="Product">
@@ -3069,7 +3069,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   const [zoneRows, setZoneRows] = useState([]);
   const [bayError, setBayError] = useState("");
   const updateZoneRow = (i, patch) => setZoneRows((rows) => rows.map((r, ri) => ri === i ? { ...r, ...patch } : r));
-  const addZoneRow = () => setZoneRows((rows) => [...rows, { name: `Field ${rows.length + 1}`, variety: varieties[0] || "", customer: "Unassigned", pipeFrom: "", pipeTo: "", cwtPerPipe: "" }]);
+  const addZoneRow = () => setZoneRows((rows) => [...rows, { name: `Field ${rows.length + 1}`, variety: varieties[0] || "", customer: "Unassigned", customerFieldCode: "", pipeFrom: "", pipeTo: "", cwtPerPipe: "" }]);
   const removeZoneRow = (i) => setZoneRows((rows) => rows.filter((_, ri) => ri !== i));
   const zoneRowPipeSum = zoneRows.reduce((s, r) => s + pipeRangeSet([{ from: r.pipeFrom, to: r.pipeTo }]).size, 0);
   const bayPipeBound = bayPipeCount !== "" ? Number(bayPipeCount) : null;
@@ -3090,6 +3090,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
       const range = { from: Number(r.pipeFrom), to: Number(r.pipeTo) };
       return {
         id: uid("zone"), name: r.name.trim(), variety: r.variety, customer: r.customer || "Unassigned",
+        customerFieldCode: r.customerFieldCode?.trim() || null,
         pipeRanges: [range], pipeCount: pipeRangeSet([range]).size,
         ...(r.cwtPerPipe ? { cwtPerPipe: Number(r.cwtPerPipe) } : {}),
       };
@@ -3223,6 +3224,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
           {zoneRows.map((r, i) => (
             <div key={i} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", background: "#0e1420", border: "1px solid #232d40", borderRadius: 8, padding: 10 }}>
               <Field label="Field name"><input value={r.name} onChange={(e) => updateZoneRow(i, { name: e.target.value })} style={{ ...inputStyle, width: 140 }} /></Field>
+              <Field label="Customer field code (optional)"><input value={r.customerFieldCode} onChange={(e) => updateZoneRow(i, { customerFieldCode: e.target.value })} style={{ ...inputStyle, width: 120 }} placeholder="e.g. U97823" /></Field>
               <Field label="Variety">
                 <select value={r.variety} onChange={(e) => updateZoneRow(i, { variety: e.target.value })} style={{ ...inputStyle, width: 130 }}>
                   {varieties.map((v) => <option key={v} value={v}>{v}</option>)}
@@ -3401,6 +3403,8 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
           <div key={z.id} style={{ paddingLeft: 20, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12 }}>
             <ColorDot color={getVarietyColor(z.variety)} size={7} /><ColorDot color={getCustomerColor(z.customer)} size={7} />
             <EditableInline value={z.name} disabled={readOnly} onSave={(v) => onUpdateZoneMeta(bay.id, z.id, { name: v })} width={130} />
+            <span style={{ color: "#6f7890" }}>code</span>
+            <EditableInline value={z.customerFieldCode || ""} disabled={readOnly} placeholder="none" onSave={(v) => onUpdateZoneMeta(bay.id, z.id, { customerFieldCode: v })} width={100} />
             <span style={{ color: "#6f7890" }}>
               pipe {formatPipeRanges(z.pipeRanges)} ({zonePipeCount(z)})
             </span>
