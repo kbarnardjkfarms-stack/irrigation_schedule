@@ -744,6 +744,56 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH, filterCtx) {
 /* ---------------------------------------------------------------
    Generic orbiting 3D canvas (used for both yard + interior modes)
 ----------------------------------------------------------------*/
+// Zone/bay/building labels are positioned by projecting a 3D world point to
+// a 2D screen coordinate, so when their real-world anchors sit close
+// together (narrow adjacent fields, tightly spaced bays, a zoomed-out yard),
+// the projected points — and the label boxes anchored to them — can land
+// right on top of each other. This runs every frame after projection: it
+// estimates each label's on-screen footprint from its kind, then walks them
+// top-to-bottom stacking any that would overlap directly below the label
+// they collided with, so every one stays fully readable. Pipe-number
+// markers are left out of this — there can be dozens of them and they're
+// small/numerous by design, so including them would make this expensive
+// for no real readability gain.
+const LABEL_BOX = {
+  zone: { w: 170, h: 50 },
+  bay: { w: 120, h: 36 },
+  building: { w: 150, h: 22 },
+};
+function labelKind(l) {
+  if (l.isBuildingLabel) return "building";
+  if (l.isBayLabel) return "bay";
+  return "zone";
+}
+function deconflictLabels(labels) {
+  const spaced = labels.filter((l) => l.visible && !l.isPipeLabel);
+  const untouched = labels.filter((l) => !l.visible || l.isPipeLabel);
+  // Stable top-to-bottom, then left-to-right order so labels don't jitter
+  // or swap places between frames as the camera orbits.
+  spaced.sort((a, b) => a.y - b.y || a.x - b.x);
+  const placed = [];
+  spaced.forEach((l) => {
+    const box = LABEL_BOX[labelKind(l)];
+    let y = l.y;
+    let shifted = true;
+    let guard = 0;
+    while (shifted && guard < 12) {
+      shifted = false;
+      for (const p of placed) {
+        const left = l.x - box.w / 2, right = l.x + box.w / 2, top = y - box.h, bottom = y;
+        const pLeft = p.x - p._box.w / 2, pRight = p.x + p._box.w / 2, pTop = p.y - p._box.h, pBottom = p.y;
+        if (left < pRight && right > pLeft && top < pBottom && bottom > pTop) {
+          y = pBottom + box.h + 4; // stack directly below whatever it collided with
+          shifted = true;
+        }
+      }
+      guard++;
+    }
+    placed.push({ ...l, y, _box: box });
+  });
+  return [...placed, ...untouched];
+}
+
 function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildingsById = {}, locationsById = {}, invFilter }) {
   const mountRef = useRef(null);
   const stateRef = useRef({});
@@ -929,7 +979,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
           gi = gj + 1;
         }
       }
-      setLabels(newLabels);
+      setLabels(deconflictLabels(newLabels));
     };
     animate();
     const ro = new ResizeObserver(() => {
