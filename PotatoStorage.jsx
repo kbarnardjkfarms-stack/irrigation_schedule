@@ -2737,7 +2737,7 @@ function InspectionsTab({ bays, inspections, onAdd, readOnly }) {
    history. Applications are season-scoped like everything else in
    bayData, so they archive and reset with the season.
 ----------------------------------------------------------------*/
-function SproutNipTab({ bays, dataById, statsById, customers, products, applicators, readOnly, onAddSproutApplication, onDeleteSproutApplication, onAddProduct, onUpdateProductRestrictions, onAddApplicator }) {
+function SproutNipTab({ bays, dataById, statsById, customers, products, applicators, readOnly, onAddSproutApplication, onDeleteSproutApplication, onAddProduct, onUpdateProductRestrictions, onRenameProduct, onDeleteProduct, onAddApplicator, onRenameApplicator, onDeleteApplicator }) {
   // Every field across every bay at this site, flattened into one list with
   // its bay attached and its current cwt looked up from statsById — this is
   // what both the field picker and the "pull the cwt from inventory" math
@@ -2800,7 +2800,7 @@ function SproutNipTab({ bays, dataById, statsById, customers, products, applicat
       const share = autoCwt > 0 ? (f.currentCwt / autoCwt) * totalCwt : totalCwt / selectedFields.length;
       onAddSproutApplication(f.bay.id, f.zone.id, {
         id: uid("app"), batchId, date, productId, productName: selectedProduct?.name || "Unknown product",
-        rate: Number(rate), rateUnit, cwtApplied: Math.round(share * 100) / 100, applicator,
+        rate: rate.trim(), rateUnit, cwtApplied: Math.round(share * 100) / 100, applicator,
         fieldCount: selectedFields.length,
       });
     });
@@ -2841,7 +2841,15 @@ function SproutNipTab({ bays, dataById, statsById, customers, products, applicat
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {products.map((p) => (
             <div key={p.id} style={{ background: "#0e1420", border: "1px solid #232d40", borderRadius: 8, padding: 12 }}>
-              <div style={{ fontWeight: 700, color: "#eef1f6", marginBottom: 8 }}>{p.name}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <EditableInline value={p.name} disabled={readOnly} onSave={(v) => onRenameProduct(p.id, v)} width={200} />
+                <DeleteButton
+                  disabled={readOnly}
+                  title="Delete product"
+                  confirmMessage={`Remove "${p.name}" from the product library? Already-logged applications keep their record — this only stops it from being offered for new ones.`}
+                  onConfirm={() => onDeleteProduct(p.id)}
+                />
+              </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {customers.map((c) => {
                   const isRestricted = p.restrictedCustomers.includes(c);
@@ -2872,8 +2880,18 @@ function SproutNipTab({ bays, dataById, statsById, customers, products, applicat
       {/* Applicator companies */}
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Applicator companies</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-          {applicators.map((a) => <span key={a} style={{ fontSize: 12.5, color: "#c7cede", background: "#0e1420", border: "1px solid #232d40", borderRadius: 20, padding: "5px 12px" }}>{a}</span>)}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+          {applicators.map((a) => (
+            <div key={a} style={{ display: "flex", alignItems: "center", gap: 8, background: "#0e1420", border: "1px solid #232d40", borderRadius: 8, padding: "6px 10px" }}>
+              <EditableInline value={a} disabled={readOnly} onSave={(v) => onRenameApplicator(a, v)} width={220} />
+              <DeleteButton
+                disabled={readOnly}
+                title="Delete applicator company"
+                confirmMessage={`Remove "${a}" from the applicator list? Already-logged applications keep their record — this only stops it from being offered for new ones.`}
+                onConfirm={() => onDeleteApplicator(a)}
+              />
+            </div>
+          ))}
           {applicators.length === 0 && <span style={{ fontSize: 12, color: "#5b6478" }}>No applicator companies added yet.</span>}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -2931,7 +2949,7 @@ function SproutNipTab({ bays, dataById, statsById, customers, products, applicat
             </select>
           </Field>
           <Field label="Date"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} /></Field>
-          <Field label="Rate"><input type="number" min="0" value={rate} onChange={(e) => setRate(e.target.value)} style={{ ...inputStyle, width: 110 }} /></Field>
+          <Field label="Rate"><input type="text" value={rate} onChange={(e) => setRate(e.target.value)} style={{ ...inputStyle, width: 160 }} placeholder="e.g. 1-4, or 1 lb/400 cwt" /></Field>
           <Field label="Rate unit"><input value={rateUnit} onChange={(e) => setRateUnit(e.target.value)} style={{ ...inputStyle, width: 130 }} /></Field>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -4136,10 +4154,49 @@ export default function PotatoStorage() {
       return next;
     });
   }, []);
+  // Renaming only touches the roster entry — every already-logged application
+  // stores its own productName snapshot at the time it was logged, so past
+  // history keeps reading exactly as it did, only future selections see the
+  // new name.
+  const onRenameProduct = useCallback((productId, name) => {
+    setProducts((prev) => {
+      const next = prev.map((p) => p.id === productId ? { ...p, name } : p);
+      saveJSON(PRODUCTS_KEY, next);
+      return next;
+    });
+  }, []);
+  // Removing a product from the roster only stops it from being offered for
+  // NEW applications — same reasoning as rename, existing history is
+  // unaffected since it's already got its own name/rate/etc. snapshotted.
+  const onDeleteProduct = useCallback((productId) => {
+    setProducts((prev) => {
+      const next = prev.filter((p) => p.id !== productId);
+      saveJSON(PRODUCTS_KEY, next);
+      return next;
+    });
+  }, []);
   const onAddApplicator = useCallback((name) => {
     setApplicators((prev) => {
       if (prev.some((a) => a.toLowerCase() === name.toLowerCase())) return prev;
       const next = [...prev, name];
+      saveJSON(APPLICATORS_KEY, next);
+      return next;
+    });
+  }, []);
+  // Applicators are stored as plain strings, not objects with a stable id —
+  // rename replaces the old string with the new one at the same position.
+  // Logged applications keep their own applicator string as a snapshot, so
+  // this only changes what's offered going forward, same as product rename.
+  const onRenameApplicator = useCallback((oldName, newName) => {
+    setApplicators((prev) => {
+      const next = prev.map((a) => a === oldName ? newName : a);
+      saveJSON(APPLICATORS_KEY, next);
+      return next;
+    });
+  }, []);
+  const onDeleteApplicator = useCallback((name) => {
+    setApplicators((prev) => {
+      const next = prev.filter((a) => a !== name);
       saveJSON(APPLICATORS_KEY, next);
       return next;
     });
@@ -4576,7 +4633,8 @@ export default function PotatoStorage() {
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
               <SproutNipTab bays={locationBays} dataById={displayDataById} statsById={statsById} customers={sortedCustomers} products={sortedProducts} applicators={sortedApplicators}
                 readOnly={isReadOnly} onAddSproutApplication={onAddSproutApplication} onDeleteSproutApplication={onDeleteSproutApplication} onAddProduct={onAddProduct}
-                onUpdateProductRestrictions={onUpdateProductRestrictions} onAddApplicator={onAddApplicator} />
+                onUpdateProductRestrictions={onUpdateProductRestrictions} onRenameProduct={onRenameProduct} onDeleteProduct={onDeleteProduct}
+                onAddApplicator={onAddApplicator} onRenameApplicator={onRenameApplicator} onDeleteApplicator={onDeleteApplicator} />
             )}
           </div>
         )}
