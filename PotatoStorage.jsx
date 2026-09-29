@@ -2737,32 +2737,74 @@ function InspectionsTab({ bays, inspections, onAdd, readOnly }) {
    history. Applications are season-scoped like everything else in
    bayData, so they archive and reset with the season.
 ----------------------------------------------------------------*/
-function SproutNipTab({ bays, dataById, customers, products, applicators, readOnly, onAddSproutApplication, onAddProduct, onUpdateProductRestrictions, onAddApplicator }) {
-  const [bayId, setBayId] = useState(bays[0]?.id);
-  const bay = bays.find((b) => b.id === bayId);
-  const [zoneId, setZoneId] = useState(bay?.zones[0]?.id);
-  useEffect(() => { setZoneId(bays.find((b) => b.id === bayId)?.zones[0]?.id); }, [bayId, bays]);
-  const zone = bay?.zones.find((z) => z.id === zoneId);
-  const zoneData = dataById[bayId]?.zones?.[zoneId] || { sproutApplications: [] };
+function SproutNipTab({ bays, dataById, statsById, customers, products, applicators, readOnly, onAddSproutApplication, onDeleteSproutApplication, onAddProduct, onUpdateProductRestrictions, onAddApplicator }) {
+  // Every field across every bay at this site, flattened into one list with
+  // its bay attached and its current cwt looked up from statsById — this is
+  // what both the field picker and the "pull the cwt from inventory" math
+  // below draw from.
+  const allFields = useMemo(() => {
+    const rows = [];
+    bays.forEach((bay) => {
+      const zs = statsById[bay.id]?.zoneStats || {};
+      bay.zones.forEach((zone) => rows.push({ bay, zone, currentCwt: zs[zone.id]?.currentCwt ?? 0 }));
+    });
+    return rows;
+  }, [bays, statsById]);
+
+  const [fieldSearch, setFieldSearch] = useState("");
+  const [selectedKeys, setSelectedKeys] = useState(() => (allFields[0] ? [`${allFields[0].bay.id}:${allFields[0].zone.id}`] : []));
+  const selectedFields = allFields.filter((f) => selectedKeys.includes(`${f.bay.id}:${f.zone.id}`));
+  const toggleField = (key) => setSelectedKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  const filteredFields = allFields.filter((f) => {
+    if (!fieldSearch) return true;
+    const haystack = `${f.bay.name} ${f.zone.name} ${f.zone.customerFieldCode || ""} ${f.zone.customer}`.toLowerCase();
+    return haystack.includes(fieldSearch.toLowerCase());
+  });
+
   const [productId, setProductId] = useState(products[0]?.id || "");
   useEffect(() => { if (!products.find((p) => p.id === productId)) setProductId(products[0]?.id || ""); }, [products, productId]);
   const [date, setDate] = useState(todayStr());
   const [rate, setRate] = useState("");
   const [rateUnit, setRateUnit] = useState("fl oz/cwt");
-  const [cwtApplied, setCwtApplied] = useState("");
   const [applicator, setApplicator] = useState("Unassigned");
   const [appError, setAppError] = useState("");
+
+  // Pulled straight from inventory, not typed in — the sum of whatever's
+  // actually sitting in the selected fields right now. Recomputes any time
+  // the selection changes; still an editable number if a real-world
+  // adjustment is needed (a partial pass, etc.).
+  const autoCwt = useMemo(() => selectedFields.reduce((s, f) => s + (f.currentCwt || 0), 0), [selectedFields]);
+  const [cwtApplied, setCwtApplied] = useState(autoCwt ? String(Math.round(autoCwt * 100) / 100) : "");
+  useEffect(() => { setCwtApplied(autoCwt ? String(Math.round(autoCwt * 100) / 100) : ""); }, [selectedKeys.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const selectedProduct = products.find((p) => p.id === productId);
-  const blocked = !!(selectedProduct && zone && selectedProduct.restrictedCustomers.includes(zone.customer));
+  const blockedFields = selectedProduct ? selectedFields.filter((f) => selectedProduct.restrictedCustomers.includes(f.zone.customer)) : [];
+  const blocked = blockedFields.length > 0;
+
   const submitApplication = () => {
     if (readOnly) return;
-    if (blocked) { setAppError(`${selectedProduct.name} is restricted for ${zone.customer} — pick a different product or field.`); return; }
-    if (!productId || !rate || !cwtApplied) { setAppError("Product, rate, and cwt applied are all required."); return; }
-    onAddSproutApplication(bayId, zoneId, {
-      id: uid("app"), date, productId, productName: selectedProduct?.name || "Unknown product",
-      rate: Number(rate), rateUnit, cwtApplied: Number(cwtApplied), applicator,
+    if (!selectedFields.length) { setAppError("Select at least one field."); return; }
+    if (blocked) {
+      const names = blockedFields.map((f) => f.zone.name).join(", ");
+      setAppError(`${selectedProduct.name} is restricted for ${blockedFields[0].zone.customer} — remove ${names} or pick a different product.`);
+      return;
+    }
+    if (!productId || !rate) { setAppError("Product and rate are required."); return; }
+    // One record per field, each carrying its own share of the total cwt
+    // (proportional to that field's actual inventory) rather than splitting
+    // evenly — so each field's own history stays accurate even when the
+    // total was hand-adjusted after the auto-fill.
+    const totalCwt = Number(cwtApplied) || 0;
+    const batchId = selectedFields.length > 1 ? uid("batch") : null;
+    selectedFields.forEach((f) => {
+      const share = autoCwt > 0 ? (f.currentCwt / autoCwt) * totalCwt : totalCwt / selectedFields.length;
+      onAddSproutApplication(f.bay.id, f.zone.id, {
+        id: uid("app"), batchId, date, productId, productName: selectedProduct?.name || "Unknown product",
+        rate: Number(rate), rateUnit, cwtApplied: Math.round(share * 100) / 100, applicator,
+        fieldCount: selectedFields.length,
+      });
     });
-    setRate(""); setCwtApplied(""); setAppError("");
+    setRate(""); setAppError("");
   };
   const [newProductName, setNewProductName] = useState("");
   const [productError, setProductError] = useState("");
@@ -2786,7 +2828,6 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
       : [...product.restrictedCustomers, customerName];
     onUpdateProductRestrictions(product.id, next);
   };
-  const history = [...(zoneData.sproutApplications || [])].reverse();
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
       {/* Product library */}
@@ -2843,73 +2884,124 @@ function SproutNipTab({ bays, dataById, customers, products, applicators, readOn
       </div>
       {/* Log application */}
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Log an application</div>
+        <div style={{ fontWeight: 700, marginBottom: 6, color: "#eef1f6" }}>Log an application</div>
+        <div style={{ fontSize: 12, color: "#8790a3", marginBottom: 10 }}>
+          Select every field this application covers — cwt is pulled from each field's current inventory automatically.
+        </div>
+        <Field label="Search fields">
+          <input value={fieldSearch} onChange={(e) => setFieldSearch(e.target.value)} style={{ ...inputStyle, maxWidth: 260 }} placeholder="bay, field, code, or customer…" />
+        </Field>
+        <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid #232d40", borderRadius: 6, background: "#0e1420", marginBottom: 12 }}>
+          {filteredFields.length === 0 ? (
+            <div style={{ padding: 10, fontSize: 12, color: "#6f7890" }}>No fields match.</div>
+          ) : (
+            filteredFields.map((f) => {
+              const key = `${f.bay.id}:${f.zone.id}`;
+              const checked = selectedKeys.includes(key);
+              const isBlocked = selectedProduct && selectedProduct.restrictedCustomers.includes(f.zone.customer);
+              return (
+                <label key={key} style={{
+                  display: "flex", alignItems: "center", gap: 9, width: "100%", boxSizing: "border-box",
+                  background: checked ? "rgba(224,166,62,0.1)" : "transparent",
+                  borderBottom: "1px solid #1c2434", padding: "8px 10px", cursor: "pointer",
+                }}>
+                  <input type="checkbox" checked={checked} onChange={() => toggleField(key)} style={{ flexShrink: 0 }} />
+                  <ColorDot color={getVarietyColor(f.zone.variety)} size={8} /><ColorDot color={getCustomerColor(f.zone.customer)} size={8} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, color: "#eef1f6", fontSize: 12.5 }}>
+                      {f.bay.name} · {f.zone.name}{f.zone.customerFieldCode ? ` — ${f.zone.customerFieldCode}` : ""}
+                      {isBlocked && <span style={{ color: "#e08787", marginLeft: 6 }}><AlertTriangle size={11} style={{ verticalAlign: -1 }} /> restricted</span>}
+                    </div>
+                    <div style={{ color: "#8790a3", fontSize: 11 }}>{f.zone.variety} · {f.zone.customer} · {fmt(f.currentCwt)} cwt on hand</div>
+                  </div>
+                </label>
+              );
+            })
+          )}
+        </div>
+        {selectedFields.length > 0 && (
+          <div style={{ fontSize: 12.5, color: "#8790a3", marginBottom: 12 }}>
+            <b style={{ color: "#f2c14e" }}>{selectedFields.length}</b> field{selectedFields.length === 1 ? "" : "s"} selected · <b style={{ color: "#f2c14e" }}>{fmt(autoCwt)} cwt</b> total on hand
+          </div>
+        )}
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Field label="Bay">
-            <select value={bayId} onChange={(e) => setBayId(e.target.value)} style={inputStyle}>
-              {bays.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </Field>
-          <Field label="Field">
-            <select value={zoneId} onChange={(e) => setZoneId(e.target.value)} style={inputStyle}>
-              {(bay?.zones || []).map((z) => <option key={z.id} value={z.id}>{z.name}{z.customerFieldCode ? ` — ${z.customerFieldCode}` : ""}</option>)}
-            </select>
-          </Field>
           <Field label="Product">
             <select value={productId} onChange={(e) => { setProductId(e.target.value); setAppError(""); }} style={inputStyle}>
               {products.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </Field>
           <Field label="Date"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} /></Field>
-        </div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Field label="Rate"><input type="number" min="0" value={rate} onChange={(e) => setRate(e.target.value)} style={{ ...inputStyle, width: 110 }} /></Field>
           <Field label="Rate unit"><input value={rateUnit} onChange={(e) => setRateUnit(e.target.value)} style={{ ...inputStyle, width: 130 }} /></Field>
-          <Field label="Cwt applied to"><input type="number" min="0" value={cwtApplied} onChange={(e) => setCwtApplied(e.target.value)} style={{ ...inputStyle, width: 140 }} /></Field>
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Field label="Cwt applied (total, auto-filled)">
+            <input type="number" min="0" value={cwtApplied} onChange={(e) => setCwtApplied(e.target.value)} style={{ ...inputStyle, width: 180 }} />
+          </Field>
           <Field label="Applicator company">
             <select value={applicator} onChange={(e) => setApplicator(e.target.value)} style={inputStyle}>
               {applicatorOptions(applicators, applicator).map((a) => <option key={a} value={a}>{a}</option>)}
             </select>
           </Field>
         </div>
-        {zone && (
-          <div style={{ fontSize: 12.5, color: "#8790a3", margin: "4px 0 10px" }}>
-            {zone.name} is <ColorDot color={getCustomerColor(zone.customer)} size={7} /> <b style={{ color: "#c7cede" }}>{zone.customer}</b>'s potatoes.
+        {selectedFields.length > 1 && (
+          <div style={{ fontSize: 11.5, color: "#6f7890", margin: "4px 0 10px" }}>
+            Split across fields by each one's share of the total: {selectedFields.map((f) => `${f.zone.name} (${fmt(f.currentCwt)} cwt)`).join(", ")}.
           </div>
         )}
         {blocked && (
           <div style={{ fontSize: 12.5, color: "#e08787", display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
-            <AlertTriangle size={14} /> {selectedProduct.name} is restricted for {zone.customer} — this can't be logged until you change the product or the field.
+            <AlertTriangle size={14} /> {selectedProduct.name} is restricted for {blockedFields.map((f) => f.zone.customer).filter((v, i, a) => a.indexOf(v) === i).join(", ")} — remove the flagged field(s) above or pick a different product.
           </div>
         )}
         {appError && !blocked && <div style={{ fontSize: 12.5, color: "#e08787", marginBottom: 10 }}>{appError}</div>}
         <Button onClick={submitApplication} disabled={readOnly || blocked}><Plus size={14} /> Log application</Button>
       </div>
-      {/* History */}
+      {/* History — every application across every field at this site */}
       <div>
-        <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>{bay?.name} — {zone?.name} application history</div>
+        <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Application history</div>
         <div style={{ overflowX: "auto", border: "1px solid #232d40", borderRadius: 10 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: "#141b28", textAlign: "left" }}>
                 <th style={thStyle}>Date</th>
+                <th style={thStyle}>Bay</th>
+                <th style={thStyle}>Field</th>
                 <th style={thStyle}>Product</th>
                 <th style={thStyle}>Rate</th>
                 <th style={thStyle}>Cwt applied</th>
                 <th style={thStyle}>Applicator</th>
+                <th style={thStyle}></th>
               </tr>
             </thead>
             <tbody>
-              {history.length === 0 && <tr><td colSpan={5} style={{ ...tdStyle, color: "#5b6478" }}>No applications logged for this field yet.</td></tr>}
-              {history.map((a) => (
-                <tr key={a.id} style={{ borderTop: "1px solid #232d40" }}>
-                  <td style={tdStyle}><b style={{ color: "#eef1f6" }}>{a.date}</b></td>
-                  <td style={tdStyle}>{a.productName}</td>
-                  <td style={tdStyle}>{a.rate} {a.rateUnit}</td>
-                  <td style={tdStyle}>{fmt(a.cwtApplied)} cwt</td>
-                  <td style={tdStyle}>{a.applicator}</td>
-                </tr>
-              ))}
+              {(() => {
+                const rows = [];
+                allFields.forEach((f) => {
+                  const apps = dataById[f.bay.id]?.zones?.[f.zone.id]?.sproutApplications || [];
+                  apps.forEach((a) => rows.push({ ...a, bay: f.bay, zone: f.zone }));
+                });
+                rows.sort((a, b) => b.date.localeCompare(a.date));
+                if (rows.length === 0) return <tr><td colSpan={8} style={{ ...tdStyle, color: "#5b6478" }}>No applications logged at this site yet.</td></tr>;
+                return rows.map((a) => (
+                  <tr key={a.id} style={{ borderTop: "1px solid #232d40" }}>
+                    <td style={tdStyle}><b style={{ color: "#eef1f6" }}>{a.date}</b></td>
+                    <td style={tdStyle}>{a.bay.name}</td>
+                    <td style={tdStyle}>{a.zone.name}{a.zone.customerFieldCode ? ` — ${a.zone.customerFieldCode}` : ""}{a.fieldCount > 1 ? ` (1 of ${a.fieldCount})` : ""}</td>
+                    <td style={tdStyle}>{a.productName}</td>
+                    <td style={tdStyle}>{a.rate} {a.rateUnit}</td>
+                    <td style={tdStyle}>{fmt(a.cwtApplied)} cwt</td>
+                    <td style={tdStyle}>{a.applicator}</td>
+                    <td style={tdStyle}>
+                      <DeleteButton
+                        disabled={readOnly}
+                        confirmMessage={`Delete this Sprout Nip application on ${a.zone.name}? This can't be undone.`}
+                        onConfirm={() => onDeleteSproutApplication(a.bay.id, a.zone.id, a.id)}
+                      />
+                    </td>
+                  </tr>
+                ));
+              })()}
             </tbody>
           </table>
         </div>
@@ -4055,6 +4147,9 @@ export default function PotatoStorage() {
   const onAddSproutApplication = useCallback((bayId, zoneId, entry) => {
     updateZoneData(bayId, zoneId, (zd) => ({ ...zd, sproutApplications: [...(zd.sproutApplications || []), entry] }));
   }, [updateZoneData]);
+  const onDeleteSproutApplication = useCallback((bayId, zoneId, appId) => {
+    updateZoneData(bayId, zoneId, (zd) => ({ ...zd, sproutApplications: (zd.sproutApplications || []).filter((a) => a.id !== appId) }));
+  }, [updateZoneData]);
   const onAddLocation = useCallback((location) => {
     setLocations((prev) => {
       const next = [...prev, location];
@@ -4479,8 +4574,8 @@ export default function PotatoStorage() {
         {tab === "sproutnip" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
-              <SproutNipTab bays={locationBays} dataById={displayDataById} customers={sortedCustomers} products={sortedProducts} applicators={sortedApplicators}
-                readOnly={isReadOnly} onAddSproutApplication={onAddSproutApplication} onAddProduct={onAddProduct}
+              <SproutNipTab bays={locationBays} dataById={displayDataById} statsById={statsById} customers={sortedCustomers} products={sortedProducts} applicators={sortedApplicators}
+                readOnly={isReadOnly} onAddSproutApplication={onAddSproutApplication} onDeleteSproutApplication={onDeleteSproutApplication} onAddProduct={onAddProduct}
                 onUpdateProductRestrictions={onUpdateProductRestrictions} onAddApplicator={onAddApplicator} />
             )}
           </div>
