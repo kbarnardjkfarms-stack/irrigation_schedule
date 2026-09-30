@@ -1622,6 +1622,12 @@ function iviNormalizeReading(raw, bayName) {
     pileDeltaF: num(data['Pile Delta']),
 
     fanPct: num(data['Fans %']),
+    // The fan is VFD-driven, so its actual speed reads more meaningfully
+    // in Hz (0-60, matching standard US mains frequency at full speed)
+    // than as a percentage. Confirmed live: raw.Data.Hertz and the
+    // top-level raw.VFD_Hz carry the same value — Data.Hertz used here for
+    // consistency with everything else pulled from the Data object.
+    fanHz: num(data.Hertz),
     coolingPct: num(data['Cooling %']),
     curingPct: num(data['Curing %']),
     referPct: num(data['Refer %']),
