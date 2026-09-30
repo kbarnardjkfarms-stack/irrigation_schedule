@@ -1408,3 +1408,284 @@ exports.debugAgristorRawBin = onRequest(
     }
   }
 );
+
+// ---------------------------------------------------------------------
+// IVI / Centurion sync — READ-ONLY, same pattern as the Agri-Stor sync
+// above: polls a monitoring panel's own web app and writes one normalized
+// reading doc per panel into Firestore. Never writes anything back to IVI.
+//
+// Unlike Agri-Stor, this account has no confirmed endpoint that lists every
+// panel it can see — GetGroupsForLoggedInUser and Group both confirmed the
+// account's one group ("Jentzsch/Kearl Farms", GroupHRId 3410) but neither
+// enumerates individual panels. Rather than guess at an undiscovered
+// endpoint, this instead reads the panel ID directly off each bay's own
+// "IVI panel ID" field (set by hand in Manage Sites, same pattern as
+// Agri-Stor's bin name field) and polls exactly those panels — nothing is
+// auto-discovered, so there's no risk of ever pulling in a panel that
+// wasn't deliberately linked.
+//
+// STATUS: confirmed against live traffic (captured via a redacted browser
+// DevTools session — no real credential/token values were ever seen here):
+//   - LoginUser request/response shape and the .ASPXAUTH cookie it sets
+//   - GetRESTToken's double-JSON-wrapped {"d": "{...}"} response and its
+//     ~15 minute expiry
+//   - The full Panel/{id}/Status response shape (confirmed against one
+//     real panel's live data)
+// NOT confirmed: GetRESTToken's exact request URL/method. It was never
+// directly observed — IVI_TOKEN_PATH below is a best guess based on it
+// living in the same .asmx file as LoginUser, a common ASP.NET pattern.
+// If the very first deploy's test run fails at the token step, this is the
+// first thing to check — re-capture GetRESTToken's Request URL from the
+// browser Network tab and correct the constant below.
+// ---------------------------------------------------------------------
+
+// Set these once with:
+//   firebase functions:secrets:set IVI_USERNAME
+//   firebase functions:secrets:set IVI_PASSWORD
+const IVI_USERNAME = defineSecret('IVI_USERNAME');
+const IVI_PASSWORD = defineSecret('IVI_PASSWORD');
+
+const IVI_BASE_URL = 'https://centurion.ivi.us.com';
+const IVI_LOGIN_PATH = '/WS/Login.asmx/LoginUser';
+// UNCONFIRMED — see note above.
+const IVI_TOKEN_PATH = '/WS/Login.asmx/GetRESTToken';
+
+// This must stay in sync with CONFIG_KEY in PotatoStorage.jsx — that's the
+// Firestore doc (inside the potatoStorage collection) holding the bay list,
+// which is where each bay's own iviPanelId field lives. If that constant
+// ever changes on the client side, it has to change here too.
+const POTATO_STORAGE_BAYS_CONFIG_KEY = 'norland-bays-config-v4';
+
+function iviParseSetCookies(res) {
+  const raw =
+    typeof res.headers.getSetCookie === 'function'
+      ? res.headers.getSetCookie()
+      : [res.headers.get('set-cookie')].filter(Boolean);
+  const jar = {};
+  for (const line of raw) {
+    const pair = line.split(';')[0];
+    const idx = pair.indexOf('=');
+    if (idx > -1) jar[pair.slice(0, idx).trim()] = pair.slice(idx + 1).trim();
+  }
+  return jar;
+}
+function iviCookieHeader(jar) {
+  return Object.entries(jar)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('; ');
+}
+
+/**
+ * Two-step login, confirmed against live traffic:
+ *   1. POST LoginUser with {Username, Password, ClientData:"ReactJS"} — a
+ *      classic ASP.NET AJAX-enabled web service call. The response body
+ *      itself is trivial; the real result is the .ASPXAUTH cookie it sets.
+ *      ClientData is sent as-is because the live app sends it — dropping it
+ *      is untested and might be what a server-side check keys off of.
+ *   2. POST GetRESTToken using that cookie — returns a short-lived JWT
+ *      (~15 min, per its own "expires" field) used as a bearer token for
+ *      the actual data endpoint. Confirmed live: the response is
+ *      double-JSON-wrapped, {"d": "{\"token\":\"...\",\"expires\":895}"} —
+ *      the classic ASMX "d"-wrapper, so the inner string needs a second
+ *      JSON.parse.
+ */
+async function iviAuthenticate() {
+  const username = IVI_USERNAME.value();
+  const password = IVI_PASSWORD.value();
+
+  const loginRes = await fetch(`${IVI_BASE_URL}${IVI_LOGIN_PATH}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ Username: username, Password: password, ClientData: 'ReactJS' }),
+  });
+  if (!loginRes.ok) {
+    throw new Error(`IVI login failed: ${loginRes.status} ${await loginRes.text()}`);
+  }
+  const jar = iviParseSetCookies(loginRes);
+  if (!Object.keys(jar).length) {
+    throw new Error("IVI login didn't return a session cookie — check for a changed login flow.");
+  }
+  const cookieHeader = iviCookieHeader(jar);
+
+  const tokenRes = await fetch(`${IVI_BASE_URL}${IVI_TOKEN_PATH}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: cookieHeader },
+    body: '{}',
+  });
+  if (!tokenRes.ok) {
+    throw new Error(`IVI GetRESTToken failed: ${tokenRes.status} ${await tokenRes.text()}`);
+  }
+  const tokenJson = await tokenRes.json();
+  let inner;
+  try {
+    inner = JSON.parse(tokenJson.d);
+  } catch (err) {
+    throw new Error(`IVI GetRESTToken response wasn't in the expected {"d": "..."} shape: ${JSON.stringify(tokenJson)}`);
+  }
+  if (!inner.token) {
+    throw new Error('IVI GetRESTToken response had no token field — response shape may have changed.');
+  }
+  return { Authorization: `bearer ${inner.token}` };
+}
+
+async function iviGetPanelStatus(panelId, authHeaders) {
+  const res = await fetch(`${IVI_BASE_URL}/IVI.Central.WebService/v1/Panel/${panelId}/Status`, {
+    headers: authHeaders,
+  });
+  if (!res.ok) throw new Error(`IVI panel status error ${res.status} on panel ${panelId}: ${await res.text()}`);
+  return res.json();
+}
+
+// Reads which panels are actually linked to a bay, straight from the same
+// Firestore doc PotatoStorage.jsx itself reads/writes — no separate config
+// to keep in sync by hand beyond the key name above.
+async function iviFetchLinkedPanels() {
+  const db = admin.firestore();
+  const snap = await db.collection('potatoStorage').doc(POTATO_STORAGE_BAYS_CONFIG_KEY).get();
+  if (!snap.exists) return [];
+  let bays;
+  try {
+    bays = JSON.parse(snap.data().value);
+  } catch {
+    return [];
+  }
+  return (Array.isArray(bays) ? bays : [])
+    .filter((b) => b.iviPanelId)
+    .map((b) => ({ bayId: b.id, bayName: b.name, panelId: b.iviPanelId }));
+}
+
+/**
+ * Maps the raw /Status payload into a flatter, normalized doc. Confirmed
+ * field-by-field against one live panel's real response.
+ */
+function iviNormalizeReading(raw, bayName) {
+  const data = raw?.Data || {};
+  const num = (v) => {
+    if (v === '' || v == null) return null;
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  // One probe came back at -165.6°F in the live sample this was built
+  // against — obviously a disconnected/bad sensor, not a real reading.
+  // Anything outside a generous plausible range for a potato pile gets
+  // nulled rather than shown as if it were current, same reasoning as
+  // Agri-Stor's "dis" flag.
+  const plausibleTemp = (v) => (v != null && v > -20 && v < 150 ? v : null);
+
+  return {
+    panelId: raw.PanelId ?? null,
+    panelName: raw.PanelName ?? bayName ?? null,
+    panelType: raw.PanelType ?? null,
+    // IsOffline/IsSystemOffline and a Status string other than
+    // "Communicating" are the three signs of a panel that's actually lost
+    // contact, vs. one that's just idle/off.
+    status: raw.IsOffline || raw.IsSystemOffline || raw.Status !== 'Communicating' ? 'network_error' : 'ok',
+    panelState: raw.PanelState ?? null,
+    systemControlState: data['System Control State'] ?? null,
+
+    supplyTempF: plausibleTemp(num(raw.Supply)),
+    supplyRH: num(raw.SupplyRH),
+    returnTempF: plausibleTemp(num(raw.Return)),
+    returnRH: num(raw.ReturnRH),
+    outdoorTempF: plausibleTemp(num(raw.OutDoor)),
+    outdoorRH: num(raw.OutDoorRH),
+    indoorTempF: plausibleTemp(num(data.Indoor)),
+    co2Ppm: num(data.Co2),
+    setpointF: num(data.Setpoint),
+
+    // Eight-point pile probe readings — "Red/White/Blue/Green" are IVI's
+    // own color-coded probe labels, not literal colors of anything. Each
+    // passed through the same implausible-value filter as the main temps.
+    pileProbesF: {
+      bottomSouth: plausibleTemp(num(data['Bottom South'])),
+      bottomSouthMid: plausibleTemp(num(data['Bottom South Mid'])),
+      bottomNorthMid: plausibleTemp(num(data['Bottom North Mid'])),
+      bottomNorth: plausibleTemp(num(data['Bottom North'])),
+      topRed: plausibleTemp(num(data['Top Red'])),
+      topWhite: plausibleTemp(num(data['Top White'])),
+      topBlue: plausibleTemp(num(data['Top Blue'])),
+      topGreen: plausibleTemp(num(data['Top Green'])),
+    },
+    pileDeltaF: num(data['Pile Delta']),
+
+    fanPct: num(data['Fans %']),
+    coolingPct: num(data['Cooling %']),
+    curingPct: num(data['Curing %']),
+    referPct: num(data['Refer %']),
+    humidicellPct: num(data['Humidicell %']),
+    humidifierPct: num(data['Humidifier %']),
+    defrostPct: num(data['Defrost %']),
+
+    equipment: raw.EquipmentStates || {},
+
+    seasonRuntimeHours: num(data['Season Runtime']),
+
+    // Confirmed to be a genuine PER-PANEL timestamp (unlike the Agri-Stor
+    // field that turned out shared/useless across every bin) — safe to use
+    // client-side for "how fresh is this."
+    panelLastUpdated: raw.LastUpdated || null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+}
+
+async function syncIviReadingsOnce() {
+  const db = admin.firestore();
+  const linked = await iviFetchLinkedPanels();
+  if (linked.length === 0) {
+    console.warn('IVI sync: no bays have an IVI panel ID set yet (Manage Sites) — nothing to sync.');
+    return { written: 0, total: 0 };
+  }
+
+  const authHeaders = await iviAuthenticate();
+
+  const batch = db.batch();
+  let written = 0;
+  for (const { panelId, bayName } of linked) {
+    try {
+      const raw = await iviGetPanelStatus(panelId, authHeaders);
+      const reading = iviNormalizeReading(raw, bayName);
+      const ref = db.collection('iviReadings').doc(panelId);
+      batch.set(ref, reading, { merge: true });
+      written++;
+    } catch (err) {
+      // One bad/renamed panel ID shouldn't take the whole sync down — log
+      // and keep going so everyone else's reading still gets written.
+      console.error(`IVI sync: failed to fetch panel ${panelId} (${bayName}):`, err.message);
+    }
+  }
+  await batch.commit();
+  return { written, total: linked.length };
+}
+
+// Runs automatically every hour, same cadence as the Agri-Stor sync.
+exports.syncIviReadings = onSchedule(
+  {
+    schedule: 'every 60 minutes',
+    secrets: [IVI_USERNAME, IVI_PASSWORD],
+    retryCount: 1,
+    timeoutSeconds: 60,
+    memory: '256MiB',
+  },
+  async () => {
+    try {
+      const result = await syncIviReadingsOnce();
+      console.log(`IVI sync: wrote ${result.written} of ${result.total} linked panel(s).`);
+    } catch (err) {
+      console.error('IVI sync failed:', err);
+    }
+  }
+);
+
+// Manual trigger for testing right after deploy, same as Agri-Stor's.
+exports.syncIviReadingsNow = onRequest(
+  { secrets: [IVI_USERNAME, IVI_PASSWORD], timeoutSeconds: 60, memory: '256MiB' },
+  async (req, res) => {
+    try {
+      const result = await syncIviReadingsOnce();
+      res.status(200).send(`IVI sync: wrote ${result.written} of ${result.total} linked panel(s).`);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send(err.message);
+    }
+  }
+);
