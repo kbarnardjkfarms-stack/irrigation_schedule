@@ -1497,7 +1497,11 @@ async function iviAuthenticate() {
 
   const loginRes = await fetch(`${IVI_BASE_URL}${IVI_LOGIN_PATH}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    // Accept-Language matches what the real browser sends on every request
+    // (confirmed via captured traffic) — GetRESTToken below throws a
+    // CultureNotFoundException without a valid one present, so it's sent
+    // here too defensively even though login itself worked without it.
+    headers: { 'Content-Type': 'application/json', 'Accept-Language': 'en-US,en;q=0.9' },
     body: JSON.stringify({ Username: username, Password: password, ClientData: 'ReactJS' }),
   });
   if (!loginRes.ok) {
@@ -1514,7 +1518,10 @@ async function iviAuthenticate() {
     // Confirmed live: this request carries Content-Length: 0 — a genuinely
     // empty body, not "{}" (which would be 2 bytes). GetRESTToken takes no
     // parameters, so this matches exactly what the real app sends.
-    headers: { 'Content-Type': 'application/json', Cookie: cookieHeader },
+    // Accept-Language is required here specifically — without it, the
+    // server throws CultureNotFoundException trying to parse a culture
+    // from something that isn't this header (confirmed via a live 500).
+    headers: { 'Content-Type': 'application/json', 'Accept-Language': 'en-US,en;q=0.9', Cookie: cookieHeader },
     body: '',
   });
   if (!tokenRes.ok) {
@@ -1535,7 +1542,7 @@ async function iviAuthenticate() {
 
 async function iviGetPanelStatus(panelId, authHeaders) {
   const res = await fetch(`${IVI_BASE_URL}/IVI.Central.WebService/v1/Panel/${panelId}/Status`, {
-    headers: authHeaders,
+    headers: { 'Accept-Language': 'en-US,en;q=0.9', ...authHeaders },
   });
   if (!res.ok) throw new Error(`IVI panel status error ${res.status} on panel ${panelId}: ${await res.text()}`);
   return res.json();
