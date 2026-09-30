@@ -1807,6 +1807,26 @@ function useIviReading(panelId) {
   }, [panelId]);
   return reading;
 }
+// Historical IVI points for this panel (supply/return temp, panel Δ T),
+// written hourly by syncIviReadings' history subcollection — same role as
+// useAgristorHistory above, separate from the single "latest reading" doc
+// useIviReading listens to. Only starts accumulating from whenever that
+// history-writing update was deployed — no retroactive backfill.
+function useIviHistory(panelId) {
+  const [points, setPoints] = useState([]);
+  useEffect(() => {
+    if (!panelId) { setPoints([]); return; }
+    const ref = collection(db, "iviReadings", panelId, "history");
+    const unsub = onSnapshot(ref, (snap) => {
+      setPoints(snap.docs.map((d) => d.data()));
+    }, (err) => {
+      console.error("IVI history listen failed:", err);
+      setPoints([]);
+    });
+    return () => unsub();
+  }, [panelId]);
+  return points;
+}
 // Same aggregation approach as buildBayDaySeries (see below): the sync runs
 // hourly, so a given date can have several history points — average them
 // per day rather than requiring exactly one, then recompute panel Δ T from
@@ -1831,15 +1851,44 @@ function buildAgristorDaySeries(points) {
     })
     .sort((a, b) => a.date.localeCompare(b.date));
 }
-// Merges the physical pipe-check day series with the Agri-Stor day series
-// on date, so both plot against one shared x-axis — the union of every
-// date either side has data for, not just days with both.
-function mergeDaySeries(physical, agristor) {
+// Same aggregation as buildAgristorDaySeries above, for IVI's supply/return
+// fields — kept as a separate function (rather than a shared generic one)
+// since the two vendors' field names and terminology genuinely differ
+// (plenum/return air vs. supply/return), and forcing them through one
+// generic function would just move that difference into extra parameters.
+function buildIviDaySeries(points) {
+  const dayMap = new Map();
+  points.forEach((p) => {
+    if (!p.date) return;
+    if (!dayMap.has(p.date)) dayMap.set(p.date, { supplySum: 0, supplyCount: 0, returnSum: 0, returnCount: 0 });
+    const d = dayMap.get(p.date);
+    if (p.supplyTempF != null) { d.supplySum += p.supplyTempF; d.supplyCount += 1; }
+    if (p.returnTempF != null) { d.returnSum += p.returnTempF; d.returnCount += 1; }
+  });
+  return Array.from(dayMap.entries())
+    .map(([date, d]) => {
+      const supply = d.supplyCount ? Math.round((d.supplySum / d.supplyCount) * 10) / 10 : null;
+      const returnTemp = d.returnCount ? Math.round((d.returnSum / d.returnCount) * 10) / 10 : null;
+      const panelDelta = supply != null && returnTemp != null ? Math.round((returnTemp - supply) * 10) / 10 : null;
+      return { date, supply, returnTemp, panelDelta };
+    })
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+// Merges the physical pipe-check day series with the Agri-Stor and/or IVI
+// day series on date, so all of them plot against one shared x-axis — the
+// union of every date any side has data for, not just days with all three.
+// ivi defaults to [] so every existing call site (before IVI history
+// existed) keeps working unchanged.
+function mergeDaySeries(physical, agristor, ivi = []) {
   const byDate = new Map();
   physical.forEach((r) => byDate.set(r.date, { date: r.date, top: r.top, bottom: r.bottom, actualDelta: r.delta }));
   agristor.forEach((r) => {
     const existing = byDate.get(r.date) || { date: r.date };
     byDate.set(r.date, { ...existing, plenum: r.plenum, returnAir: r.returnAir, panelDelta: r.panelDelta });
+  });
+  ivi.forEach((r) => {
+    const existing = byDate.get(r.date) || { date: r.date };
+    byDate.set(r.date, { ...existing, iviSupply: r.supply, iviReturn: r.returnTemp, iviPanelDelta: r.panelDelta });
   });
   return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -2716,12 +2765,14 @@ function TemperatureTab({ bays, dataById, onAddTemp, onDeleteTemp, readOnly }) {
   const agristorReading = useAgristorReading(bay?.agristorBinName);
   const agristorHistory = useAgristorHistory(bay?.agristorBinName);
   const agristorSeries = useMemo(() => buildAgristorDaySeries(agristorHistory), [agristorHistory]);
-  const combinedSeries = useMemo(() => mergeDaySeries(series, agristorSeries), [series, agristorSeries]);
   const livePanelDelta = agristorReading?.returnVsPlenumF ?? null;
-  // IVI side — live reading only for now (no history subcollection yet,
-  // unlike Agri-Stor's, so there's nothing to add to the trend chart below
-  // until that gets built the same way Agri-Stor's history was added later).
+  // IVI side — same shape as Agri-Stor's: a live reading for the "right
+  // now" stat, plus hourly history (see syncIviReadings' history writes)
+  // for the trend chart below.
   const iviReading = useIviReading(bay?.iviPanelId);
+  const iviHistory = useIviHistory(bay?.iviPanelId);
+  const iviSeries = useMemo(() => buildIviDaySeries(iviHistory), [iviHistory]);
+  const combinedSeries = useMemo(() => mergeDaySeries(series, agristorSeries, iviSeries), [series, agristorSeries, iviSeries]);
   const iviLivePanelDelta = iviReading?.returnTempF != null && iviReading?.supplyTempF != null
     ? Math.round((iviReading.returnTempF - iviReading.supplyTempF) * 10) / 10
     : null;
@@ -2789,7 +2840,7 @@ function TemperatureTab({ bays, dataById, onAddTemp, onDeleteTemp, readOnly }) {
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 2, color: "#eef1f6" }}>{bay?.name} — temperatures over time</div>
         <div style={{ fontSize: 11, color: "#6f7890", marginBottom: 8 }}>
-          Top/Bottom are your physical pipe checks (dots mark a logged day); Plenum/Return air are the Agri-Stor sync (hourly, averaged per day).
+          Top/Bottom are your physical pipe checks (dots mark a logged day); Plenum/Return air and Supply/Return are the Agri-Stor and IVI syncs respectively (hourly, averaged per day).
         </div>
         {combinedSeries.length === 0 ? (
           <div style={{ color: "#5b6478", fontSize: 13 }}>No readings yet for this bay.</div>
@@ -2806,6 +2857,8 @@ function TemperatureTab({ bays, dataById, onAddTemp, onDeleteTemp, readOnly }) {
                   <Line type="monotone" dataKey="bottom" stroke="#3ba8e8" strokeWidth={2} dot={{ r: 3 }} name="Bottom °F (avg)" connectNulls />
                   <Line type="monotone" dataKey="plenum" stroke="#2cd4b5" strokeWidth={1.5} dot={false} name="Plenum °F" connectNulls />
                   <Line type="monotone" dataKey="returnAir" stroke="#e56bc0" strokeWidth={1.5} dot={false} name="Return air °F" connectNulls />
+                  <Line type="monotone" dataKey="iviSupply" stroke="#8a63d2" strokeWidth={1.5} dot={false} name="Supply °F (IVI)" connectNulls />
+                  <Line type="monotone" dataKey="iviReturn" stroke="#e0954f" strokeWidth={1.5} dot={false} name="Return °F (IVI)" connectNulls />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -2814,10 +2867,12 @@ function TemperatureTab({ bays, dataById, onAddTemp, onDeleteTemp, readOnly }) {
               <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#3ba8e8" /> Bottom (physical)</span>
               <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#2cd4b5" /> Plenum (Agri-Stor)</span>
               <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#e56bc0" /> Return air (Agri-Stor)</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#8a63d2" /> Supply (IVI)</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#e0954f" /> Return (IVI)</span>
             </div>
             <div style={{ fontWeight: 700, marginBottom: 2, color: "#eef1f6" }}>{bay?.name} — Δ T over time</div>
             <div style={{ fontSize: 11, color: "#6f7890", marginBottom: 8 }}>
-              Actual Δ T (top − bottom, from your checks) vs. panel Δ T (return air − plenum, from Agri-Stor) — same dates as the chart above.
+              Actual Δ T (top − bottom, from your checks) vs. panel Δ T (Agri-Stor: return air − plenum; IVI: return − supply) — same dates as the chart above.
             </div>
             <div style={{ height: 180 }}>
               <ResponsiveContainer width="100%" height="100%">
@@ -2827,13 +2882,15 @@ function TemperatureTab({ bays, dataById, onAddTemp, onDeleteTemp, readOnly }) {
                   <YAxis stroke="#8790a3" fontSize={11} domain={["dataMin - 1", "dataMax + 1"]} label={{ value: "Δ T °F", angle: -90, position: "insideLeft", fill: "#8790a3", fontSize: 11 }} />
                   <Tooltip contentStyle={{ background: "#0e1420", border: "1px solid #2b3549", fontSize: 12 }} labelStyle={{ color: "#eef1f6" }} />
                   <Line type="monotone" dataKey="actualDelta" stroke="#a06bd6" strokeWidth={1.5} strokeDasharray="4 3" dot={{ r: 2 }} name="Actual Δ T" connectNulls />
-                  <Line type="monotone" dataKey="panelDelta" stroke="#d9722e" strokeWidth={1.5} dot={false} name="Panel Δ T" connectNulls />
+                  <Line type="monotone" dataKey="panelDelta" stroke="#d9722e" strokeWidth={1.5} dot={false} name="Panel Δ T (Agri-Stor)" connectNulls />
+                  <Line type="monotone" dataKey="iviPanelDelta" stroke="#4fd170" strokeWidth={1.5} dot={false} name="Panel Δ T (IVI)" connectNulls />
                 </LineChart>
               </ResponsiveContainer>
             </div>
             <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 11.5, color: "#c7cede", marginTop: 6 }}>
               <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#a06bd6" /> Actual Δ T (physical)</span>
               <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#d9722e" /> Panel Δ T (Agri-Stor)</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5 }}><ColorDot color="#4fd170" /> Panel Δ T (IVI)</span>
             </div>
           </>
         )}
