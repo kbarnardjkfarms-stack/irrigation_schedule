@@ -1427,16 +1427,16 @@ exports.debugAgristorRawBin = onRequest(
 // STATUS: confirmed against live traffic (captured via a redacted browser
 // DevTools session — no real credential/token values were ever seen here):
 //   - LoginUser request/response shape and the .ASPXAUTH cookie it sets
-//   - GetRESTToken's double-JSON-wrapped {"d": "{...}"} response and its
-//     ~15 minute expiry
+//   - GetRESTToken lives on UserLink.asmx (NOT Login.asmx — an earlier
+//     guess that failed with "Unknown web method" when tested), is called
+//     with a genuinely empty body (Content-Length: 0, not "{}"), and
+//     returns a double-JSON-wrapped {"d": "{...}"} response with a
+//     ~15 minute token expiry
 //   - The full Panel/{id}/Status response shape (confirmed against one
 //     real panel's live data)
-// NOT confirmed: GetRESTToken's exact request URL/method. It was never
-// directly observed — IVI_TOKEN_PATH below is a best guess based on it
-// living in the same .asmx file as LoginUser, a common ASP.NET pattern.
-// If the very first deploy's test run fails at the token step, this is the
-// first thing to check — re-capture GetRESTToken's Request URL from the
-// browser Network tab and correct the constant below.
+// The GetRESTToken fix above addresses a confirmed live failure (see
+// testIviPanel below) — not yet re-confirmed as fully working end-to-end
+// past this point.
 // ---------------------------------------------------------------------
 
 // Set these once with:
@@ -1448,7 +1448,9 @@ const IVI_PASSWORD = defineSecret('IVI_PASSWORD');
 const IVI_BASE_URL = 'https://centurion.ivi.us.com';
 const IVI_LOGIN_PATH = '/WS/Login.asmx/LoginUser';
 // UNCONFIRMED — see note above.
-const IVI_TOKEN_PATH = '/WS/Login.asmx/GetRESTToken';
+// Confirmed against live traffic — lives on UserLink.asmx, NOT Login.asmx
+// (the original guess). Different .asmx file entirely.
+const IVI_TOKEN_PATH = '/WS/UserLink.asmx/GetRESTToken';
 
 // This must stay in sync with CONFIG_KEY in PotatoStorage.jsx — that's the
 // Firestore doc (inside the potatoStorage collection) holding the bay list,
@@ -1509,8 +1511,11 @@ async function iviAuthenticate() {
 
   const tokenRes = await fetch(`${IVI_BASE_URL}${IVI_TOKEN_PATH}`, {
     method: 'POST',
+    // Confirmed live: this request carries Content-Length: 0 — a genuinely
+    // empty body, not "{}" (which would be 2 bytes). GetRESTToken takes no
+    // parameters, so this matches exactly what the real app sends.
     headers: { 'Content-Type': 'application/json', Cookie: cookieHeader },
-    body: '{}',
+    body: '',
   });
   if (!tokenRes.ok) {
     throw new Error(`IVI GetRESTToken failed: ${tokenRes.status} ${await tokenRes.text()}`);
