@@ -2049,7 +2049,7 @@ function IviConditionsCard({ bay }) {
           </div>
           <div style={{ fontSize: 10.5, letterSpacing: 0.5, textTransform: "uppercase", color: "#6f7890", marginBottom: 6 }}>Equipment</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: 10, fontSize: 12.5, color: "#c7cede" }}>
-            <LiveStat label="Fan" value={reading.fanPct != null ? `${reading.fanPct}%` : "—"} />
+            <LiveStat label="Fan" value={reading.fanHz != null ? `${reading.fanHz} Hz` : "—"} />
             <LiveStat label="Cooling" value={reading.coolingPct != null ? `${reading.coolingPct}%` : "—"} />
             <LiveStat label="Curing" value={reading.curingPct != null ? `${reading.curingPct}%` : "—"} />
             <LiveStat label="Refer" value={reading.referPct != null ? `${reading.referPct}%` : "—"} />
@@ -2167,10 +2167,12 @@ function IviEquipmentStatusPanel({ bay, topOffset = 10 }) {
   if (!bay.iviPanelId || reading === null) return null;
   const loading = reading === undefined;
   const isError = !loading && reading.status === "network_error";
-  const fanPct = reading?.fanPct ?? null;
+  // VFD-driven fan — Hz (0-60) is the meaningful number here, not a
+  // percentage. 0 Hz still means "off" for stopped/spinning purposes.
+  const fanHz = reading?.fanHz ?? null;
   const referPct = reading?.referPct ?? null;
-  const stopped = !loading && (fanPct == null || fanPct <= 0) && (referPct == null || referPct <= 0);
-  const fanSpinning = !loading && fanPct != null && fanPct > 0;
+  const stopped = !loading && (fanHz == null || fanHz <= 0) && (referPct == null || referPct <= 0);
+  const fanSpinning = !loading && fanHz != null && fanHz > 0;
   const referActive = !loading && referPct != null && referPct > 0;
   const supplyTempF = reading?.supplyTempF ?? null;
   const returnTempF = reading?.returnTempF ?? null;
@@ -2215,7 +2217,7 @@ function IviEquipmentStatusPanel({ bay, topOffset = 10 }) {
                 style={fanSpinning ? { animation: "iviFanSpin 1.6s linear infinite" } : undefined}
               />
               <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#eef1f6" }}>{fanPct != null ? `${fanPct}%` : "—"}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#eef1f6" }}>{fanHz != null ? `${fanHz} Hz` : "—"}</div>
                 <div style={{ fontSize: 9.5, color: "#6f7890", letterSpacing: 0.3 }}>FAN</div>
               </div>
             </div>
@@ -2311,9 +2313,9 @@ function IviYardBayBadge({ bay }) {
       </div>
     );
   }
-  const fanPct = reading?.fanPct ?? null;
+  const fanHz = reading?.fanHz ?? null;
   const referPct = reading?.referPct ?? null;
-  const fanOn = fanPct != null && fanPct > 0;
+  const fanOn = fanHz != null && fanHz > 0;
   const referOn = referPct != null && referPct > 0;
   const stopped = !fanOn && !referOn;
   const supply = reading?.supplyTempF ?? null;
@@ -2323,7 +2325,7 @@ function IviYardBayBadge({ bay }) {
     <div style={{ marginTop: 3, paddingTop: 3, borderTop: "1px solid #2b3549" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
         <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
-          <Fan size={10} color={fanOn ? "#f2c14e" : "#4a5468"} /> {fanPct != null ? `${fanPct}%` : "—"}
+          <Fan size={10} color={fanOn ? "#f2c14e" : "#4a5468"} /> {fanHz != null ? `${fanHz}Hz` : "—"}
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
           <Snowflake size={10} color={referOn ? "#5fd1e6" : "#4a5468"} /> {referPct != null ? `${referPct}%` : "—"}
