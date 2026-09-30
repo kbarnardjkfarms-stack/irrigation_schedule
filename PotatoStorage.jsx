@@ -1047,6 +1047,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
               <div style={{ fontWeight: 700 }}>{bay.name}</div>
               <div style={{ color: "#9aa4b8", marginTop: 1 }}>{Math.round((bayStats?.fillPct || 0) * 100)}% full</div>
               <YardBayAgristorBadge bay={bay} />
+              <IviYardBayBadge bay={bay} />
             </div>
           );
         }
@@ -2033,6 +2034,9 @@ function EquipmentStatusPanel({ bay }) {
   const stopped = !loading && (fanPct == null || fanPct <= 0) && (coolPct == null || coolPct <= 0);
   const fanSpinning = !loading && fanPct != null && fanPct > 0;
   const coolActive = !loading && coolPct != null && coolPct > 0;
+  const plenumTempF = reading?.plenumTempF ?? null;
+  const returnAirTempF = reading?.returnAirTempF ?? null;
+  const deltaT = plenumTempF != null && returnAirTempF != null ? Math.round((returnAirTempF - plenumTempF) * 10) / 10 : null;
   return (
     <div
       style={{
@@ -2093,6 +2097,95 @@ function EquipmentStatusPanel({ bay }) {
             </div>
           </div>
         )}
+        {!loading && !isError && (
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 6, marginTop: 8, paddingTop: 7, borderTop: "1px solid #1c2434", fontSize: 10, color: "#9aa4b8" }}>
+            <span>Plen {plenumTempF != null ? `${plenumTempF}°` : "—"}</span>
+            <span>Ret {returnAirTempF != null ? `${returnAirTempF}°` : "—"}</span>
+            <span>ΔT {deltaT != null ? `${deltaT}°` : "—"}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+// IVI/Centurion equivalent of EquipmentStatusPanel above — same physical-
+// control-panel styling, same Fan/Refer language, positioned via topOffset
+// so it can stack below the Agri-Stor panel rather than overlap it on a bay
+// that happens to have both integrations linked (BayDetail passes that
+// down based on whether bay.agristorBinName is also set).
+function IviEquipmentStatusPanel({ bay, topOffset = 10 }) {
+  const reading = useIviReading(bay.iviPanelId);
+  if (!bay.iviPanelId || reading === null) return null;
+  const loading = reading === undefined;
+  const isError = !loading && reading.status === "network_error";
+  const fanPct = reading?.fanPct ?? null;
+  const referPct = reading?.referPct ?? null;
+  const stopped = !loading && (fanPct == null || fanPct <= 0) && (referPct == null || referPct <= 0);
+  const fanSpinning = !loading && fanPct != null && fanPct > 0;
+  const referActive = !loading && referPct != null && referPct > 0;
+  const supplyTempF = reading?.supplyTempF ?? null;
+  const returnTempF = reading?.returnTempF ?? null;
+  const deltaT = supplyTempF != null && returnTempF != null ? Math.round((returnTempF - supplyTempF) * 10) / 10 : null;
+  return (
+    <div
+      style={{
+        position: "absolute", top: topOffset, right: 10, width: 190,
+        background: "linear-gradient(180deg, #232c3d 0%, #161c28 100%)",
+        border: "1px solid #3a4358", borderRadius: 12, padding: 3,
+        boxShadow: "0 4px 14px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06)",
+      }}
+    >
+      <style>{`@keyframes iviFanSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      <div style={{ background: "#0a0f18", borderRadius: 9, padding: "9px 10px", border: "1px solid #1c2434" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: "#8790a3", letterSpacing: 0.4, textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {reading?.panelName || "IVI"}
+          </div>
+          {!loading && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 700,
+              color: isError ? "#e08787" : stopped ? "#8790a3" : "#8fd19e",
+            }}>
+              {isError ? <AlertTriangle size={11} color="#e08787" /> : <Power size={11} color={stopped ? "#8790a3" : "#8fd19e"} />}
+              {isError ? "NETWORK ERROR" : stopped ? "STOPPED" : "RUNNING"}
+            </div>
+          )}
+        </div>
+        {loading ? (
+          <div style={{ fontSize: 11, color: "#5b6478" }}>Loading…</div>
+        ) : isError ? (
+          <div style={{ fontSize: 10.5, color: "#c99", lineHeight: 1.4 }}>
+            Hidden until panel reconnects.
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7 }}>
+              <Fan
+                size={20}
+                color={fanSpinning ? "#f2c14e" : "#4a5468"}
+                style={fanSpinning ? { animation: "iviFanSpin 1.6s linear infinite" } : undefined}
+              />
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#eef1f6" }}>{fanPct != null ? `${fanPct}%` : "—"}</div>
+                <div style={{ fontSize: 9.5, color: "#6f7890", letterSpacing: 0.3 }}>FAN</div>
+              </div>
+            </div>
+            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7 }}>
+              <Snowflake size={18} color={referActive ? "#5fd1e6" : "#4a5468"} />
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#eef1f6" }}>{referPct != null ? `${referPct}%` : "—"}</div>
+                <div style={{ fontSize: 9.5, color: "#6f7890", letterSpacing: 0.3 }}>REFER</div>
+              </div>
+            </div>
+          </div>
+        )}
+        {!loading && !isError && (
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 6, marginTop: 8, paddingTop: 7, borderTop: "1px solid #1c2434", fontSize: 10, color: "#9aa4b8" }}>
+            <span>Sup {supplyTempF != null ? `${supplyTempF}°` : "—"}</span>
+            <span>Ret {returnTempF != null ? `${returnTempF}°` : "—"}</span>
+            <span>ΔT {deltaT != null ? `${deltaT}°` : "—"}</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2148,6 +2241,49 @@ function YardBayAgristorBadge({ bay }) {
       <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 2, fontSize: 9.5, color: "#9aa4b8" }}>
         <span>Plen {plenum != null ? `${plenum}°` : "—"}</span>
         <span>Ret {returnAir != null ? `${returnAir}°` : "—"}</span>
+        <span>ΔT {deltaT != null ? `${deltaT}°` : "—"}</span>
+      </div>
+    </div>
+  );
+}
+// IVI/Centurion equivalent of YardBayAgristorBadge above — same compact,
+// always-a-number treatment, using IVI's Fan/Refer and Supply/Return in
+// place of Agri-Stor's Fan/Cooling and Plenum/Return air. Renders below the
+// Agri-Stor badge naturally (normal block flow, no absolute positioning) on
+// a bay linked to both, so nothing overlaps.
+function IviYardBayBadge({ bay }) {
+  const reading = useIviReading(bay.iviPanelId);
+  if (!bay.iviPanelId || reading === null || reading === undefined) return null;
+  if (reading.status === "network_error") {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3, paddingTop: 3, borderTop: "1px solid #2b3549", fontSize: 9.5, color: "#e08787" }}>
+        <AlertTriangle size={10} color="#e08787" />
+        <span style={{ fontWeight: 700, letterSpacing: 0.3 }}>NETWORK ERROR</span>
+      </div>
+    );
+  }
+  const fanPct = reading?.fanPct ?? null;
+  const referPct = reading?.referPct ?? null;
+  const fanOn = fanPct != null && fanPct > 0;
+  const referOn = referPct != null && referPct > 0;
+  const stopped = !fanOn && !referOn;
+  const supply = reading?.supplyTempF ?? null;
+  const returnTemp = reading?.returnTempF ?? null;
+  const deltaT = supply != null && returnTemp != null ? Math.round((returnTemp - supply) * 10) / 10 : null;
+  return (
+    <div style={{ marginTop: 3, paddingTop: 3, borderTop: "1px solid #2b3549" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
+          <Fan size={10} color={fanOn ? "#f2c14e" : "#4a5468"} /> {fanPct != null ? `${fanPct}%` : "—"}
+        </span>
+        <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
+          <Snowflake size={10} color={referOn ? "#5fd1e6" : "#4a5468"} /> {referPct != null ? `${referPct}%` : "—"}
+        </span>
+        {stopped && <span style={{ fontSize: 9, fontWeight: 700, color: "#8790a3", letterSpacing: 0.3 }}>STOPPED</span>}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 2, fontSize: 9.5, color: "#9aa4b8" }}>
+        <span>Sup {supply != null ? `${supply}°` : "—"}</span>
+        <span>Ret {returnTemp != null ? `${returnTemp}°` : "—"}</span>
         <span>ΔT {deltaT != null ? `${deltaT}°` : "—"}</span>
       </div>
     </div>
@@ -2303,6 +2439,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
           <Scene3D bays={[bay]} statsById={{ [bay.id]: stats }} mode="interior" onSelect={() => {}}
             invFilter={invFilter} buildingsById={buildingsById} locationsById={locationsById} />
           <EquipmentStatusPanel bay={bay} />
+          <IviEquipmentStatusPanel bay={bay} topOffset={bay.agristorBinName ? 175 : 10} />
         </div>
         <div style={{ marginTop: 8 }}><Legend bays={[bay]} /></div>
       </div>
