@@ -4,7 +4,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import {
   Warehouse, Thermometer, ClipboardCheck, Package, TrendingDown, Map as MapIcon,
   Plus, ChevronRight, MapPin, Gauge, BarChart3, AlertTriangle, Check, Layers, Users, Sprout, Building2, FlaskConical, Trash2,
-  Snowflake, Power, WifiOff, Wifi, Wind,
+  Fan, Snowflake, Power, WifiOff, Wifi, Wind,
 } from "lucide-react";
 import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, query, where, getDocs, onSnapshot } from "firebase/firestore";
 import { db } from "./firebase.js"; // AIO's existing Firebase project — same login, no second sign-in
@@ -2090,9 +2090,11 @@ function EquipmentStatusPanel({ bay }) {
   // (see the note on LiveConditionsCard's equivalent split). Shown as two
   // labeled icons here for the same reason as that card: both names matter
   // depending on what's actually installed on a given bin.
+  const fanPct = reading?.fanPct ?? null;
   const referPct = reading?.refrigerationPct ?? null;
   const coolPct = reading?.coolingPct ?? null;
-  const stopped = !loading && (referPct == null || referPct <= 0) && (coolPct == null || coolPct <= 0);
+  const stopped = !loading && (fanPct == null || fanPct <= 0) && (referPct == null || referPct <= 0) && (coolPct == null || coolPct <= 0);
+  const fanSpinning = !loading && fanPct != null && fanPct > 0;
   const referActive = !loading && referPct != null && referPct > 0;
   const coolActive = !loading && coolPct != null && coolPct > 0;
   const plenumTempF = reading?.plenumTempF ?? null;
@@ -2107,6 +2109,7 @@ function EquipmentStatusPanel({ bay }) {
         boxShadow: "0 4px 14px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06)",
       }}
     >
+      <style>{`@keyframes agristorFanSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       <div style={{ background: "#0a0f18", borderRadius: 9, padding: "9px 10px", border: "1px solid #1c2434" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <div style={{ fontSize: 10, color: "#8790a3", letterSpacing: 0.4, textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -2136,20 +2139,25 @@ function EquipmentStatusPanel({ bay }) {
             Hidden until sensor reconnects.
           </div>
         ) : (
-          <div style={{ display: "flex", gap: 10 }}>
-            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7 }}>
-              <Snowflake size={20} color={referActive ? "#5fd1e6" : "#4a5468"} />
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#eef1f6" }}>{referPct != null ? `${referPct}%` : "—"}</div>
-                <div style={{ fontSize: 9.5, color: "#6f7890", letterSpacing: 0.3 }}>REFER</div>
-              </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, textAlign: "center" }}>
+              <Fan
+                size={16}
+                color={fanSpinning ? "#f2c14e" : "#4a5468"}
+                style={fanSpinning ? { animation: "agristorFanSpin 1.6s linear infinite" } : undefined}
+              />
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#eef1f6" }}>{fanPct != null ? `${fanPct}%` : "—"}</div>
+              <div style={{ fontSize: 8.5, color: "#6f7890", letterSpacing: 0.2 }}>FAN</div>
             </div>
-            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7 }}>
-              <Wind size={18} color={coolActive ? "#8fd19e" : "#4a5468"} />
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#eef1f6" }}>{coolPct != null ? `${coolPct}%` : "—"}</div>
-                <div style={{ fontSize: 9.5, color: "#6f7890", letterSpacing: 0.3 }}>COOLING</div>
-              </div>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, textAlign: "center" }}>
+              <Snowflake size={16} color={referActive ? "#5fd1e6" : "#4a5468"} />
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#eef1f6" }}>{referPct != null ? `${referPct}%` : "—"}</div>
+              <div style={{ fontSize: 8.5, color: "#6f7890", letterSpacing: 0.2 }}>REFER</div>
+            </div>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, textAlign: "center" }}>
+              <Wind size={16} color={coolActive ? "#8fd19e" : "#4a5468"} />
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#eef1f6" }}>{coolPct != null ? `${coolPct}%` : "—"}</div>
+              <div style={{ fontSize: 8.5, color: "#6f7890", letterSpacing: 0.2 }}>COOLING</div>
             </div>
           </div>
         )}
@@ -2175,12 +2183,14 @@ function IviEquipmentStatusPanel({ bay, topOffset = 10 }) {
   if (!bay.iviPanelId || reading === null) return null;
   const loading = reading === undefined;
   const isError = !loading && reading.status === "network_error";
-  // Refer (mechanical refrigeration) and Cooling (passive/door
-  // ventilation) are genuinely separate readings on IVI — when one's
-  // active the other reads 0.
+  // Fan (VFD, in Hz), Refer (mechanical refrigeration), and Cooling
+  // (passive/door ventilation) are three genuinely separate readings on
+  // IVI — when Refer is active, Cooling reads 0, and vice versa.
+  const fanHz = reading?.fanHz ?? null;
   const referPct = reading?.referPct ?? null;
   const coolPct = reading?.coolingPct ?? null;
-  const stopped = !loading && (referPct == null || referPct <= 0) && (coolPct == null || coolPct <= 0);
+  const stopped = !loading && (fanHz == null || fanHz <= 0) && (referPct == null || referPct <= 0) && (coolPct == null || coolPct <= 0);
+  const fanSpinning = !loading && fanHz != null && fanHz > 0;
   const referActive = !loading && referPct != null && referPct > 0;
   const coolActive = !loading && coolPct != null && coolPct > 0;
   const supplyTempF = reading?.supplyTempF ?? null;
@@ -2195,6 +2205,7 @@ function IviEquipmentStatusPanel({ bay, topOffset = 10 }) {
         boxShadow: "0 4px 14px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06)",
       }}
     >
+      <style>{`@keyframes iviFanSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       <div style={{ background: "#0a0f18", borderRadius: 9, padding: "9px 10px", border: "1px solid #1c2434" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <div style={{ fontSize: 10, color: "#8790a3", letterSpacing: 0.4, textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -2217,20 +2228,25 @@ function IviEquipmentStatusPanel({ bay, topOffset = 10 }) {
             Hidden until panel reconnects.
           </div>
         ) : (
-          <div style={{ display: "flex", gap: 10 }}>
-            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7 }}>
-              <Snowflake size={20} color={referActive ? "#5fd1e6" : "#4a5468"} />
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#eef1f6" }}>{referPct != null ? `${referPct}%` : "—"}</div>
-                <div style={{ fontSize: 9.5, color: "#6f7890", letterSpacing: 0.3 }}>REFER</div>
-              </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, textAlign: "center" }}>
+              <Fan
+                size={16}
+                color={fanSpinning ? "#f2c14e" : "#4a5468"}
+                style={fanSpinning ? { animation: "iviFanSpin 1.6s linear infinite" } : undefined}
+              />
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#eef1f6" }}>{fanHz != null ? `${fanHz}Hz` : "—"}</div>
+              <div style={{ fontSize: 8.5, color: "#6f7890", letterSpacing: 0.2 }}>FAN</div>
             </div>
-            <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 7 }}>
-              <Wind size={18} color={coolActive ? "#8fd19e" : "#4a5468"} />
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#eef1f6" }}>{coolPct != null ? `${coolPct}%` : "—"}</div>
-                <div style={{ fontSize: 9.5, color: "#6f7890", letterSpacing: 0.3 }}>COOLING</div>
-              </div>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, textAlign: "center" }}>
+              <Snowflake size={16} color={referActive ? "#5fd1e6" : "#4a5468"} />
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#eef1f6" }}>{referPct != null ? `${referPct}%` : "—"}</div>
+              <div style={{ fontSize: 8.5, color: "#6f7890", letterSpacing: 0.2 }}>REFER</div>
+            </div>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, textAlign: "center" }}>
+              <Wind size={16} color={coolActive ? "#8fd19e" : "#4a5468"} />
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#eef1f6" }}>{coolPct != null ? `${coolPct}%` : "—"}</div>
+              <div style={{ fontSize: 8.5, color: "#6f7890", letterSpacing: 0.2 }}>COOLING</div>
             </div>
           </div>
         )}
@@ -2274,11 +2290,13 @@ function YardBayAgristorBadge({ bay }) {
   }
   // Same single-sensor caveat as EquipmentStatusPanel above — Agri-Stor
   // only reports one equipment percentage, shown under both labels.
+  const fanPct = reading?.fanPct ?? null;
   const referPct = reading?.refrigerationPct ?? null;
   const coolPct = reading?.coolingPct ?? null;
+  const fanOn = fanPct != null && fanPct > 0;
   const referOn = referPct != null && referPct > 0;
   const coolOn = coolPct != null && coolPct > 0;
-  const stopped = !referOn && !coolOn;
+  const stopped = !fanOn && !referOn && !coolOn;
   const plenum = reading?.plenumTempF ?? null;
   const returnAir = reading?.returnAirTempF ?? null;
   // Same "return air minus plenum" formula as buildAgristorDaySeries' panelDelta,
@@ -2286,7 +2304,10 @@ function YardBayAgristorBadge({ bay }) {
   const deltaT = plenum != null && returnAir != null ? Math.round((returnAir - plenum) * 10) / 10 : null;
   return (
     <div style={{ marginTop: 3, paddingTop: 3, borderTop: "1px solid #2b3549" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
+          <Fan size={10} color={fanOn ? "#f2c14e" : "#4a5468"} /> {fanPct != null ? `${fanPct}%` : "—"}
+        </span>
         <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
           <Snowflake size={10} color={referOn ? "#5fd1e6" : "#4a5468"} /> {referPct != null ? `${referPct}%` : "—"}
         </span>
@@ -2319,17 +2340,22 @@ function IviYardBayBadge({ bay }) {
       </div>
     );
   }
+  const fanHz = reading?.fanHz ?? null;
   const referPct = reading?.referPct ?? null;
   const coolPct = reading?.coolingPct ?? null;
+  const fanOn = fanHz != null && fanHz > 0;
   const referOn = referPct != null && referPct > 0;
   const coolOn = coolPct != null && coolPct > 0;
-  const stopped = !referOn && !coolOn;
+  const stopped = !fanOn && !referOn && !coolOn;
   const supply = reading?.supplyTempF ?? null;
   const returnTemp = reading?.returnTempF ?? null;
   const deltaT = supply != null && returnTemp != null ? Math.round((returnTemp - supply) * 10) / 10 : null;
   return (
     <div style={{ marginTop: 3, paddingTop: 3, borderTop: "1px solid #2b3549" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
+          <Fan size={10} color={fanOn ? "#f2c14e" : "#4a5468"} /> {fanHz != null ? `${fanHz}Hz` : "—"}
+        </span>
         <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
           <Snowflake size={10} color={referOn ? "#5fd1e6" : "#4a5468"} /> {referPct != null ? `${referPct}%` : "—"}
         </span>
