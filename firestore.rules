@@ -173,10 +173,8 @@ service cloud.firestore {
     // Function (syncIviReadings in index.js) writes this with an Admin key
     // that bypasses these rules, so "write: false" only blocks the
     // browser, never the sync job. One doc per linked panel, keyed by the
-    // panel's own GUID. The history subcollection isn't written yet, but
-    // is pre-declared here matching agristorReadings/history's shape in
-    // case a trend chart gets added later the same way it was for
-    // Agri-Stor — costs nothing to have ready now.
+    // panel's own GUID, plus an hourly history subcollection (supply/
+    // return/Δ T over time) matching agristorReadings/history's shape.
     match /iviReadings/{panelId} {
       allow read: if signedIn();
       allow write: if false;
