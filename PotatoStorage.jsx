@@ -1781,6 +1781,31 @@ function useAgristorHistory(binName) {
   }, [binName]);
   return points;
 }
+/* ---------------------------------------------------------------
+   IVI / Centurion live conditions — read-only listener on the readings
+   the syncIviReadings / syncIviReadingsNow cloud functions (same Firebase
+   project's functions/index.js) write hourly into
+   iviReadings/{panelId}. Unlike Agri-Stor's bin name, a bay's IVI panel
+   ID (a GUID) is used directly as the Firestore doc id — no
+   normalization step needed, since it's already a stable identifier set
+   by hand in Manage Sites rather than a human-typed name that could vary
+   in casing/spacing.
+----------------------------------------------------------------*/
+function useIviReading(panelId) {
+  const [reading, setReading] = useState(undefined); // undefined = loading, null = no doc yet
+  useEffect(() => {
+    if (!panelId) { setReading(null); return; }
+    setReading(undefined);
+    const ref = doc(db, "iviReadings", panelId);
+    const unsub = onSnapshot(
+      ref,
+      (snap) => setReading(snap.exists() ? snap.data() : null),
+      (err) => { console.error("IVI reading listener failed:", err); setReading(null); }
+    );
+    return () => unsub();
+  }, [panelId]);
+  return reading;
+}
 // Same aggregation approach as buildBayDaySeries (see below): the sync runs
 // hourly, so a given date can have several history points — average them
 // per day rather than requiring exactly one, then recompute panel Δ T from
@@ -1900,6 +1925,89 @@ function LiveConditionsCard({ bay }) {
               .join(" / ")}
           />
         </div>
+      )}
+    </div>
+  );
+}
+// Read-only card showing this bay's latest IVI/Centurion panel reading,
+// synced in by a separate scheduled Cloud Function (see syncIviReadings in
+// the functions project) — this component never talks to IVI itself, it
+// only listens to the Firestore doc that job writes. Only rendered when a
+// bay actually has an IVI panel ID set — unlike LiveConditionsCard above,
+// there's no "not linked yet" placeholder here, since a bay with neither
+// integration configured would otherwise show two empty placeholder boxes
+// side by side.
+function IviConditionsCard({ bay }) {
+  const reading = useIviReading(bay.iviPanelId);
+  if (!bay.iviPanelId) return null;
+  if (reading === undefined) {
+    return (
+      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 14, fontSize: 12.5, color: "#6f7890" }}>
+        Loading IVI conditions…
+      </div>
+    );
+  }
+  if (reading === null) {
+    return (
+      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 14, fontSize: 12.5, color: "#6f7890" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Thermometer size={14} color="#5b6478" /> <b style={{ color: "#8790a3" }}>IVI conditions</b>
+        </div>
+        No reading yet for this panel ID — double check it against the panel's own URL on centurion.ivi.us.com, or wait for the next hourly sync.
+      </div>
+    );
+  }
+  const isError = reading.status === "network_error";
+  const probes = reading.pileProbesF || {};
+  return (
+    <div style={{ background: isError ? "#1c1414" : "#141b28", border: `1px solid ${isError ? "#4a2b2b" : "#232d40"}`, borderRadius: 10, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, color: "#eef1f6" }}>
+          <Thermometer size={15} color="#f2c14e" /> IVI conditions — {reading.panelName || bay.name}
+        </div>
+        <div style={{ fontSize: 11.5, color: isError ? "#e08787" : "#8790a3", display: "flex", alignItems: "center", gap: 5 }}>
+          {isError && <AlertTriangle size={12} />}
+          {isError ? "Network error at panel" : `OK · updated ${formatAgristorAge(reading.panelLastUpdated)}`}
+        </div>
+      </div>
+      {isError ? (
+        <div style={{ fontSize: 12.5, color: "#e0a3a3" }}>
+          Readings are hidden until the panel reconnects.
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, fontSize: 12.5, color: "#c7cede", marginBottom: 14 }}>
+            <LiveStat label="Supply" value={reading.supplyTempF != null ? `${reading.supplyTempF}°F` : "—"} sub={reading.supplyRH != null ? `${reading.supplyRH}% RH` : ""} />
+            <LiveStat label="Return" value={reading.returnTempF != null ? `${reading.returnTempF}°F` : "—"} sub={reading.returnRH != null ? `${reading.returnRH}% RH` : ""} />
+            <LiveStat label="Outdoor" value={reading.outdoorTempF != null ? `${reading.outdoorTempF}°F` : "—"} sub={reading.outdoorRH != null ? `${reading.outdoorRH}% RH` : ""} />
+            <LiveStat label="Indoor" value={reading.indoorTempF != null ? `${reading.indoorTempF}°F` : "—"} />
+            <LiveStat label="CO2" value={reading.co2Ppm != null ? `${reading.co2Ppm} ppm` : "—"} />
+            <LiveStat label="Setpoint" value={reading.setpointF != null ? `${reading.setpointF}°F` : "—"} />
+          </div>
+          <div style={{ fontSize: 10.5, letterSpacing: 0.5, textTransform: "uppercase", color: "#6f7890", marginBottom: 6 }}>
+            Pile probes {reading.pileDeltaF != null ? `· Δ ${reading.pileDeltaF}°F` : ""}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 10, fontSize: 12.5, color: "#c7cede", marginBottom: 14 }}>
+            <LiveStat label="Bottom South" value={probes.bottomSouth != null ? `${probes.bottomSouth}°F` : "—"} />
+            <LiveStat label="Bottom S-Mid" value={probes.bottomSouthMid != null ? `${probes.bottomSouthMid}°F` : "—"} />
+            <LiveStat label="Bottom N-Mid" value={probes.bottomNorthMid != null ? `${probes.bottomNorthMid}°F` : "—"} />
+            <LiveStat label="Bottom North" value={probes.bottomNorth != null ? `${probes.bottomNorth}°F` : "—"} />
+            <LiveStat label="Top Red" value={probes.topRed != null ? `${probes.topRed}°F` : "—"} />
+            <LiveStat label="Top White" value={probes.topWhite != null ? `${probes.topWhite}°F` : "—"} />
+            <LiveStat label="Top Blue" value={probes.topBlue != null ? `${probes.topBlue}°F` : "—"} />
+            <LiveStat label="Top Green" value={probes.topGreen != null ? `${probes.topGreen}°F` : "—"} />
+          </div>
+          <div style={{ fontSize: 10.5, letterSpacing: 0.5, textTransform: "uppercase", color: "#6f7890", marginBottom: 6 }}>Equipment</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: 10, fontSize: 12.5, color: "#c7cede" }}>
+            <LiveStat label="Fan" value={reading.fanPct != null ? `${reading.fanPct}%` : "—"} />
+            <LiveStat label="Cooling" value={reading.coolingPct != null ? `${reading.coolingPct}%` : "—"} />
+            <LiveStat label="Curing" value={reading.curingPct != null ? `${reading.curingPct}%` : "—"} />
+            <LiveStat label="Refer" value={reading.referPct != null ? `${reading.referPct}%` : "—"} />
+            <LiveStat label="Humidicell" value={reading.humidicellPct != null ? `${reading.humidicellPct}%` : "—"} />
+            <LiveStat label="Humidifier" value={reading.humidifierPct != null ? `${reading.humidifierPct}%` : "—"} />
+            <LiveStat label="Defrost" value={reading.defrostPct != null ? `${reading.defrostPct}%` : "—"} />
+          </div>
+        </>
       )}
     </div>
   );
@@ -2186,6 +2294,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
         <StatBlock label="Bay shrink" value={`${fmt(stats.shrinkCwt)} cwt`} sub={`${(stats.shrinkPct * 100).toFixed(2)}%`} accent={stats.shrinkPct > 0.08 ? "#e08787" : "#8fd19e"} />
       </div>
       <LiveConditionsCard bay={bay} />
+      <IviConditionsCard bay={bay} />
       <div>
         <div style={{ fontSize: 11, color: "#8790a3", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
           <Layers size={13} /> INTERIOR VIEW — FIELD DIVISION
@@ -3213,6 +3322,14 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   // readings to. Must match that panel's bin name exactly (e.g. "Hidden
   // Valley 1-2").
   const [bayAgristorBin, setBayAgristorBin] = useState("");
+  // Optional — ties this bay to a panel in the IVI/Centurion monitoring
+  // system, the same role agristorBinName plays for Agri-Stor. Unlike a
+  // bin name, this has to be the panel's own GUID (found in that panel's
+  // URL on centurion.ivi.us.com), not a human-readable name — IVI has no
+  // endpoint that lists every panel on the account, so there's no way to
+  // validate this against a known list the way a bin-name typo might get
+  // caught elsewhere.
+  const [bayIviPanelId, setBayIviPanelId] = useState("");
   // Prefill the bay's cwt/pipe and pile height from its building's defaults
   // whenever the building changes — but only while still untouched, so it
   // never clobbers something already picked/typed in.
@@ -3261,10 +3378,11 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
       cwtPerPipe: bayCwtPerPipe !== "" ? Number(bayCwtPerPipe) : 2500,
       pileHeight: bayPileHeight,
       agristorBinName: bayAgristorBin.trim() || null,
+      iviPanelId: bayIviPanelId.trim() || null,
       zones,
     });
     setBayName(""); setBayPipeCount(""); bayCwtTouched.current = false; bayPileHeightTouched.current = false;
-    setBayAgristorBin(""); setZoneRows([]);
+    setBayAgristorBin(""); setBayIviPanelId(""); setZoneRows([]);
     setBayError("");
   };
   return (
@@ -3362,12 +3480,21 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
               placeholder="e.g. Hidden Valley 1-2"
             />
           </Field>
+          <Field label="IVI panel ID (optional)">
+            <input
+              value={bayIviPanelId}
+              onChange={(e) => setBayIviPanelId(e.target.value)}
+              style={{ ...inputStyle, width: 220 }}
+              placeholder="GUID from the panel's centurion.ivi.us.com URL"
+            />
+          </Field>
         </div>
         <div style={{ fontSize: 11, color: "#5b6478", margin: "6px 0" }}>
           Leave "Total pipe" blank to use the sum of the fields below once they're filled in. Cwt/pipe and pile height
           prefill from the building's defaults and can be changed here or later. Always enter cwt/pipe as if piled 18'
           high — a 9' pile automatically holds about half that. "Agri-Stor bin name" must match that panel's bin name
-          exactly — it's how the hourly sync knows which bay a reading belongs to.
+          exactly, and "IVI panel ID" must match that panel's GUID exactly — each is how its hourly sync knows which
+          bay a reading belongs to.
           {bayPileHeight === 9 && bayCwtPerPipe !== "" && !isNaN(Number(bayCwtPerPipe)) && (
             <> <b style={{ color: "#e0a63e" }}>≈ {fmt(Number(bayCwtPerPipe) * 0.5)} cwt/pipe effective at 9'.</b></>
           )}
@@ -3539,6 +3666,8 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
         )}
         <span style={{ fontSize: 11, color: "#6f7890" }}>Agri-Stor bin</span>
         <EditableInline value={bay.agristorBinName ?? ""} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { agristorBinName: v || null })} width={140} placeholder="not linked" />
+        <span style={{ fontSize: 11, color: "#6f7890" }}>IVI panel ID</span>
+        <EditableInline value={bay.iviPanelId ?? ""} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { iviPanelId: v || null })} width={220} placeholder="not linked" />
         {!readOnly && bay.zones.length > 0 && (
           <button
             onClick={() => {
