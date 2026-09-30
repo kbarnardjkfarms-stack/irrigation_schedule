@@ -168,6 +168,23 @@ service cloud.firestore {
         allow write: if false;
       }
     }
+    // IVI/Centurion live conditions for Potato Storage — same pattern and
+    // same reasoning as agristorReadings directly above: the sync Cloud
+    // Function (syncIviReadings in index.js) writes this with an Admin key
+    // that bypasses these rules, so "write: false" only blocks the
+    // browser, never the sync job. One doc per linked panel, keyed by the
+    // panel's own GUID. The history subcollection isn't written yet, but
+    // is pre-declared here matching agristorReadings/history's shape in
+    // case a trend chart gets added later the same way it was for
+    // Agri-Stor — costs nothing to have ready now.
+    match /iviReadings/{panelId} {
+      allow read: if signedIn();
+      allow write: if false;
+      match /history/{historyId} {
+        allow read: if signedIn();
+        allow write: if false;
+      }
+    }
     // Potato Storage module. All of its data (bays, seasons, tube checks,
     // cwt runs, temp logs, Sprout Nip applications, product/customer/variety
     // rosters, etc.) lives in this single collection, one document per key.
