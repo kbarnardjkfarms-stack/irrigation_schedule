@@ -1653,12 +1653,34 @@ async function syncIviReadingsOnce() {
 
   const batch = db.batch();
   let written = 0;
+  // Same UTC "YYYY-MM-DD" shape PotatoStorage.jsx uses everywhere else, and
+  // the exact same shape the Agri-Stor sync's history points use — keeps
+  // the two trivially comparable/mergeable client-side without a timezone
+  // conversion at read time.
+  const todayStr = new Date().toISOString().slice(0, 10);
   for (const { panelId, bayName } of linked) {
     try {
       const raw = await iviGetPanelStatus(panelId, authHeaders);
       const reading = iviNormalizeReading(raw, bayName);
       const ref = db.collection('iviReadings').doc(panelId);
       batch.set(ref, reading, { merge: true });
+      // History point, same role as Agri-Stor's: the doc above is
+      // merge:true and only ever holds the LATEST reading, so without this
+      // there's no way to chart supply/return/Δ T over time (only "right
+      // now"). One small doc per panel per hourly run; auto-ID so
+      // concurrent/retried runs can't clobber each other, and the `date`
+      // field (not the doc id) is what the client groups on — same
+      // pattern as agristorReadings/{binId}/history.
+      const historyRef = db.collection('iviReadings').doc(panelId).collection('history').doc();
+      batch.set(historyRef, {
+        date: todayStr,
+        supplyTempF: reading.supplyTempF,
+        returnTempF: reading.returnTempF,
+        returnVsSupplyF: reading.supplyTempF != null && reading.returnTempF != null
+          ? Math.round((reading.returnTempF - reading.supplyTempF) * 10) / 10
+          : null,
+        recordedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
       written++;
     } catch (err) {
       // One bad/renamed panel ID shouldn't take the whole sync down — log
@@ -1669,6 +1691,14 @@ async function syncIviReadingsOnce() {
   await batch.commit();
   return { written, total: linked.length };
 }
+// NOTE ON DEPLOYING THIS CHANGE: the history write above only starts
+// accumulating data from the moment this updated function is deployed —
+// there's no way to retroactively backfill the trend chart in
+// PotatoStorage.jsx before that point, same caveat as Agri-Stor's history
+// had when it was added. Also grows one small doc per panel per hour
+// indefinitely; fine for a single storage season, worth adding a scheduled
+// cleanup before running across multiple seasons unattended — same
+// open item already noted for Agri-Stor's history above.
 
 // Runs automatically every hour, same cadence as the Agri-Stor sync.
 exports.syncIviReadings = onSchedule(
