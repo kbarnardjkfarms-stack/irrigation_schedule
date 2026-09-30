@@ -1968,12 +1968,15 @@ function LiveConditionsCard({ bay }) {
           <LiveStat label="Outside air" value={reading.outsideAirTempF != null ? `${reading.outsideAirTempF}°F` : "—"} sub={reading.outsideAirRH != null ? `${reading.outsideAirRH}% RH` : ""} />
           <LiveStat label="Pile avg" value={reading.pileAvgTempF != null ? `${reading.pileAvgTempF}°F` : "—"} />
           <LiveStat label="CO2" value={reading.co2Ppm != null ? `${reading.co2Ppm} ppm` : "—"} />
-          <LiveStat
-            label="Fan / Cooling-Refrig"
-            value={[reading.fanPct, reading.coolingPct ?? reading.refrigerationPct]
-              .map((v) => (v != null ? `${v}%` : "—"))
-              .join(" / ")}
-          />
+          <LiveStat label="Fan" value={reading.fanPct != null ? `${reading.fanPct}%` : "—"} />
+          {/* Agri-Stor's raw feed only has ONE equipment percentage here —
+              coolingPct and refrigerationPct both read the same sensor slot
+              (main[15]), confirmed identical. Shown as two labeled stats
+              since both names matter depending on what's installed on a
+              given bin, but flagged honestly rather than implying they're
+              independently tracked, unlike IVI's genuinely separate values. */}
+          <LiveStat label="Refer" value={reading.refrigerationPct != null ? `${reading.refrigerationPct}%` : "—"} sub="same sensor as Cooling" />
+          <LiveStat label="Cooling" value={reading.coolingPct != null ? `${reading.coolingPct}%` : "—"} sub="same sensor as Refer" />
         </div>
       )}
     </div>
@@ -2050,9 +2053,13 @@ function IviConditionsCard({ bay }) {
           <div style={{ fontSize: 10.5, letterSpacing: 0.5, textTransform: "uppercase", color: "#6f7890", marginBottom: 6 }}>Equipment</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: 10, fontSize: 12.5, color: "#c7cede" }}>
             <LiveStat label="Fan" value={reading.fanHz != null ? `${reading.fanHz} Hz` : "—"} />
+            {/* Refer (mechanical refrigeration) and Cooling (passive/door
+                ventilation) are genuinely separate readings on IVI — when
+                one's active the other reads 0, unlike Agri-Stor's card
+                above where these share one sensor. */}
+            <LiveStat label="Refer" value={reading.referPct != null ? `${reading.referPct}%` : "—"} />
             <LiveStat label="Cooling" value={reading.coolingPct != null ? `${reading.coolingPct}%` : "—"} />
             <LiveStat label="Curing" value={reading.curingPct != null ? `${reading.curingPct}%` : "—"} />
-            <LiveStat label="Refer" value={reading.referPct != null ? `${reading.referPct}%` : "—"} />
             <LiveStat label="Humidicell" value={reading.humidicellPct != null ? `${reading.humidicellPct}%` : "—"} />
             <LiveStat label="Humidifier" value={reading.humidifierPct != null ? `${reading.humidifierPct}%` : "—"} />
             <LiveStat label="Defrost" value={reading.defrostPct != null ? `${reading.defrostPct}%` : "—"} />
