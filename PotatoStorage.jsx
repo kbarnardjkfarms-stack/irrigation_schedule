@@ -2718,6 +2718,13 @@ function TemperatureTab({ bays, dataById, onAddTemp, onDeleteTemp, readOnly }) {
   const agristorSeries = useMemo(() => buildAgristorDaySeries(agristorHistory), [agristorHistory]);
   const combinedSeries = useMemo(() => mergeDaySeries(series, agristorSeries), [series, agristorSeries]);
   const livePanelDelta = agristorReading?.returnVsPlenumF ?? null;
+  // IVI side — live reading only for now (no history subcollection yet,
+  // unlike Agri-Stor's, so there's nothing to add to the trend chart below
+  // until that gets built the same way Agri-Stor's history was added later).
+  const iviReading = useIviReading(bay?.iviPanelId);
+  const iviLivePanelDelta = iviReading?.returnTempF != null && iviReading?.supplyTempF != null
+    ? Math.round((iviReading.returnTempF - iviReading.supplyTempF) * 10) / 10
+    : null;
   const submit = () => {
     if (temp === "" || isNaN(Number(temp))) return;
     onAddTemp(bayId, { date, pipeNumber, position, temp: Number(temp) });
@@ -2760,15 +2767,24 @@ function TemperatureTab({ bays, dataById, onAddTemp, onDeleteTemp, readOnly }) {
         <StatBlock label="Average actual Δ T (all days)" value={avgDelta != null ? `${avgDelta > 0 ? "+" : ""}${avgDelta}°F` : "—"}
           sub={avgDelta != null ? `across ${allDeltas.length} day${allDeltas.length === 1 ? "" : "s"} of readings` : "need a Top and a Bottom reading on the same date"}
           accent={avgStatus ? avgStatus.color : undefined} />
-        <StatBlock label="Live panel Δ T (Agri-Stor)" value={livePanelDelta != null ? `${livePanelDelta > 0 ? "+" : ""}${livePanelDelta}°F` : "—"}
-          sub={bay?.agristorBinName ? "return air − plenum, right now" : "bay isn't linked to an Agri-Stor bin"} accent="#d9722e" />
+        {!bay?.agristorBinName && !bay?.iviPanelId && (
+          <StatBlock label="Live panel Δ T" value="—" sub="bay isn't linked to Agri-Stor or IVI" accent="#d9722e" />
+        )}
+        {bay?.agristorBinName && (
+          <StatBlock label="Live panel Δ T (Agri-Stor)" value={livePanelDelta != null ? `${livePanelDelta > 0 ? "+" : ""}${livePanelDelta}°F` : "—"}
+            sub="return air − plenum, right now" accent="#d9722e" />
+        )}
+        {bay?.iviPanelId && (
+          <StatBlock label="Live panel Δ T (IVI)" value={iviLivePanelDelta != null ? `${iviLivePanelDelta > 0 ? "+" : ""}${iviLivePanelDelta}°F` : "—"}
+            sub="return − supply, right now" accent="#d9722e" />
+        )}
       </div>
       <div style={{ fontSize: 11.5, color: "#6f7890" }}>
         Every reading in this bay counts, from any pipe. Same-day readings of the same position are averaged first;
         actual Δ T comes from that day's average Top and average Bottom — it doesn't matter which pipes they were taken at, only that they share a date.
         Target Δ T is ~1.5°F once cured. Flagged amber under ~0.5°F (too tight — check airflow), red over 3°F (too wide).
         In the first {CURING_DAYS} days after fill, up to ~5°F is normal and won't be flagged.
-        Panel Δ T (return air − plenum) comes from the Agri-Stor sync instead of a physical check — it updates hourly on its own.
+        Panel Δ T comes from whichever monitoring system this bay is linked to instead of a physical check — Agri-Stor's is return air − plenum, IVI's is return − supply — and updates hourly on its own.
       </div>
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 2, color: "#eef1f6" }}>{bay?.name} — temperatures over time</div>
