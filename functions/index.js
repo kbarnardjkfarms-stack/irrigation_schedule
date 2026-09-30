@@ -1689,3 +1689,32 @@ exports.syncIviReadingsNow = onRequest(
     }
   }
 );
+
+// TEMPORARY diagnostic — not wired into the sync, and writes nothing to
+// Firestore. Runs the full IVI login -> token -> panel status flow
+// against one specific panel id passed in the URL, so the connection
+// itself (especially the unconfirmed GetRESTToken path — see the note
+// at the top of the IVI section above) can be verified before any bay
+// is actually linked to a panel via Manage Sites. Safe to call as many
+// times as needed. Remove once syncIviReadings is confirmed working
+// end-to-end and at least one bay has a real iviPanelId set.
+// Usage: ?panelId=b232c943-60e5-40a0-943e-f56b1e6ee637
+exports.testIviPanel = onRequest(
+  { secrets: [IVI_USERNAME, IVI_PASSWORD], timeoutSeconds: 60, memory: '256MiB' },
+  async (req, res) => {
+    try {
+      const panelId = req.query.panelId;
+      if (!panelId) {
+        res.status(400).json({ error: 'Pass ?panelId=<guid> in the URL, e.g. ?panelId=b232c943-60e5-40a0-943e-f56b1e6ee637' });
+        return;
+      }
+      const authHeaders = await iviAuthenticate();
+      const raw = await iviGetPanelStatus(panelId, authHeaders);
+      const normalized = iviNormalizeReading(raw, null);
+      res.status(200).json({ raw, normalized });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
