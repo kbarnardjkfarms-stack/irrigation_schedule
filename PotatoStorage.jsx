@@ -1903,6 +1903,20 @@ function formatAgristorAge(ts) {
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.round(hrs / 24)}d ago`;
 }
+// Refer and Cooling should never both show a nonzero reading at once: if
+// Refer is active, Cooling displays as 0; only when Refer reads 0 does
+// Cooling show its own percentage. NOTE: Agri-Stor's raw feed only has ONE
+// actual sensor behind both labels right now (refrigerationPct and
+// coolingPct are confirmed identical) — so under this rule Cooling will
+// always display 0% with the data available today: whenever Refer is
+// nonzero this forces 0, and whenever Refer is 0 the same underlying
+// number (being 0 too) means Cooling was already going to show 0 anyway.
+// This is still the correct rule to apply — it just won't show anything
+// but 0% unless a genuinely independent Cooling signal is found later.
+function agristorCoolingDisplay(referPct, coolPctRaw) {
+  if (referPct != null && referPct !== 0) return 0;
+  return coolPctRaw;
+}
 // Read-only card showing this bay's latest Agri-Stor sensor reading, synced
 // in by a separate scheduled Cloud Function (see agristorSync in the
 // functions project) — this component never talks to Agri-Stor itself, it
@@ -1946,6 +1960,7 @@ function LiveConditionsCard({ bay }) {
         <div style={{ fontSize: 11.5, color: isError ? "#e08787" : "#8790a3", display: "flex", alignItems: "center", gap: 5 }}>
           {isError && <AlertTriangle size={12} />}
           {isError ? "Network error at sensor" : `OK · updated ${formatAgristorAge(reading.updatedAt)}`}
+          {reading.firmwareVersion && <span style={{ color: "#5b6478" }}>&nbsp;· fw {reading.firmwareVersion}</span>}
         </div>
       </div>
       {isError ? (
@@ -1964,23 +1979,49 @@ function LiveConditionsCard({ bay }) {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, fontSize: 12.5, color: "#c7cede" }}>
           <LiveStat label="Plenum" value={reading.plenumTempF != null ? `${reading.plenumTempF}°F` : "—"} sub={reading.plenumRH != null ? `${reading.plenumRH}% RH` : ""} />
+          {/* Second plenum sensor — this bin reports two, captured in
+              Firestore (plenumTemp2F/plenumRH2) but never shown anywhere
+              until now. Only rendered when there's actually a value, since
+              not every bin has a second plenum sensor installed. */}
+          {(reading.plenumTemp2F != null || reading.plenumRH2 != null) && (
+            <LiveStat label="Plenum #2" value={reading.plenumTemp2F != null ? `${reading.plenumTemp2F}°F` : "—"} sub={reading.plenumRH2 != null ? `${reading.plenumRH2}% RH` : ""} />
+          )}
           <LiveStat label="Return air" value={reading.returnAirTempF != null ? `${reading.returnAirTempF}°F` : "—"} sub={reading.returnAirRH != null ? `${reading.returnAirRH}% RH` : ""} />
           <LiveStat label="Outside air" value={reading.outsideAirTempF != null ? `${reading.outsideAirTempF}°F` : "—"} sub={reading.outsideAirRH != null ? `${reading.outsideAirRH}% RH` : ""} />
           <LiveStat label="Pile avg" value={reading.pileAvgTempF != null ? `${reading.pileAvgTempF}°F` : "—"} />
           <LiveStat label="CO2" value={reading.co2Ppm != null ? `${reading.co2Ppm} ppm` : "—"} />
           <LiveStat label="Fan" value={reading.fanPct != null ? `${reading.fanPct}%` : "—"} />
-          {/* Agri-Stor's raw feed only has ONE equipment percentage here —
-              coolingPct and refrigerationPct both read the same sensor slot
-              (main[15]), confirmed identical. Shown as two labeled stats
-              since both names matter depending on what's installed on a
-              given bin, but flagged honestly rather than implying they're
-              independently tracked, unlike IVI's genuinely separate values. */}
-          <LiveStat label="Refer" value={reading.refrigerationPct != null ? `${reading.refrigerationPct}%` : "—"} sub="same sensor as Cooling" />
-          <LiveStat label="Cooling" value={reading.coolingPct != null ? `${reading.coolingPct}%` : "—"} sub="same sensor as Refer" />
+          {/* Refer/Cooling are mutually exclusive by rule: Cooling shows 0
+              whenever Refer is active, and only shows its own percentage
+              when Refer reads 0. See agristorCoolingDisplay's note above —
+              given Agri-Stor's single underlying sensor, Cooling will
+              always land on 0% with the data available today. */}
+          <LiveStat label="Refer" value={reading.refrigerationPct != null ? `${reading.refrigerationPct}%` : "—"} />
+          <LiveStat label="Cooling" value={agristorCoolingDisplay(reading.refrigerationPct, reading.coolingPct) != null ? `${agristorCoolingDisplay(reading.refrigerationPct, reading.coolingPct)}%` : "—"} />
         </div>
       )}
     </div>
   );
+}
+// Confirmed against a real Centurion panel: it reports equipment as plain
+// on/off booleans (reading.equipment — BurnerFan, Fan, Humidicell,
+// Humidifier, ReferPower, etc.), with every percentage field (fanHz/Pct,
+// referPct, humidicellPct, humidifierPct, coolingPct, curingPct,
+// defrostPct) coming back null. An Imperium panel reports the richer
+// percentages AND has the same equipment booleans alongside them. Rather
+// than showing a wall of dashes on a Centurion panel, this falls back to
+// a plain ON/OFF label whenever the percentage isn't available — an
+// Imperium panel's percentage keeps showing exactly as before, since pct
+// is checked first.
+function iviEquipLabel(pct, boolValue, unit = "%") {
+  if (pct != null) return `${pct}${unit}`;
+  if (boolValue != null) return boolValue ? "ON" : "OFF";
+  return "—";
+}
+function iviEquipActive(pct, boolValue) {
+  if (pct != null) return pct > 0;
+  if (boolValue != null) return boolValue === true;
+  return false;
 }
 // Read-only card showing this bay's latest IVI/Centurion panel reading,
 // synced in by a separate scheduled Cloud Function (see syncIviReadings in
@@ -2051,19 +2092,48 @@ function IviConditionsCard({ bay }) {
             <LiveStat label="Top Green" value={probes.topGreen != null ? `${probes.topGreen}°F` : "—"} />
           </div>
           <div style={{ fontSize: 10.5, letterSpacing: 0.5, textTransform: "uppercase", color: "#6f7890", marginBottom: 6 }}>Equipment</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: 10, fontSize: 12.5, color: "#c7cede" }}>
-            <LiveStat label="Fan" value={reading.fanHz != null ? `${reading.fanHz} Hz` : "—"} />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: 10, fontSize: 12.5, color: "#c7cede", marginBottom: 14 }}>
+            {/* Confirmed against a real Centurion panel: it reports every
+                one of these as null and relies entirely on the plain
+                on/off equipment booleans below instead — iviEquipLabel
+                falls back to those automatically. An Imperium panel's
+                richer percentage still shows exactly as before, unaffected. */}
+            <LiveStat label="Fan" value={iviEquipLabel(reading.fanHz, reading.equipment?.Fan, " Hz")} />
             {/* Refer (mechanical refrigeration) and Cooling (passive/door
                 ventilation) are genuinely separate readings on IVI — when
                 one's active the other reads 0, unlike Agri-Stor's card
                 above where these share one sensor. */}
-            <LiveStat label="Refer" value={reading.referPct != null ? `${reading.referPct}%` : "—"} />
+            <LiveStat label="Refer" value={iviEquipLabel(reading.referPct, reading.equipment?.ReferPower)} />
             <LiveStat label="Cooling" value={reading.coolingPct != null ? `${reading.coolingPct}%` : "—"} />
             <LiveStat label="Curing" value={reading.curingPct != null ? `${reading.curingPct}%` : "—"} />
-            <LiveStat label="Humidicell" value={reading.humidicellPct != null ? `${reading.humidicellPct}%` : "—"} />
-            <LiveStat label="Humidifier" value={reading.humidifierPct != null ? `${reading.humidifierPct}%` : "—"} />
+            <LiveStat label="Humidicell" value={iviEquipLabel(reading.humidicellPct, reading.equipment?.Humidicell)} />
+            <LiveStat label="Humidifier" value={iviEquipLabel(reading.humidifierPct, reading.equipment?.Humidifier)} />
             <LiveStat label="Defrost" value={reading.defrostPct != null ? `${reading.defrostPct}%` : "—"} />
           </div>
+          {/* Full equipment on/off state, straight from the panel — not
+              just the ones with a matching percentage stat above. On a
+              Centurion panel this is the real, primary source of truth
+              for what's actually running; on an Imperium panel it's a
+              secondary confirmation of the percentages above. */}
+          {reading.equipment && Object.keys(reading.equipment).length > 0 && (
+            <>
+              <div style={{ fontSize: 10.5, letterSpacing: 0.5, textTransform: "uppercase", color: "#6f7890", marginBottom: 6 }}>Equipment status</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {Object.entries(reading.equipment).map(([name, on]) => (
+                  <span key={name} style={{
+                    display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 600,
+                    padding: "4px 10px", borderRadius: 20,
+                    color: on ? "#8fd19e" : "#6f7890",
+                    background: on ? "rgba(143,209,158,0.1)" : "transparent",
+                    border: `1px solid ${on ? "#2f4a35" : "#2b3549"}`,
+                  }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: on ? "#8fd19e" : "#4a5468", flexShrink: 0 }} />
+                    {name}
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
         </>
       )}
     </div>
@@ -2085,14 +2155,12 @@ function EquipmentStatusPanel({ bay }) {
   if (!bay.agristorBinName || reading === null) return null;
   const loading = reading === undefined;
   const isError = !loading && reading.status === "network_error";
-  // Agri-Stor's raw feed only has ONE equipment percentage — coolingPct and
-  // refrigerationPct both read the same sensor slot, confirmed identical
-  // (see the note on LiveConditionsCard's equivalent split). Shown as two
-  // labeled icons here for the same reason as that card: both names matter
-  // depending on what's actually installed on a given bin.
+  // Refer/Cooling are mutually exclusive by rule (agristorCoolingDisplay
+  // above) — given Agri-Stor's single underlying sensor, Cooling will
+  // always land on 0% with the data available today.
   const fanPct = reading?.fanPct ?? null;
   const referPct = reading?.refrigerationPct ?? null;
-  const coolPct = reading?.coolingPct ?? null;
+  const coolPct = agristorCoolingDisplay(referPct, reading?.coolingPct ?? null);
   const stopped = !loading && (fanPct == null || fanPct <= 0) && (referPct == null || referPct <= 0) && (coolPct == null || coolPct <= 0);
   const fanSpinning = !loading && fanPct != null && fanPct > 0;
   const referActive = !loading && referPct != null && referPct > 0;
@@ -2185,14 +2253,17 @@ function IviEquipmentStatusPanel({ bay, topOffset = 10 }) {
   const isError = !loading && reading.status === "network_error";
   // Fan (VFD, in Hz), Refer (mechanical refrigeration), and Cooling
   // (passive/door ventilation) are three genuinely separate readings on
-  // IVI — when Refer is active, Cooling reads 0, and vice versa.
+  // IVI — when Refer is active, Cooling reads 0, and vice versa. A
+  // Centurion panel reports Fan/Refer as plain booleans instead of a
+  // number (confirmed live — every percentage field comes back null on
+  // one); iviEquipActive falls back to that boolean automatically.
   const fanHz = reading?.fanHz ?? null;
   const referPct = reading?.referPct ?? null;
   const coolPct = reading?.coolingPct ?? null;
-  const stopped = !loading && (fanHz == null || fanHz <= 0) && (referPct == null || referPct <= 0) && (coolPct == null || coolPct <= 0);
-  const fanSpinning = !loading && fanHz != null && fanHz > 0;
-  const referActive = !loading && referPct != null && referPct > 0;
+  const fanSpinning = !loading && iviEquipActive(fanHz, reading?.equipment?.Fan);
+  const referActive = !loading && iviEquipActive(referPct, reading?.equipment?.ReferPower);
   const coolActive = !loading && coolPct != null && coolPct > 0;
+  const stopped = !loading && !fanSpinning && !referActive && !coolActive;
   const supplyTempF = reading?.supplyTempF ?? null;
   const returnTempF = reading?.returnTempF ?? null;
   const deltaT = supplyTempF != null && returnTempF != null ? Math.round((returnTempF - supplyTempF) * 10) / 10 : null;
@@ -2235,12 +2306,12 @@ function IviEquipmentStatusPanel({ bay, topOffset = 10 }) {
                 color={fanSpinning ? "#f2c14e" : "#4a5468"}
                 style={fanSpinning ? { animation: "iviFanSpin 1.6s linear infinite" } : undefined}
               />
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#eef1f6" }}>{fanHz != null ? `${fanHz}Hz` : "—"}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#eef1f6" }}>{iviEquipLabel(fanHz, reading?.equipment?.Fan, "Hz")}</div>
               <div style={{ fontSize: 8.5, color: "#6f7890", letterSpacing: 0.2 }}>FAN</div>
             </div>
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, textAlign: "center" }}>
               <Snowflake size={16} color={referActive ? "#5fd1e6" : "#4a5468"} />
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#eef1f6" }}>{referPct != null ? `${referPct}%` : "—"}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#eef1f6" }}>{iviEquipLabel(referPct, reading?.equipment?.ReferPower)}</div>
               <div style={{ fontSize: 8.5, color: "#6f7890", letterSpacing: 0.2 }}>REFER</div>
             </div>
             <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, textAlign: "center" }}>
@@ -2288,11 +2359,12 @@ function YardBayAgristorBadge({ bay }) {
       </div>
     );
   }
-  // Same single-sensor caveat as EquipmentStatusPanel above — Agri-Stor
-  // only reports one equipment percentage, shown under both labels.
+  // Refer/Cooling are mutually exclusive by rule (agristorCoolingDisplay
+  // above) — given Agri-Stor's single underlying sensor, Cooling will
+  // always land on 0% with the data available today.
   const fanPct = reading?.fanPct ?? null;
   const referPct = reading?.refrigerationPct ?? null;
-  const coolPct = reading?.coolingPct ?? null;
+  const coolPct = agristorCoolingDisplay(referPct, reading?.coolingPct ?? null);
   const fanOn = fanPct != null && fanPct > 0;
   const referOn = referPct != null && referPct > 0;
   const coolOn = coolPct != null && coolPct > 0;
@@ -2343,8 +2415,10 @@ function IviYardBayBadge({ bay }) {
   const fanHz = reading?.fanHz ?? null;
   const referPct = reading?.referPct ?? null;
   const coolPct = reading?.coolingPct ?? null;
-  const fanOn = fanHz != null && fanHz > 0;
-  const referOn = referPct != null && referPct > 0;
+  // Centurion reports Fan/Refer as plain booleans instead of a number —
+  // iviEquipActive falls back to that automatically.
+  const fanOn = iviEquipActive(fanHz, reading?.equipment?.Fan);
+  const referOn = iviEquipActive(referPct, reading?.equipment?.ReferPower);
   const coolOn = coolPct != null && coolPct > 0;
   const stopped = !fanOn && !referOn && !coolOn;
   const supply = reading?.supplyTempF ?? null;
@@ -2354,10 +2428,10 @@ function IviYardBayBadge({ bay }) {
     <div style={{ marginTop: 3, paddingTop: 3, borderTop: "1px solid #2b3549" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
-          <Fan size={10} color={fanOn ? "#f2c14e" : "#4a5468"} /> {fanHz != null ? `${fanHz}Hz` : "—"}
+          <Fan size={10} color={fanOn ? "#f2c14e" : "#4a5468"} /> {iviEquipLabel(fanHz, reading?.equipment?.Fan, "Hz")}
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
-          <Snowflake size={10} color={referOn ? "#5fd1e6" : "#4a5468"} /> {referPct != null ? `${referPct}%` : "—"}
+          <Snowflake size={10} color={referOn ? "#5fd1e6" : "#4a5468"} /> {iviEquipLabel(referPct, reading?.equipment?.ReferPower)}
         </span>
         <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 9.5, color: "#c7cede" }}>
           <Wind size={10} color={coolOn ? "#8fd19e" : "#4a5468"} /> {coolPct != null ? `${coolPct}%` : "—"}
