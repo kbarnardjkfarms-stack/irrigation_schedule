@@ -1244,7 +1244,20 @@ function agristorNormalizeBinReading(raw) {
     plenumRH: num(main[5]),
     plenumRH2: num(main[6]),
     fanPct: pctOrFlag(main[14]),
-    coolingPct: pctOrFlag(main[15]),
+    // UNCONFIRMED, best guess pending verification: index 4 was never
+    // mapped to anything in the original reverse-engineering pass — it
+    // sits in the gap between the confirmed plenum temp pair (2/3) and
+    // plenum RH pair (5/6), never independently checked. coolingPct
+    // previously duplicated index 15 (the same value as refrigerationPct,
+    // confirmed identical across four bins) — this was clearly wrong,
+    // since the two are meant to be mutually exclusive (door-open %
+    // when Refer is off; 0 while Refer is running). Pointing coolingPct
+    // at index 4 instead, on the theory that it's the actual door-position
+    // value. If this turns out wrong once checked against a bin with Refer
+    // confirmed off and the doors confirmed open in real life (compare
+    // against debugAgristorRawBin's full array dump), the fix is just
+    // changing this one index.
+    coolingPct: pctOrFlag(main[4]),
     refrigerationPct: pctOrFlag(main[15]),
     returnAirTempF,
     returnAirRH: main[10] === 'dis' ? null : num(main[10]),
