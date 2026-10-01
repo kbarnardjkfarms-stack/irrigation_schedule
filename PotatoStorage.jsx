@@ -747,26 +747,25 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH, filterCtx) {
 // Zone/bay/building labels are positioned by projecting a 3D world point to
 // a 2D screen coordinate, so when their real-world anchors sit close
 // together (narrow adjacent fields, tightly spaced bays, a zoomed-out yard),
-// the projected points — and the label boxes anchored to them — can land
-// right on top of each other. This runs every frame after projection: it
-// estimates each label's on-screen footprint from its kind, then walks them
-// top-to-bottom stacking any that would overlap directly below the label
-// they collided with, so every one stays fully readable. Pipe-number
-// markers are left out of this — there can be dozens of them and they're
-// small/numerous by design, so including them would make this expensive
-// for no real readability gain.
-const LABEL_BOX = {
-  zone: { w: 170, h: 50 },
-  bay: { w: 120, h: 36 },
-  building: { w: 150, h: 22 },
-};
+// the projected points land right on top of each other. Two different
+// fixes for two different kinds of crowding:
+//
+// Bay/building labels rarely crowd more than two or three deep, so they
+// just nudge straight down off whatever they collided with — cheap, and
+// unobtrusive at that scale.
+//
+// Zone/field labels are the ones that actually got unreadable — a bay with
+// several fields stacked its labels right on top of the building itself.
+// These instead get pulled out into open ground beside their own bay,
+// stacked cleanly top-to-bottom in a column — each one keeps its real pile
+// position (ax/ay) alongside its new on-screen spot (x/y), so a thin line
+// can be drawn from the card back to the actual pile it describes.
+const LABEL_BOX = { bay: { w: 120, h: 36 }, building: { w: 150, h: 22 } };
 function labelKind(l) {
-  if (l.isBuildingLabel) return "building";
-  if (l.isBayLabel) return "bay";
-  return "zone";
+  return l.isBuildingLabel ? "building" : "bay";
 }
 function deconflictLabels(labels) {
-  const spaced = labels.filter((l) => l.visible && !l.isPipeLabel);
+  const spaced = labels.filter((l) => l.visible && (l.isBayLabel || l.isBuildingLabel));
   const untouched = labels.filter((l) => !l.visible || l.isPipeLabel);
   // Stable top-to-bottom, then left-to-right order so labels don't jitter
   // or swap places between frames as the camera orbits.
@@ -792,6 +791,33 @@ function deconflictLabels(labels) {
     placed.push({ ...l, y, _box: box });
   });
   return [...placed, ...untouched];
+}
+const ZONE_LABEL_ROW_HEIGHT = 52;
+const ZONE_LABEL_COLUMN_OFFSET = 170; // lateral distance from the bay into open ground
+function layoutZoneLabels(zoneLabels, containerWidth) {
+  const visible = zoneLabels.filter((l) => l.visible);
+  const byBay = new Map();
+  visible.forEach((l) => {
+    if (!byBay.has(l.bayId)) byBay.set(l.bayId, []);
+    byBay.get(l.bayId).push(l);
+  });
+  const positioned = [];
+  byBay.forEach((group) => {
+    // Order the column to match how the fields actually sit along the bay
+    // (their true anchor position), not an arbitrary/jittery order.
+    group.sort((a, b) => a.ay - b.ay);
+    const ref = group[0]; // every label in this bay shares the same bayRefX/Y
+    // Send the column toward whichever side has more open room on screen,
+    // so it doesn't immediately run off the edge.
+    const goRight = ref.bayRefX < containerWidth * 0.6;
+    const colX = goRight ? ref.bayRefX + ZONE_LABEL_COLUMN_OFFSET : ref.bayRefX - ZONE_LABEL_COLUMN_OFFSET;
+    const totalHeight = (group.length - 1) * ZONE_LABEL_ROW_HEIGHT;
+    const startY = Math.max(40, ref.bayRefY - totalHeight / 2);
+    group.forEach((l, i) => {
+      positioned.push({ ...l, x: colX, y: startY + i * ZONE_LABEL_ROW_HEIGHT });
+    });
+  });
+  return positioned;
 }
 
 function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildingsById = {}, locationsById = {}, invFilter }) {
@@ -914,6 +940,13 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       const newLabels = [];
       bays.forEach((bay) => {
         const m = bayMeshes[bay.id];
+        // One reference screen point per bay — used to anchor that bay's
+        // whole zone-label column (see layoutZoneLabels) regardless of
+        // mode, independent of whether a visible bay-name label exists.
+        const refVec = new THREE.Vector3(0, m.maxH + 1.6, 0).add(m.group.position);
+        refVec.project(camera);
+        const bayRefX = (refVec.x * 0.5 + 0.5) * mount.clientWidth;
+        const bayRefY = (-refVec.y * 0.5 + 0.5) * mount.clientHeight;
         bay.zones.forEach((zone) => {
           const footprint = pipeRangeSet(zone.pipeRanges);
           if (!footprint.size) return; // no pipe assigned yet — nowhere to anchor a label
@@ -922,10 +955,15 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
           const worldZ = m.zStart + ((lo - 1) + (hi - lo + 1) / 2) * m.pipeWidth;
           const p = new THREE.Vector3(0, m.maxH + 1.6, worldZ).add(m.group.position);
           p.project(camera);
+          const ax = (p.x * 0.5 + 0.5) * mount.clientWidth;
+          const ay = (-p.y * 0.5 + 0.5) * mount.clientHeight;
           newLabels.push({
             key: `${bay.id}:${zone.id}`, bayId: bay.id, zoneId: zone.id,
-            x: (p.x * 0.5 + 0.5) * mount.clientWidth,
-            y: (-p.y * 0.5 + 0.5) * mount.clientHeight,
+            // ax/ay: the true pile position — what a leader line draws to.
+            // x/y: filled in by layoutZoneLabels below, once this bay's
+            // whole column is known; starts equal to the anchor so nothing
+            // breaks if that step is ever skipped.
+            ax, ay, x: ax, y: ay, bayRefX, bayRefY,
             visible: p.z < 1,
           });
         });
@@ -979,7 +1017,12 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
           gi = gj + 1;
         }
       }
-      setLabels(deconflictLabels(newLabels));
+      const zoneLabels = newLabels.filter((l) => l.zoneId != null);
+      const otherLabels = newLabels.filter((l) => l.zoneId == null);
+      setLabels([
+        ...layoutZoneLabels(zoneLabels, mount.clientWidth),
+        ...deconflictLabels(otherLabels),
+      ]);
     };
     animate();
     const ro = new ResizeObserver(() => {
@@ -1017,6 +1060,22 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
   }, [bays, statsById, selectedId, mode, invFilter, buildingsById, locationsById]);
   return (
     <div ref={mountRef} style={{ position: "relative", width: "100%", height: "100%", cursor: "grab" }}>
+      <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+        {labels.map((l) => {
+          if (!l.visible || l.zoneId == null) return null;
+          // Only draw a line when the label actually moved somewhere other
+          // than right on top of its own pile — a lone field with nothing
+          // to collide with just sits at its anchor, no line needed.
+          const moved = Math.abs(l.x - l.ax) > 4 || Math.abs(l.y - l.ay) > 4;
+          if (!moved) return null;
+          return (
+            <g key={`line:${l.key}`}>
+              <line x1={l.ax} y1={l.ay} x2={l.x} y2={l.y} stroke="#4a5468" strokeWidth={1} strokeDasharray="3 3" />
+              <circle cx={l.ax} cy={l.ay} r={2.5} fill="#4a5468" />
+            </g>
+          );
+        })}
+      </svg>
       {labels.map((l) => {
         if (!l.visible) return null;
         if (l.isBuildingLabel) {
