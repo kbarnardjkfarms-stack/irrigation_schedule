@@ -766,7 +766,11 @@ function labelKind(l) {
 }
 function deconflictLabels(labels) {
   const spaced = labels.filter((l) => l.visible && (l.isBayLabel || l.isBuildingLabel));
-  const untouched = labels.filter((l) => !l.visible || l.isPipeLabel);
+  // Everything NOT in spaced passes straight through untouched — pipe
+  // labels, invisible labels, and anything else (e.g. Fan House labels)
+  // that isn't a bay/building label. Deliberately broad rather than an
+  // allowlist, so a future label kind doesn't silently vanish here again.
+  const untouched = labels.filter((l) => !(l.visible && (l.isBayLabel || l.isBuildingLabel)));
   // Stable top-to-bottom, then left-to-right order so labels don't jitter
   // or swap places between frames as the camera orbits.
   spaced.sort((a, b) => a.y - b.y || a.x - b.x);
@@ -793,18 +797,19 @@ function deconflictLabels(labels) {
   return [...placed, ...untouched];
 }
 const ZONE_LABEL_ROW_HEIGHT = 52;
-// Groups by BUILDING, not bay — every bay in the same building was already
-// given the same bayRefX/Y (that building's one shared column position in
-// real open ground, computed world-space in the animate loop above), so
-// grouping by bay here would just split one building's fields across
-// several redundant columns sitting on top of each other. bayRefX/Y are
-// used directly: they already represent a point clear of the building,
+// Groups by BUILDING + which side it was routed to (left/right half of that
+// building's bays), not by individual bay — every bay sharing a side was
+// already given the same bayRefX/Y (that side's column position in real
+// open ground, computed world-space in the animate loop above), so
+// grouping by bay here would just split one side's fields across several
+// redundant columns sitting on top of each other. bayRefX/Y are used
+// directly: they already represent a point clear of the building,
 // pre-offset at the source, so no further lateral shift is added here.
 function layoutZoneLabels(zoneLabels) {
   const visible = zoneLabels.filter((l) => l.visible);
   const byBuilding = new Map();
   visible.forEach((l) => {
-    const key = l.buildingId ?? l.bayId;
+    const key = `${l.buildingId ?? l.bayId}:${l.columnSide || "right"}`;
     if (!byBuilding.has(key)) byBuilding.set(key, []);
     byBuilding.get(key).push(l);
   });
@@ -849,7 +854,13 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     ground.receiveShadow = true;
     scene.add(ground);
     const DIMS = { W: 12.5, H: 8.5, L: 24 };
-    const TIGHT_GAP = 14, BUILDING_GAP = 9;
+    // BUILDING_GAP raised substantially (9 -> 36) specifically to leave
+    // real, generous open ground between buildings for field-label columns
+    // to live in without crowding each other — explicitly fine to spend
+    // extra space on, per direct instruction. TIGHT_GAP (bay-to-bay within
+    // one building) is left as-is; those bays are meant to read as one
+    // continuous building with internal bays, not separate structures.
+    const TIGHT_GAP = 14, BUILDING_GAP = 36;
     let xPositions = [0];
     if (mode !== "interior") {
       let x = 0;
@@ -865,24 +876,49 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     }
     // For the yard's field-label columns: real open ground exists between
     // whole BUILDINGS, not between individual bays within one — bays in
-    // the same building sit only ~1.5 units apart at these dimensions
-    // (TIGHT_GAP minus the building's own width), nowhere near enough room
-    // for a label column. So every bay in a building shares ONE column,
-    // placed just past that building's rightmost bay — landing in the
-    // real gap before the next building starts (or open ground, past the
-    // last building in the row). In interior mode there's only ever one
-    // bay on screen, so its own flanks are already genuinely open —
-    // leaving buildingColumnWorldX empty there falls back to that bay's
-    // own center further down.
-    const buildingColumnWorldX = {};
+    // the same building sit only ~1.5 units apart at these dimensions,
+    // nowhere near enough room for a label column on their own. Each
+    // building now gets TWO columns instead of one shared column: the
+    // first half of its bays route to a column in the open ground to the
+    // building's LEFT, the second half to a column to its RIGHT — so a
+    // 2-bay building puts one bay's fields on each side rather than
+    // stacking both into a single crowded list. A building with only one
+    // bay still just gets a single column (right side). In interior mode
+    // there's only ever one bay on screen, so its own flanks are already
+    // open — bayColumnSide/buildingColumnWorldX stay empty there, and the
+    // per-bay fallback further down handles it.
+    const buildingColumnWorldX = {}; // { [buildingId]: { left: worldX, right: worldX } }
+    const bayColumnSide = {}; // { [bayId]: "left" | "right" }
+    const fanHouseWorldPositions = {}; // { [buildingId]: { x, y } }
     if (mode !== "interior") {
       let gi = 0;
       while (gi < bays.length) {
         const bId = bays[gi].buildingId;
         let gj = gi;
         while (gj + 1 < bays.length && bays[gj + 1].buildingId === bId) gj++;
+        const groupSize = gj - gi + 1;
+        const leftmostX = Math.min(...xPositions.slice(gi, gj + 1));
         const rightmostX = Math.max(...xPositions.slice(gi, gj + 1));
-        buildingColumnWorldX[bId] = rightmostX + DIMS.W / 2 + 5;
+        buildingColumnWorldX[bId] = {
+          left: leftmostX - DIMS.W / 2 - 6,
+          right: rightmostX + DIMS.W / 2 + 6,
+        };
+        if (groupSize === 1) {
+          bayColumnSide[bays[gi].id] = "right";
+        } else {
+          const leftHalfEnd = gi + Math.ceil(groupSize / 2) - 1;
+          for (let k = gi; k <= gj; k++) bayColumnSide[bays[k].id] = k <= leftHalfEnd ? "left" : "right";
+        }
+        // Fan House marker — a small physical building at whichever end of
+        // this building the user has set, independent of pipe numbering
+        // (which bay's pipe 1 vs. pipe N is "near the fans" is recorded
+        // separately per bay, since numbering direction can vary bay to
+        // bay even within one physical building).
+        const building = buildingsById[bId];
+        if (building?.fanHouseEnd === "left" || building?.fanHouseEnd === "right") {
+          const edgeX = building.fanHouseEnd === "left" ? leftmostX - DIMS.W / 2 - 3 : rightmostX + DIMS.W / 2 + 3;
+          fanHouseWorldPositions[bId] = { x: edgeX, y: DIMS.H * 0.55, z: 0 };
+        }
         gi = gj + 1;
       }
     }
@@ -901,6 +937,33 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       ring.visible = mode === "yard" && bay.id === selectedId;
       scene.add(ring);
       bayMeshes[bay.id].ring = ring;
+    });
+    // Interior mode's Fan House marker: there's only ever one bay on
+    // screen here, so "left/right across bays" (the yard-mode building
+    // setting) doesn't apply — this instead uses that SAME bay's own
+    // fanHousePipeEnd (which of its own pipe-1/pipe-N ends is near the
+    // fans), positioned along the pipe run itself (Z axis) rather than
+    // across bays (X axis), landing just past whichever end of the actual
+    // pipe layout it is.
+    if (mode === "interior" && bays[0]?.fanHousePipeEnd) {
+      const bay = bays[0];
+      const m = bayMeshes[bay.id];
+      const z = bay.fanHousePipeEnd === "low"
+        ? m.zStart - 3
+        : m.zStart + m.totalPipes * m.pipeWidth + 3;
+      fanHouseWorldPositions[bay.id] = { x: 0, y: DIMS.H * 0.55, z };
+    }
+    // Build each Fan House marker now that every position (yard-mode,
+    // per-building; interior-mode, per-bay) is known — a simple small
+    // shed, same construction pattern as everything else in this scene
+    // (plain MeshStandardMaterial box), not rebuilt per frame since it
+    // never changes once positioned.
+    Object.values(fanHouseWorldPositions).forEach((pos) => {
+      const fanHouseMat = new THREE.MeshStandardMaterial({ color: "#8a6a3a", roughness: 0.65, metalness: 0.25 });
+      const fanHouseMesh = new THREE.Mesh(new THREE.BoxGeometry(4, DIMS.H * 0.55, 4), fanHouseMat);
+      fanHouseMesh.position.set(pos.x, (DIMS.H * 0.55) / 2, pos.z);
+      fanHouseMesh.castShadow = true;
+      buildingGroup.add(fanHouseMesh);
     });
     const target = new THREE.Vector3(0, mode === "interior" ? 3.5 : 3, 0);
     let radius = mode === "interior" ? 26 : 58;
@@ -967,10 +1030,14 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       bays.forEach((bay) => {
         const m = bayMeshes[bay.id];
         // Reference screen point this bay's zone-label column anchors to —
-        // the building's shared column position (real open ground) when
-        // one exists, otherwise this bay's own center (interior mode,
-        // where it's the only bay on screen and already has open flanks).
-        const columnWorldX = buildingColumnWorldX[bay.buildingId] ?? (m.group.position.x + DIMS.W / 2 + 5);
+        // whichever side (left/right) this bay was assigned within its
+        // building, when one exists; otherwise this bay's own center
+        // (interior mode, where it's the only bay on screen and already
+        // has open flanks).
+        const side = bayColumnSide[bay.id] || "right";
+        const columnWorldX = buildingColumnWorldX[bay.buildingId]
+          ? buildingColumnWorldX[bay.buildingId][side]
+          : (m.group.position.x + DIMS.W / 2 + 5);
         const refVec = new THREE.Vector3(columnWorldX, m.maxH + 1.6, m.group.position.z ?? 0);
         refVec.project(camera);
         const bayRefX = (refVec.x * 0.5 + 0.5) * mount.clientWidth;
@@ -986,7 +1053,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
           const ax = (p.x * 0.5 + 0.5) * mount.clientWidth;
           const ay = (-p.y * 0.5 + 0.5) * mount.clientHeight;
           newLabels.push({
-            key: `${bay.id}:${zone.id}`, bayId: bay.id, zoneId: zone.id, buildingId: bay.buildingId,
+            key: `${bay.id}:${zone.id}`, bayId: bay.id, zoneId: zone.id, buildingId: bay.buildingId, columnSide: side,
             // ax/ay: the true pile position — what a leader line draws to.
             // x/y: filled in by layoutZoneLabels below, once this building's
             // whole column is known; starts equal to the anchor so nothing
@@ -1045,6 +1112,19 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
           gi = gj + 1;
         }
       }
+      // Fan House label — runs in both modes now (yard: per-building,
+      // across bays; interior: per-bay, along the pipe run), since
+      // fanHouseWorldPositions is populated accordingly either way.
+      Object.entries(fanHouseWorldPositions).forEach(([key, pos]) => {
+        const fhVec = new THREE.Vector3(pos.x, pos.y + 1.6, pos.z ?? 0);
+        fhVec.project(camera);
+        newLabels.push({
+          key: `fanhouse:${key}`, isFanHouseLabel: true,
+          x: (fhVec.x * 0.5 + 0.5) * mount.clientWidth,
+          y: (-fhVec.y * 0.5 + 0.5) * mount.clientHeight,
+          visible: fhVec.z < 1,
+        });
+      });
       const zoneLabels = newLabels.filter((l) => l.zoneId != null);
       const otherLabels = newLabels.filter((l) => l.zoneId == null);
       setLabels([
@@ -1115,6 +1195,18 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
               textShadow: "0 2px 6px rgba(0,0,0,0.6)",
             }}>
               {l.buildingName}
+            </div>
+          );
+        }
+        if (l.isFanHouseLabel) {
+          return (
+            <div key={l.key} style={{
+              position: "absolute", left: l.x, top: l.y, transform: "translate(-50%,-100%)",
+              pointerEvents: "none", color: "#c49a5e", fontWeight: 600,
+              fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, letterSpacing: 0.3, whiteSpace: "nowrap",
+              textShadow: "0 2px 6px rgba(0,0,0,0.6)",
+            }}>
+              Fan House
             </div>
           );
         }
@@ -2627,6 +2719,9 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
           </div>
           <div style={{ color: "#8790a3", fontSize: 12.5, marginTop: 6 }}>
             {bay.zones.length} field{bay.zones.length !== 1 ? "s" : ""} · {bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0)} pipes total · {bay.pileHeight || 18}' pile
+            {bay.fanHousePipeEnd && (
+              <> · Fan house near pipe {bay.fanHousePipeEnd === "low" ? "1" : (bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0))}</>
+            )}
           </div>
         </div>
         {!readOnly && bay.zones.length > 0 && (
@@ -3680,6 +3775,11 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   const [bldgName, setBldgName] = useState("");
   const [bldgCwtPerPipe, setBldgCwtPerPipe] = useState("");
   const [bldgPileHeight, setBldgPileHeight] = useState(18);
+  // Which end of the building (as its bays run left to right in the 3D
+  // yard) the fan house sits at — purely a real-world orientation marker,
+  // independent of pipe numbering (see each bay's own fanHousePipeEnd for
+  // that). "none" leaves the building without one.
+  const [bldgFanHouseEnd, setBldgFanHouseEnd] = useState("none");
   const [bldgError, setBldgError] = useState("");
   const submitBuilding = () => {
     const trimmed = bldgName.trim();
@@ -3689,9 +3789,10 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
     }
     onAddBuilding({
       id: uid("bldg"), name: trimmed, locationId: bldgLocationId, pileHeight: bldgPileHeight,
+      fanHouseEnd: bldgFanHouseEnd === "none" ? null : bldgFanHouseEnd,
       ...(bldgCwtPerPipe ? { cwtPerPipe: Number(bldgCwtPerPipe) } : {}),
     });
-    setBldgName(""); setBldgCwtPerPipe(""); setBldgPileHeight(18); setBldgError("");
+    setBldgName(""); setBldgCwtPerPipe(""); setBldgPileHeight(18); setBldgFanHouseEnd("none"); setBldgError("");
   };
   // --- add bay (with zones) ---
   const [bayLocationId, setBayLocationId] = useState(locations[0]?.id || "");
@@ -3812,10 +3913,19 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                 {PILE_HEIGHT_OPTIONS.map((h) => <option key={h} value={h}>{h}'</option>)}
               </select>
             </Field>
+            <Field label="Fan house">
+              <select value={bldgFanHouseEnd} onChange={(e) => setBldgFanHouseEnd(e.target.value)} style={{ ...inputStyle, width: 130 }}>
+                <option value="none">None</option>
+                <option value="left">Left end</option>
+                <option value="right">Right end</option>
+              </select>
+            </Field>
           </div>
           <div style={{ fontSize: 11, color: "#5b6478", marginBottom: 8 }}>
-            Both prefill whenever a new bay is added to this building — each bay can still override them. Cwt/pipe should
-            always be entered as if piled 18' high; a bay marked as a 9' pile automatically gets about half that.
+            Cwt/pipe and pile height prefill whenever a new bay is added to this building — each bay can still override
+            them. Cwt/pipe should always be entered as if piled 18' high; a bay marked as a 9' pile automatically gets
+            about half that. Fan house shows a small marker at that end of the building in the 3D yard — left/right is
+            based on how the bays line up on screen, not a real compass direction.
           </div>
           {bldgError && <div style={{ fontSize: 12, color: "#e08787", marginBottom: 8 }}>{bldgError}</div>}
           <Button onClick={submitBuilding} disabled={!locations.length}><Plus size={14} /> Add building</Button>
@@ -4000,6 +4110,13 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                         style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
                         {PILE_HEIGHT_OPTIONS.map((h) => <option key={h} value={h}>{h}'</option>)}
                       </select>
+                      <span style={{ fontSize: 11, color: "#6f7890" }}>fan house</span>
+                      <select value={b.fanHouseEnd || "none"} disabled={readOnly} onChange={(e) => onUpdateBuilding(b.id, { fanHouseEnd: e.target.value === "none" ? null : e.target.value })}
+                        style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
+                        <option value="none">None</option>
+                        <option value="left">Left end</option>
+                        <option value="right">Right end</option>
+                      </select>
                       <DeleteButton
                         disabled={readOnly}
                         title="Delete building"
@@ -4058,6 +4175,13 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
         <EditableInline value={bay.agristorBinName ?? ""} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { agristorBinName: v || null })} width={140} placeholder="not linked" />
         <span style={{ fontSize: 11, color: "#6f7890" }}>IVI panel ID</span>
         <EditableInline value={bay.iviPanelId ?? ""} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { iviPanelId: v || null })} width={220} placeholder="not linked" />
+        <span style={{ fontSize: 11, color: "#6f7890" }}>fan house near pipe</span>
+        <select value={bay.fanHousePipeEnd || "none"} disabled={readOnly} onChange={(e) => onUpdateBayMeta(bay.id, { fanHousePipeEnd: e.target.value === "none" ? null : e.target.value })}
+          style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
+          <option value="none">Not set</option>
+          <option value="low">#1 end</option>
+          <option value="high">#{bay.pipeCount || "N"} end</option>
+        </select>
         {!readOnly && bay.zones.length > 0 && (
           <button
             onClick={() => {
