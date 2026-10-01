@@ -1905,14 +1905,16 @@ function formatAgristorAge(ts) {
 }
 // Refer and Cooling should never both show a nonzero reading at once: if
 // Refer is active, Cooling displays as 0; only when Refer reads 0 does
-// Cooling show its own percentage. NOTE: Agri-Stor's raw feed only has ONE
-// actual sensor behind both labels right now (refrigerationPct and
-// coolingPct are confirmed identical) — so under this rule Cooling will
-// always display 0% with the data available today: whenever Refer is
-// nonzero this forces 0, and whenever Refer is 0 the same underlying
-// number (being 0 too) means Cooling was already going to show 0 anyway.
-// This is still the correct rule to apply — it just won't show anything
-// but 0% unless a genuinely independent Cooling signal is found later.
+// Cooling show its own percentage (door-open % for passive cooling).
+// UNCONFIRMED, pending verification: coolingPct previously duplicated
+// refrigerationPct's exact source value (both read Agri-Stor's index 15) —
+// clearly wrong, since these are meant to be mutually exclusive, not
+// identical. The Cloud Function now instead reads coolingPct from index 4,
+// on the theory that it's the real door-position value — that index was
+// never independently mapped before. If that guess turns out wrong,
+// coolPctRaw will just be whatever's actually at that unconfirmed index
+// until it's checked against a bin with Refer off and doors confirmed open
+// in real life.
 function agristorCoolingDisplay(referPct, coolPctRaw) {
   if (referPct != null && referPct !== 0) return 0;
   return coolPctRaw;
