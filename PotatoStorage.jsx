@@ -909,15 +909,21 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
           const leftHalfEnd = gi + Math.ceil(groupSize / 2) - 1;
           for (let k = gi; k <= gj; k++) bayColumnSide[bays[k].id] = k <= leftHalfEnd ? "left" : "right";
         }
-        // Fan House marker — a small physical building at whichever end of
-        // this building the user has set, independent of pipe numbering
-        // (which bay's pipe 1 vs. pipe N is "near the fans" is recorded
-        // separately per bay, since numbering direction can vary bay to
-        // bay even within one physical building).
+        // Fan House marker — sits at one end of the building's DEPTH (the
+        // same axis pipe numbering runs along — "low" toward pipe 1, "high"
+        // toward the last pipe), not beside the row of bays. Every bay in a
+        // building shares the same depth/Z range regardless of its position
+        // along the row, so one marker spans the building's full width at
+        // that end. Which specific bay's pipe 1 vs. pipe N actually lines
+        // up with "low"/"high" here is recorded separately per bay (see
+        // fanHousePipeEnd), since numbering direction can still vary bay to
+        // bay even within one physical building.
         const building = buildingsById[bId];
-        if (building?.fanHouseEnd === "left" || building?.fanHouseEnd === "right") {
-          const edgeX = building.fanHouseEnd === "left" ? leftmostX - DIMS.W / 2 - 3 : rightmostX + DIMS.W / 2 + 3;
-          fanHouseWorldPositions[bId] = { x: edgeX, y: DIMS.H * 0.55, z: 0 };
+        if (building?.fanHouseEnd === "low" || building?.fanHouseEnd === "high") {
+          const z = building.fanHouseEnd === "low" ? -DIMS.L / 2 - 3 : DIMS.L / 2 + 3;
+          const centerX = (leftmostX + rightmostX) / 2;
+          const spanWidth = (rightmostX - leftmostX) + DIMS.W;
+          fanHouseWorldPositions[bId] = { x: centerX, y: DIMS.H * 0.55, z, spanWidth };
         }
         gi = gj + 1;
       }
@@ -951,7 +957,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       const z = bay.fanHousePipeEnd === "low"
         ? m.zStart - 3
         : m.zStart + m.totalPipes * m.pipeWidth + 3;
-      fanHouseWorldPositions[bay.id] = { x: 0, y: DIMS.H * 0.55, z };
+      fanHouseWorldPositions[bay.id] = { x: 0, y: DIMS.H * 0.55, z, spanWidth: DIMS.W };
     }
     // Build each Fan House marker now that every position (yard-mode,
     // per-building; interior-mode, per-bay) is known — a simple small
@@ -960,7 +966,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     // never changes once positioned.
     Object.values(fanHouseWorldPositions).forEach((pos) => {
       const fanHouseMat = new THREE.MeshStandardMaterial({ color: "#8a6a3a", roughness: 0.65, metalness: 0.25 });
-      const fanHouseMesh = new THREE.Mesh(new THREE.BoxGeometry(4, DIMS.H * 0.55, 4), fanHouseMat);
+      const fanHouseMesh = new THREE.Mesh(new THREE.BoxGeometry(pos.spanWidth ?? 4, DIMS.H * 0.55, 4), fanHouseMat);
       fanHouseMesh.position.set(pos.x, (DIMS.H * 0.55) / 2, pos.z);
       fanHouseMesh.castShadow = true;
       buildingGroup.add(fanHouseMesh);
@@ -1042,26 +1048,34 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
         refVec.project(camera);
         const bayRefX = (refVec.x * 0.5 + 0.5) * mount.clientWidth;
         const bayRefY = (-refVec.y * 0.5 + 0.5) * mount.clientHeight;
-        bay.zones.forEach((zone) => {
-          const footprint = pipeRangeSet(zone.pipeRanges);
-          if (!footprint.size) return; // no pipe assigned yet — nowhere to anchor a label
-          const nums = Array.from(footprint);
-          const lo = Math.min(...nums), hi = Math.max(...nums);
-          const worldZ = m.zStart + ((lo - 1) + (hi - lo + 1) / 2) * m.pipeWidth;
-          const p = new THREE.Vector3(0, m.maxH + 1.6, worldZ).add(m.group.position);
-          p.project(camera);
-          const ax = (p.x * 0.5 + 0.5) * mount.clientWidth;
-          const ay = (-p.y * 0.5 + 0.5) * mount.clientHeight;
-          newLabels.push({
-            key: `${bay.id}:${zone.id}`, bayId: bay.id, zoneId: zone.id, buildingId: bay.buildingId, columnSide: side,
-            // ax/ay: the true pile position — what a leader line draws to.
-            // x/y: filled in by layoutZoneLabels below, once this building's
-            // whole column is known; starts equal to the anchor so nothing
-            // breaks if that step is ever skipped.
-            ax, ay, x: ax, y: ay, bayRefX, bayRefY,
-            visible: p.z < 1,
+        // Per-field info cards only render in interior mode (Bay Detail) —
+        // the yard view now stays deliberately clean (bay/building/fan
+        // house labels only), since this is exactly what was crowding the
+        // yard despite the column/leader-line work. A single bay's own
+        // fields are few enough that interior mode's close-up view can
+        // still show them without the same crowding problem.
+        if (mode === "interior") {
+          bay.zones.forEach((zone) => {
+            const footprint = pipeRangeSet(zone.pipeRanges);
+            if (!footprint.size) return; // no pipe assigned yet — nowhere to anchor a label
+            const nums = Array.from(footprint);
+            const lo = Math.min(...nums), hi = Math.max(...nums);
+            const worldZ = m.zStart + ((lo - 1) + (hi - lo + 1) / 2) * m.pipeWidth;
+            const p = new THREE.Vector3(0, m.maxH + 1.6, worldZ).add(m.group.position);
+            p.project(camera);
+            const ax = (p.x * 0.5 + 0.5) * mount.clientWidth;
+            const ay = (-p.y * 0.5 + 0.5) * mount.clientHeight;
+            newLabels.push({
+              key: `${bay.id}:${zone.id}`, bayId: bay.id, zoneId: zone.id, buildingId: bay.buildingId, columnSide: side,
+              // ax/ay: the true pile position — what a leader line draws to.
+              // x/y: filled in by layoutZoneLabels below, once this building's
+              // whole column is known; starts equal to the anchor so nothing
+              // breaks if that step is ever skipped.
+              ax, ay, x: ax, y: ay, bayRefX, bayRefY,
+              visible: p.z < 1,
+            });
           });
-        });
+        }
         // Pipe number markers along the floor at the bottom of the bay —
         // thinned out on bays with lots of pipe so it stays readable instead
         // of a wall of overlapping numbers. Always includes pipe 1 and the
@@ -3916,16 +3930,16 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
             <Field label="Fan house">
               <select value={bldgFanHouseEnd} onChange={(e) => setBldgFanHouseEnd(e.target.value)} style={{ ...inputStyle, width: 130 }}>
                 <option value="none">None</option>
-                <option value="left">Left end</option>
-                <option value="right">Right end</option>
+                <option value="low">Low-pipe end</option>
+                <option value="high">High-pipe end</option>
               </select>
             </Field>
           </div>
           <div style={{ fontSize: 11, color: "#5b6478", marginBottom: 8 }}>
             Cwt/pipe and pile height prefill whenever a new bay is added to this building — each bay can still override
             them. Cwt/pipe should always be entered as if piled 18' high; a bay marked as a 9' pile automatically gets
-            about half that. Fan house shows a small marker at that end of the building in the 3D yard — left/right is
-            based on how the bays line up on screen, not a real compass direction.
+            about half that. Fan house shows a marker spanning the building's width, at that end of its depth (the same
+            axis pipe numbering runs along) — in the 3D yard and in each bay's own interior view.
           </div>
           {bldgError && <div style={{ fontSize: 12, color: "#e08787", marginBottom: 8 }}>{bldgError}</div>}
           <Button onClick={submitBuilding} disabled={!locations.length}><Plus size={14} /> Add building</Button>
@@ -4114,8 +4128,8 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                       <select value={b.fanHouseEnd || "none"} disabled={readOnly} onChange={(e) => onUpdateBuilding(b.id, { fanHouseEnd: e.target.value === "none" ? null : e.target.value })}
                         style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
                         <option value="none">None</option>
-                        <option value="left">Left end</option>
-                        <option value="right">Right end</option>
+                        <option value="low">Low-pipe end</option>
+                        <option value="high">High-pipe end</option>
                       </select>
                       <DeleteButton
                         disabled={readOnly}
