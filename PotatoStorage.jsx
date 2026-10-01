@@ -247,7 +247,7 @@ const emptyZoneData = (zoneId) => ({
 });
 const emptyBayData = (bay) => ({
   zones: Object.fromEntries(bay.zones.map((z) => [z.id, emptyZoneData(z.id)])),
-  tempLogs: [],
+  tempLogs: [], notes: [],
 });
 const fmt = (n, d = 0) => (n ?? 0).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -3275,6 +3275,78 @@ function TemperatureTab({ bays, dataById, onAddTemp, onDeleteTemp, readOnly }) {
   );
 }
 /* ---------------------------------------------------------------
+   Notes tab — pick a bay, jot a dated note against it. Season-scoped
+   same as tempLogs/pipeChecks (lives in dataById[bayId].notes), so notes
+   archive and reset with the season like everything else bay-specific.
+----------------------------------------------------------------*/
+function NotesTab({ bays, dataById, onAddNote, onDeleteNote, readOnly }) {
+  const [bayId, setBayId] = useState(bays[0]?.id);
+  const [date, setDate] = useState(todayStr());
+  const [text, setText] = useState("");
+  const submit = () => {
+    if (!text.trim()) return;
+    onAddNote(bayId, { id: uid("note"), date, text: text.trim(), createdAt: Date.now() });
+    setText("");
+  };
+  // Every note across every bay at this site, newest first — same
+  // "log entry + site-wide history" pattern as Sprout Nip, so reviewing
+  // doesn't require clicking through bays one at a time.
+  const allNotes = useMemo(() => {
+    const rows = [];
+    bays.forEach((b) => {
+      (dataById[b.id]?.notes || []).forEach((n) => rows.push({ ...n, bay: b }));
+    });
+    return rows.sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
+  }, [bays, dataById]);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
+          <ClipboardCheck size={16} color="#f2c14e" /> Add a note
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Field label="Bay">
+            <select value={bayId} onChange={(e) => setBayId(e.target.value)} style={inputStyle}>
+              {bays.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Date"><input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} /></Field>
+        </div>
+        <Field label="Note">
+          <textarea
+            value={text} onChange={(e) => setText(e.target.value)} rows={3}
+            style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit", lineHeight: 1.4 }}
+            placeholder="e.g. Noticed condensation on the north wall — checked fans, running fine."
+          />
+        </Field>
+        <Button onClick={submit} disabled={readOnly || !text.trim()}><Plus size={14} /> Save note</Button>
+      </div>
+      <div>
+        <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Notes — every bay at this site</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {allNotes.length === 0 && <div style={{ color: "#5b6478", fontSize: 13 }}>No notes logged at this site yet.</div>}
+          {allNotes.map((n) => (
+            <div key={n.id} style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 8, padding: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                <div style={{ fontSize: 13, color: "#eef1f6", fontWeight: 700 }}>
+                  {n.bay.name} <span style={{ color: "#8790a3", fontWeight: 400 }}>· {n.date}</span>
+                </div>
+                {!readOnly && (
+                  <DeleteButton
+                    confirmMessage={`Delete this note on ${n.bay.name} from ${n.date}? This can't be undone.`}
+                    onConfirm={() => onDeleteNote(n.bay.id, n.id)}
+                  />
+                )}
+              </div>
+              <div style={{ fontSize: 13, color: "#c7cede", marginTop: 6, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{n.text}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+/* ---------------------------------------------------------------
    Inspections tab
 ----------------------------------------------------------------*/
 const CHECKLIST_ITEMS = ["Fans running", "Doors / curtains sealed", "Signs of rot or pests", "Condensation / humidity ok", "Temperature within target"];
@@ -4573,6 +4645,7 @@ export default function PotatoStorage() {
   const [selectedLocationId, setSelectedLocationId] = useState(DEFAULT_LOCATIONS[0].id);
   const [selectedId, setSelectedId] = useState(DEFAULT_BAYS[0].id);
   const [showNewSeason, setShowNewSeason] = useState(false);
+  const [showSetupMenu, setShowSetupMenu] = useState(false);
   // Shared across yard/detail/summary — deliberately not reset on tab or
   // site switches, so "show me Gala" stays in effect while you move around
   // looking for it.
@@ -4753,6 +4826,26 @@ export default function PotatoStorage() {
       const bayData = prev[bayId] || {};
       const logs = bayData.tempLogs || [];
       const nextBayData = { ...bayData, tempLogs: logs.filter((_, i) => i !== index) };
+      const next = { ...prev, [bayId]: nextBayData };
+      saveJSON(bayDataKey(bayId), nextBayData);
+      return next;
+    });
+  }, [isReadOnly]);
+  const onAddNote = useCallback((bayId, entry) => {
+    if (isReadOnly) return;
+    setDataById((prev) => {
+      const bayData = prev[bayId] || {};
+      const nextBayData = { ...bayData, notes: [...(bayData.notes || []), entry] };
+      const next = { ...prev, [bayId]: nextBayData };
+      saveJSON(bayDataKey(bayId), nextBayData);
+      return next;
+    });
+  }, [isReadOnly]);
+  const onDeleteNote = useCallback((bayId, noteId) => {
+    if (isReadOnly) return;
+    setDataById((prev) => {
+      const bayData = prev[bayId] || {};
+      const nextBayData = { ...bayData, notes: (bayData.notes || []).filter((n) => n.id !== noteId) };
       const next = { ...prev, [bayId]: nextBayData };
       saveJSON(bayDataKey(bayId), nextBayData);
       return next;
@@ -5083,15 +5176,22 @@ export default function PotatoStorage() {
   }, [activeSeason, bays, dataById, inspections, varieties]);
   const selectedBay = displayBays.find((b) => b.id === selectedId) || locationBays[0];
   const NAV = [
-    { id: "yard", label: "3D Yard", icon: Warehouse },
-    { id: "map", label: "Map", icon: MapIcon },
-    { id: "detail", label: "Bay Detail", icon: Package },
     { id: "summary", label: "Summary", icon: BarChart3 },
+    { id: "map", label: "Map", icon: MapIcon },
+    { id: "yard", label: "3D Yard", icon: Warehouse },
+    { id: "detail", label: "Bay Detail", icon: Package },
+    { id: "temp", label: "Temperature", icon: Thermometer },
+    { id: "notes", label: "Notes", icon: ClipboardCheck },
+    { id: "sproutnip", label: "Sprout Nip", icon: FlaskConical },
+  ];
+  // Grouped into one "Setup" dropdown, off to the side — these are
+  // configuration/reference screens (structure, rosters) rather than
+  // day-to-day working tabs, so they don't need to compete for space in
+  // the main row.
+  const SETUP_NAV = [
     { id: "manage", label: "Manage Sites", icon: Building2 },
     { id: "customers", label: "Customers", icon: Users },
     { id: "varieties", label: "Varieties", icon: Sprout },
-    { id: "temp", label: "Temperature", icon: Thermometer },
-    { id: "sproutnip", label: "Sprout Nip", icon: FlaskConical },
   ];
   if (!loaded) {
     return (
@@ -5154,20 +5254,63 @@ export default function PotatoStorage() {
             </div>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 4, background: "#141b28", borderRadius: 8, padding: 4, border: "1px solid #232d40", flexWrap: "wrap" }}>
-          {NAV.map((n) => {
-            const Icon = n.icon;
-            const active = tab === n.id;
-            return (
-              <button key={n.id} onClick={() => setTab(n.id)} style={{
-                display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 6, border: "none",
-                cursor: "pointer", fontSize: 12.5, fontWeight: 600,
-                background: active ? "#e0a63e" : "transparent", color: active ? "#1a1408" : "#c7cede",
-              }}>
-                <Icon size={14} /> {n.label}
-              </button>
-            );
-          })}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 4, background: "#141b28", borderRadius: 8, padding: 4, border: "1px solid #232d40", flexWrap: "wrap" }}>
+            {NAV.map((n) => {
+              const Icon = n.icon;
+              const active = tab === n.id;
+              return (
+                <button key={n.id} onClick={() => setTab(n.id)} style={{
+                  display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", borderRadius: 6, border: "none",
+                  cursor: "pointer", fontSize: 12.5, fontWeight: 600,
+                  background: active ? "#e0a63e" : "transparent", color: active ? "#1a1408" : "#c7cede",
+                }}>
+                  <Icon size={14} /> {n.label}
+                </button>
+              );
+            })}
+          </div>
+          {/* Setup — Manage Sites, Customers, Varieties. Configuration/
+              reference screens rather than day-to-day working tabs, so
+              they're grouped off to the side instead of competing for
+              space in the main row. Same dropdown pattern as the filter
+              bar's dimension menus elsewhere in the app. */}
+          <div style={{ position: "relative" }}>
+            <button onClick={() => setShowSetupMenu((v) => !v)} style={{
+              display: "flex", alignItems: "center", gap: 6, padding: "9px 14px", borderRadius: 8,
+              border: `1px solid ${SETUP_NAV.some((s) => s.id === tab) ? "#e0a63e" : "#232d40"}`,
+              cursor: "pointer", fontSize: 12.5, fontWeight: 600,
+              background: SETUP_NAV.some((s) => s.id === tab) ? "rgba(224,166,62,0.14)" : "#141b28",
+              color: SETUP_NAV.some((s) => s.id === tab) ? "#f2c14e" : "#c7cede",
+            }}>
+              <Building2 size={14} /> Setup
+              <ChevronRight size={11} style={{ transform: showSetupMenu ? "rotate(90deg)" : "rotate(0deg)" }} />
+            </button>
+            {showSetupMenu && (
+              <>
+                <div onClick={() => setShowSetupMenu(false)} style={{ position: "fixed", inset: 0, zIndex: 19 }} />
+                <div style={{
+                  position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 20, minWidth: 180,
+                  background: "#141b28", border: "1px solid #2b3549", borderRadius: 8, padding: 4,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+                }}>
+                  {SETUP_NAV.map((n) => {
+                    const Icon = n.icon;
+                    const active = tab === n.id;
+                    return (
+                      <button key={n.id} onClick={() => { setTab(n.id); setShowSetupMenu(false); }} style={{
+                        display: "flex", alignItems: "center", gap: 8, width: "100%", textAlign: "left",
+                        padding: "8px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12.5, fontWeight: 600,
+                        background: active ? "rgba(224,166,62,0.14)" : "transparent", color: active ? "#f2c14e" : "#c7cede",
+                      }}>
+                        <Icon size={14} /> {n.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
       {showNewSeason && (
@@ -5287,6 +5430,13 @@ export default function PotatoStorage() {
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
               <TemperatureTab bays={locationBays} dataById={displayDataById} onAddTemp={onAddTemp} onDeleteTemp={onDeleteTemp} readOnly={isReadOnly} />
+            )}
+          </div>
+        )}
+        {tab === "notes" && (
+          <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+            {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
+              <NotesTab bays={locationBays} dataById={displayDataById} onAddNote={onAddNote} onDeleteNote={onDeleteNote} readOnly={isReadOnly} />
             )}
           </div>
         )}
