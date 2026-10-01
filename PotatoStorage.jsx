@@ -913,17 +913,19 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
         // same axis pipe numbering runs along — "low" toward pipe 1, "high"
         // toward the last pipe), not beside the row of bays. Every bay in a
         // building shares the same depth/Z range regardless of its position
-        // along the row, so one marker spans the building's full width at
-        // that end. Which specific bay's pipe 1 vs. pipe N actually lines
-        // up with "low"/"high" here is recorded separately per bay (see
+        // along the row. A small marker, centered on the building — which
+        // for a multi-bay building lands it right in the seam between bays,
+        // and for a single-bay building centers it on that one bay — rather
+        // than a large marker spanning the whole building's width. Which
+        // specific bay's pipe 1 vs. pipe N actually lines up with
+        // "low"/"high" here is recorded separately per bay (see
         // fanHousePipeEnd), since numbering direction can still vary bay to
         // bay even within one physical building.
         const building = buildingsById[bId];
         if (building?.fanHouseEnd === "low" || building?.fanHouseEnd === "high") {
-          const z = building.fanHouseEnd === "low" ? -DIMS.L / 2 - 3 : DIMS.L / 2 + 3;
+          const z = building.fanHouseEnd === "low" ? -DIMS.L / 2 - 1.5 : DIMS.L / 2 + 1.5;
           const centerX = (leftmostX + rightmostX) / 2;
-          const spanWidth = (rightmostX - leftmostX) + DIMS.W;
-          fanHouseWorldPositions[bId] = { x: centerX, y: DIMS.H * 0.55, z, spanWidth };
+          fanHouseWorldPositions[bId] = { x: centerX, y: DIMS.H * 0.275, z, spanWidth: DIMS.W / 2 };
         }
         gi = gj + 1;
       }
@@ -955,9 +957,9 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       const bay = bays[0];
       const m = bayMeshes[bay.id];
       const z = bay.fanHousePipeEnd === "low"
-        ? m.zStart - 3
-        : m.zStart + m.totalPipes * m.pipeWidth + 3;
-      fanHouseWorldPositions[bay.id] = { x: 0, y: DIMS.H * 0.55, z, spanWidth: DIMS.W };
+        ? m.zStart - 1.5
+        : m.zStart + m.totalPipes * m.pipeWidth + 1.5;
+      fanHouseWorldPositions[bay.id] = { x: 0, y: DIMS.H * 0.275, z, spanWidth: DIMS.W / 2 };
     }
     // Build each Fan House marker now that every position (yard-mode,
     // per-building; interior-mode, per-bay) is known — a simple small
@@ -966,8 +968,8 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     // never changes once positioned.
     Object.values(fanHouseWorldPositions).forEach((pos) => {
       const fanHouseMat = new THREE.MeshStandardMaterial({ color: "#8a6a3a", roughness: 0.65, metalness: 0.25 });
-      const fanHouseMesh = new THREE.Mesh(new THREE.BoxGeometry(pos.spanWidth ?? 4, DIMS.H * 0.55, 4), fanHouseMat);
-      fanHouseMesh.position.set(pos.x, (DIMS.H * 0.55) / 2, pos.z);
+      const fanHouseMesh = new THREE.Mesh(new THREE.BoxGeometry(pos.spanWidth ?? 2, pos.y, 2), fanHouseMat);
+      fanHouseMesh.position.set(pos.x, pos.y / 2, pos.z);
       fanHouseMesh.castShadow = true;
       buildingGroup.add(fanHouseMesh);
     });
@@ -2349,7 +2351,7 @@ function EquipmentStatusPanel({ bay }) {
   return (
     <div
       style={{
-        position: "absolute", top: 10, right: 10, width: 190,
+        width: 190,
         background: "linear-gradient(180deg, #232c3d 0%, #161c28 100%)",
         border: "1px solid #3a4358", borderRadius: 12, padding: 3,
         boxShadow: "0 4px 14px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06)",
@@ -2420,11 +2422,12 @@ function EquipmentStatusPanel({ bay }) {
 }
 // IVI/Centurion equivalent of EquipmentStatusPanel above — same physical-
 // control-panel styling, showing Refer/Cooling (IVI's two genuinely
-// separate values) rather than Fan, positioned via topOffset so it can
-// stack below the Agri-Stor panel rather than overlap it on a bay that
-// happens to have both integrations linked (BayDetail passes that down
-// based on whether bay.agristorBinName is also set).
-function IviEquipmentStatusPanel({ bay, topOffset = 10 }) {
+// separate values) rather than Fan. Unpositioned (no position/top/right of
+// its own) — the caller (BayDetail) wraps both this and EquipmentStatusPanel
+// in one absolutely-positioned flex column, so they stack via normal flow
+// on a bay with both integrations linked, rather than needing either one to
+// guess the other's actual rendered height with a fixed pixel offset.
+function IviEquipmentStatusPanel({ bay }) {
   const reading = useIviReading(bay.iviPanelId);
   if (!bay.iviPanelId || reading === null) return null;
   const loading = reading === undefined;
@@ -2448,7 +2451,7 @@ function IviEquipmentStatusPanel({ bay, topOffset = 10 }) {
   return (
     <div
       style={{
-        position: "absolute", top: topOffset, right: 10, width: 190,
+        width: 190,
         background: "linear-gradient(180deg, #232c3d 0%, #161c28 100%)",
         border: "1px solid #3a4358", borderRadius: 12, padding: 3,
         boxShadow: "0 4px 14px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06)",
@@ -2776,8 +2779,10 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
         <div style={{ position: "relative", height: 300, background: "#0e1420", border: "1px solid #232d40", borderRadius: 10, overflow: "hidden" }}>
           <Scene3D bays={[bay]} statsById={{ [bay.id]: stats }} mode="interior" onSelect={() => {}}
             invFilter={invFilter} buildingsById={buildingsById} locationsById={locationsById} />
-          <EquipmentStatusPanel bay={bay} />
-          <IviEquipmentStatusPanel bay={bay} topOffset={bay.agristorBinName ? 175 : 10} />
+          <div style={{ position: "absolute", top: 10, right: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+            <EquipmentStatusPanel bay={bay} />
+            <IviEquipmentStatusPanel bay={bay} />
+          </div>
         </div>
         <div style={{ marginTop: 8 }}><Legend bays={[bay]} /></div>
       </div>
