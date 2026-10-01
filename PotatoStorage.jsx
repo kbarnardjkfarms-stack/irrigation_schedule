@@ -1903,22 +1903,6 @@ function formatAgristorAge(ts) {
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.round(hrs / 24)}d ago`;
 }
-// Refer and Cooling should never both show a nonzero reading at once: if
-// Refer is active, Cooling displays as 0; only when Refer reads 0 does
-// Cooling show its own percentage (door-open % for passive cooling).
-// UNCONFIRMED, pending verification: coolingPct previously duplicated
-// refrigerationPct's exact source value (both read Agri-Stor's index 15) —
-// clearly wrong, since these are meant to be mutually exclusive, not
-// identical. The Cloud Function now instead reads coolingPct from index 4,
-// on the theory that it's the real door-position value — that index was
-// never independently mapped before. If that guess turns out wrong,
-// coolPctRaw will just be whatever's actually at that unconfirmed index
-// until it's checked against a bin with Refer off and doors confirmed open
-// in real life.
-function agristorCoolingDisplay(referPct, coolPctRaw) {
-  if (referPct != null && referPct !== 0) return 0;
-  return coolPctRaw;
-}
 // Read-only card showing this bay's latest Agri-Stor sensor reading, synced
 // in by a separate scheduled Cloud Function (see agristorSync in the
 // functions project) — this component never talks to Agri-Stor itself, it
@@ -1993,13 +1977,12 @@ function LiveConditionsCard({ bay }) {
           <LiveStat label="Pile avg" value={reading.pileAvgTempF != null ? `${reading.pileAvgTempF}°F` : "—"} />
           <LiveStat label="CO2" value={reading.co2Ppm != null ? `${reading.co2Ppm} ppm` : "—"} />
           <LiveStat label="Fan" value={reading.fanPct != null ? `${reading.fanPct}%` : "—"} />
-          {/* Refer/Cooling are mutually exclusive by rule: Cooling shows 0
-              whenever Refer is active, and only shows its own percentage
-              when Refer reads 0. See agristorCoolingDisplay's note above —
-              given Agri-Stor's single underlying sensor, Cooling will
-              always land on 0% with the data available today. */}
+          {/* Refer and Cooling are genuinely independent now — confirmed
+              live, the Cloud Function reads a mode flag (index 16) that
+              says which one a shared equipment reading belongs to at any
+              moment, and zeroes out the other. No extra logic needed here. */}
           <LiveStat label="Refer" value={reading.refrigerationPct != null ? `${reading.refrigerationPct}%` : "—"} />
-          <LiveStat label="Cooling" value={agristorCoolingDisplay(reading.refrigerationPct, reading.coolingPct) != null ? `${agristorCoolingDisplay(reading.refrigerationPct, reading.coolingPct)}%` : "—"} />
+          <LiveStat label="Cooling" value={reading.coolingPct != null ? `${reading.coolingPct}%` : "—"} />
         </div>
       )}
     </div>
@@ -2157,12 +2140,12 @@ function EquipmentStatusPanel({ bay }) {
   if (!bay.agristorBinName || reading === null) return null;
   const loading = reading === undefined;
   const isError = !loading && reading.status === "network_error";
-  // Refer/Cooling are mutually exclusive by rule (agristorCoolingDisplay
-  // above) — given Agri-Stor's single underlying sensor, Cooling will
-  // always land on 0% with the data available today.
+  // Refer and Cooling are genuinely independent now — the Cloud Function
+  // handles the mutual-exclusivity logic at the source (see its note on
+  // the mode flag at index 16), so these can be read directly.
   const fanPct = reading?.fanPct ?? null;
   const referPct = reading?.refrigerationPct ?? null;
-  const coolPct = agristorCoolingDisplay(referPct, reading?.coolingPct ?? null);
+  const coolPct = reading?.coolingPct ?? null;
   const stopped = !loading && (fanPct == null || fanPct <= 0) && (referPct == null || referPct <= 0) && (coolPct == null || coolPct <= 0);
   const fanSpinning = !loading && fanPct != null && fanPct > 0;
   const referActive = !loading && referPct != null && referPct > 0;
@@ -2361,12 +2344,12 @@ function YardBayAgristorBadge({ bay }) {
       </div>
     );
   }
-  // Refer/Cooling are mutually exclusive by rule (agristorCoolingDisplay
-  // above) — given Agri-Stor's single underlying sensor, Cooling will
-  // always land on 0% with the data available today.
+  // Refer and Cooling are genuinely independent now — the Cloud Function
+  // handles the mutual-exclusivity logic at the source (see its note on
+  // the mode flag at index 16), so these can be read directly.
   const fanPct = reading?.fanPct ?? null;
   const referPct = reading?.refrigerationPct ?? null;
-  const coolPct = agristorCoolingDisplay(referPct, reading?.coolingPct ?? null);
+  const coolPct = reading?.coolingPct ?? null;
   const fanOn = fanPct != null && fanPct > 0;
   const referOn = referPct != null && referPct > 0;
   const coolOn = coolPct != null && coolPct > 0;
