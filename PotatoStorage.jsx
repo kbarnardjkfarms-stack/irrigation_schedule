@@ -793,28 +793,31 @@ function deconflictLabels(labels) {
   return [...placed, ...untouched];
 }
 const ZONE_LABEL_ROW_HEIGHT = 52;
-const ZONE_LABEL_COLUMN_OFFSET = 170; // lateral distance from the bay into open ground
-function layoutZoneLabels(zoneLabels, containerWidth) {
+// Groups by BUILDING, not bay — every bay in the same building was already
+// given the same bayRefX/Y (that building's one shared column position in
+// real open ground, computed world-space in the animate loop above), so
+// grouping by bay here would just split one building's fields across
+// several redundant columns sitting on top of each other. bayRefX/Y are
+// used directly: they already represent a point clear of the building,
+// pre-offset at the source, so no further lateral shift is added here.
+function layoutZoneLabels(zoneLabels) {
   const visible = zoneLabels.filter((l) => l.visible);
-  const byBay = new Map();
+  const byBuilding = new Map();
   visible.forEach((l) => {
-    if (!byBay.has(l.bayId)) byBay.set(l.bayId, []);
-    byBay.get(l.bayId).push(l);
+    const key = l.buildingId ?? l.bayId;
+    if (!byBuilding.has(key)) byBuilding.set(key, []);
+    byBuilding.get(key).push(l);
   });
   const positioned = [];
-  byBay.forEach((group) => {
-    // Order the column to match how the fields actually sit along the bay
-    // (their true anchor position), not an arbitrary/jittery order.
-    group.sort((a, b) => a.ay - b.ay);
-    const ref = group[0]; // every label in this bay shares the same bayRefX/Y
-    // Send the column toward whichever side has more open room on screen,
-    // so it doesn't immediately run off the edge.
-    const goRight = ref.bayRefX < containerWidth * 0.6;
-    const colX = goRight ? ref.bayRefX + ZONE_LABEL_COLUMN_OFFSET : ref.bayRefX - ZONE_LABEL_COLUMN_OFFSET;
+  byBuilding.forEach((group) => {
+    // Order the column to match how the fields actually sit along the
+    // building (their true anchor position), not an arbitrary/jittery order.
+    group.sort((a, b) => a.ay - b.ay || a.ax - b.ax);
+    const ref = group[0]; // every label in this group shares the same bayRefX/Y
     const totalHeight = (group.length - 1) * ZONE_LABEL_ROW_HEIGHT;
     const startY = Math.max(40, ref.bayRefY - totalHeight / 2);
     group.forEach((l, i) => {
-      positioned.push({ ...l, x: colX, y: startY + i * ZONE_LABEL_ROW_HEIGHT });
+      positioned.push({ ...l, x: ref.bayRefX, y: startY + i * ZONE_LABEL_ROW_HEIGHT });
     });
   });
   return positioned;
@@ -859,6 +862,29 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       xPositions = xPositions.map((p) => p - span / 2);
     } else {
       xPositions = bays.map(() => 0);
+    }
+    // For the yard's field-label columns: real open ground exists between
+    // whole BUILDINGS, not between individual bays within one — bays in
+    // the same building sit only ~1.5 units apart at these dimensions
+    // (TIGHT_GAP minus the building's own width), nowhere near enough room
+    // for a label column. So every bay in a building shares ONE column,
+    // placed just past that building's rightmost bay — landing in the
+    // real gap before the next building starts (or open ground, past the
+    // last building in the row). In interior mode there's only ever one
+    // bay on screen, so its own flanks are already genuinely open —
+    // leaving buildingColumnWorldX empty there falls back to that bay's
+    // own center further down.
+    const buildingColumnWorldX = {};
+    if (mode !== "interior") {
+      let gi = 0;
+      while (gi < bays.length) {
+        const bId = bays[gi].buildingId;
+        let gj = gi;
+        while (gj + 1 < bays.length && bays[gj + 1].buildingId === bId) gj++;
+        const rightmostX = Math.max(...xPositions.slice(gi, gj + 1));
+        buildingColumnWorldX[bId] = rightmostX + DIMS.W / 2 + 5;
+        gi = gj + 1;
+      }
     }
     const buildingGroup = new THREE.Group();
     scene.add(buildingGroup);
@@ -940,10 +966,12 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       const newLabels = [];
       bays.forEach((bay) => {
         const m = bayMeshes[bay.id];
-        // One reference screen point per bay — used to anchor that bay's
-        // whole zone-label column (see layoutZoneLabels) regardless of
-        // mode, independent of whether a visible bay-name label exists.
-        const refVec = new THREE.Vector3(0, m.maxH + 1.6, 0).add(m.group.position);
+        // Reference screen point this bay's zone-label column anchors to —
+        // the building's shared column position (real open ground) when
+        // one exists, otherwise this bay's own center (interior mode,
+        // where it's the only bay on screen and already has open flanks).
+        const columnWorldX = buildingColumnWorldX[bay.buildingId] ?? (m.group.position.x + DIMS.W / 2 + 5);
+        const refVec = new THREE.Vector3(columnWorldX, m.maxH + 1.6, m.group.position.z ?? 0);
         refVec.project(camera);
         const bayRefX = (refVec.x * 0.5 + 0.5) * mount.clientWidth;
         const bayRefY = (-refVec.y * 0.5 + 0.5) * mount.clientHeight;
@@ -958,9 +986,9 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
           const ax = (p.x * 0.5 + 0.5) * mount.clientWidth;
           const ay = (-p.y * 0.5 + 0.5) * mount.clientHeight;
           newLabels.push({
-            key: `${bay.id}:${zone.id}`, bayId: bay.id, zoneId: zone.id,
+            key: `${bay.id}:${zone.id}`, bayId: bay.id, zoneId: zone.id, buildingId: bay.buildingId,
             // ax/ay: the true pile position — what a leader line draws to.
-            // x/y: filled in by layoutZoneLabels below, once this bay's
+            // x/y: filled in by layoutZoneLabels below, once this building's
             // whole column is known; starts equal to the anchor so nothing
             // breaks if that step is ever skipped.
             ax, ay, x: ax, y: ay, bayRefX, bayRefY,
@@ -1020,7 +1048,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       const zoneLabels = newLabels.filter((l) => l.zoneId != null);
       const otherLabels = newLabels.filter((l) => l.zoneId == null);
       setLabels([
-        ...layoutZoneLabels(zoneLabels, mount.clientWidth),
+        ...layoutZoneLabels(zoneLabels),
         ...deconflictLabels(otherLabels),
       ]);
     };
