@@ -1244,21 +1244,27 @@ function agristorNormalizeBinReading(raw) {
     plenumRH: num(main[5]),
     plenumRH2: num(main[6]),
     fanPct: pctOrFlag(main[14]),
-    // UNCONFIRMED, best guess pending verification: index 4 was never
-    // mapped to anything in the original reverse-engineering pass — it
-    // sits in the gap between the confirmed plenum temp pair (2/3) and
-    // plenum RH pair (5/6), never independently checked. coolingPct
-    // previously duplicated index 15 (the same value as refrigerationPct,
-    // confirmed identical across four bins) — this was clearly wrong,
-    // since the two are meant to be mutually exclusive (door-open %
-    // when Refer is off; 0 while Refer is running). Pointing coolingPct
-    // at index 4 instead, on the theory that it's the actual door-position
-    // value. If this turns out wrong once checked against a bin with Refer
-    // confirmed off and the doors confirmed open in real life (compare
-    // against debugAgristorRawBin's full array dump), the fix is just
-    // changing this one index.
-    coolingPct: pctOrFlag(main[4]),
-    refrigerationPct: pctOrFlag(main[15]),
+    // CONFIRMED live, caught mid-transition on the same bin: index 15 is
+    // ONE shared equipment percentage, and index 16 is a plain 0/1 mode
+    // flag saying which label it belongs to at that moment — "1" means
+    // the reading at 15 is Refer (mechanical refrigeration); "0" means
+    // it's Cooling (passive/door ventilation) instead. Watched index 15
+    // drop from 58 to 5 while index 16 flipped from "1" to "0" in exact
+    // lockstep on Hidden Valley 7. This replaces an earlier guess (index 4
+    // as an independent door-position value) that didn't move at all
+    // across the same two readings — ruled out. null when the bin has no
+    // such equipment at all (index 15 reads "--"), rather than forcing a
+    // misleading 0 on a bin that was never equipped for either.
+    coolingPct: (() => {
+      const v = pctOrFlag(main[15]);
+      if (v == null) return null;
+      return main[16] === '1' ? 0 : v;
+    })(),
+    refrigerationPct: (() => {
+      const v = pctOrFlag(main[15]);
+      if (v == null) return null;
+      return main[16] === '1' ? v : 0;
+    })(),
     returnAirTempF,
     returnAirRH: main[10] === 'dis' ? null : num(main[10]),
     outsideAirTempF: num(main[7]),
