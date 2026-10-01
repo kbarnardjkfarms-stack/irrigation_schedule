@@ -3422,7 +3422,113 @@ function InspectionsTab({ bays, inspections, onAdd, readOnly }) {
    history. Applications are season-scoped like everything else in
    bayData, so they archive and reset with the season.
 ----------------------------------------------------------------*/
-function SproutNipTab({ bays, dataById, statsById, customers, products, applicators, readOnly, onAddSproutApplication, onDeleteSproutApplication, onAddProduct, onUpdateProductRestrictions, onRenameProduct, onDeleteProduct, onAddApplicator, onRenameApplicator, onDeleteApplicator }) {
+// Product library — moved out of Sprout Nip and into Setup, since this is
+// a configuration/reference screen (what products exist, who they're
+// restricted for) rather than a day-to-day logging task. Sprout Nip still
+// reads the resulting `products` list (read-only) for its own product
+// dropdown; this is the only place that actually edits it.
+function ProductsTab({ customers, products, readOnly, onAddProduct, onUpdateProductRestrictions, onRenameProduct, onDeleteProduct }) {
+  const [newProductName, setNewProductName] = useState("");
+  const [productError, setProductError] = useState("");
+  const addProduct = () => {
+    const trimmed = newProductName.trim();
+    if (!trimmed) return;
+    if (products.some((p) => p.name.toLowerCase() === trimmed.toLowerCase())) { setProductError(`"${trimmed}" is already on the list.`); return; }
+    onAddProduct({ id: uid("prod"), name: trimmed, restrictedCustomers: [] });
+    setNewProductName(""); setProductError("");
+  };
+  const toggleRestriction = (product, customerName) => {
+    const next = product.restrictedCustomers.includes(customerName)
+      ? product.restrictedCustomers.filter((c) => c !== customerName)
+      : [...product.restrictedCustomers, customerName];
+    onUpdateProductRestrictions(product.id, next);
+  };
+  return (
+    <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
+      <div style={{ fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
+        <FlaskConical size={16} color="#f2c14e" /> Product library
+      </div>
+      <div style={{ fontSize: 12, color: "#8790a3", marginBottom: 12 }}>
+        Check a customer to block that product from ever being logged against their potatoes.
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {products.map((p) => (
+          <div key={p.id} style={{ background: "#0e1420", border: "1px solid #232d40", borderRadius: 8, padding: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <EditableInline value={p.name} disabled={readOnly} onSave={(v) => onRenameProduct(p.id, v)} width={200} />
+              <DeleteButton
+                disabled={readOnly}
+                title="Delete product"
+                confirmMessage={`Remove "${p.name}" from the product library? Already-logged applications keep their record — this only stops it from being offered for new ones.`}
+                onConfirm={() => onDeleteProduct(p.id)}
+              />
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {customers.map((c) => {
+                const isRestricted = p.restrictedCustomers.includes(c);
+                return (
+                  <button key={c} onClick={() => toggleRestriction(p, c)} style={{
+                    border: `1px solid ${isRestricted ? "#e08787" : "#2b3549"}`,
+                    background: isRestricted ? "rgba(224,135,135,0.14)" : "transparent",
+                    color: isRestricted ? "#e08787" : "#8790a3",
+                    borderRadius: 20, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600,
+                    display: "flex", alignItems: "center", gap: 4,
+                  }}>
+                    {isRestricted && <AlertTriangle size={11} />} {c}
+                  </button>
+                );
+              })}
+              {customers.length === 0 && <span style={{ fontSize: 12, color: "#5b6478" }}>Add customers first to set restrictions.</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <input value={newProductName} onChange={(e) => { setNewProductName(e.target.value); setProductError(""); }}
+          onKeyDown={(e) => e.key === "Enter" && addProduct()} style={{ ...inputStyle, flex: 1 }} placeholder="Add a product, e.g. 1,4 SIGHT" />
+        <Button onClick={addProduct}><Plus size={14} /> Add</Button>
+      </div>
+      {productError && <div style={{ fontSize: 12, color: "#e08787", marginTop: 6 }}>{productError}</div>}
+    </div>
+  );
+}
+// Applicator companies — same reasoning as ProductsTab above: a roster to
+// configure, not a logging task, so it moved to Setup. Sprout Nip still
+// reads the resulting `applicators` list (read-only) for its own dropdown.
+function ApplicatorsTab({ applicators, readOnly, onAddApplicator, onRenameApplicator, onDeleteApplicator }) {
+  const [newApplicatorName, setNewApplicatorName] = useState("");
+  const addApplicator = () => {
+    const trimmed = newApplicatorName.trim();
+    if (!trimmed) return;
+    onAddApplicator(trimmed);
+    setNewApplicatorName("");
+  };
+  return (
+    <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
+      <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Applicator companies</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+        {applicators.map((a) => (
+          <div key={a} style={{ display: "flex", alignItems: "center", gap: 8, background: "#0e1420", border: "1px solid #232d40", borderRadius: 8, padding: "6px 10px" }}>
+            <EditableInline value={a} disabled={readOnly} onSave={(v) => onRenameApplicator(a, v)} width={220} />
+            <DeleteButton
+              disabled={readOnly}
+              title="Delete applicator company"
+              confirmMessage={`Remove "${a}" from the applicator list? Already-logged applications keep their record — this only stops it from being offered for new ones.`}
+              onConfirm={() => onDeleteApplicator(a)}
+            />
+          </div>
+        ))}
+        {applicators.length === 0 && <span style={{ fontSize: 12, color: "#5b6478" }}>No applicator companies added yet.</span>}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input value={newApplicatorName} onChange={(e) => setNewApplicatorName(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && addApplicator()} style={{ ...inputStyle, flex: 1 }} placeholder="Add a company, e.g. Western Ag Applicators" />
+        <Button onClick={addApplicator}><Plus size={14} /> Add</Button>
+      </div>
+    </div>
+  );
+}
+function SproutNipTab({ bays, dataById, statsById, products, applicators, readOnly, onAddSproutApplication, onDeleteSproutApplication }) {
   // Every field across every bay at this site, flattened into one list with
   // its bay attached and its current cwt looked up from statsById — this is
   // what both the field picker and the "pull the cwt from inventory" math
@@ -3491,100 +3597,11 @@ function SproutNipTab({ bays, dataById, statsById, customers, products, applicat
     });
     setRate(""); setAppError("");
   };
-  const [newProductName, setNewProductName] = useState("");
-  const [productError, setProductError] = useState("");
-  const addProduct = () => {
-    const trimmed = newProductName.trim();
-    if (!trimmed) return;
-    if (products.some((p) => p.name.toLowerCase() === trimmed.toLowerCase())) { setProductError(`"${trimmed}" is already on the list.`); return; }
-    onAddProduct({ id: uid("prod"), name: trimmed, restrictedCustomers: [] });
-    setNewProductName(""); setProductError("");
-  };
-  const [newApplicatorName, setNewApplicatorName] = useState("");
-  const addApplicator = () => {
-    const trimmed = newApplicatorName.trim();
-    if (!trimmed) return;
-    onAddApplicator(trimmed);
-    setNewApplicatorName("");
-  };
-  const toggleRestriction = (product, customerName) => {
-    const next = product.restrictedCustomers.includes(customerName)
-      ? product.restrictedCustomers.filter((c) => c !== customerName)
-      : [...product.restrictedCustomers, customerName];
-    onUpdateProductRestrictions(product.id, next);
-  };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      {/* Product library */}
-      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
-          <FlaskConical size={16} color="#f2c14e" /> Product library
-        </div>
-        <div style={{ fontSize: 12, color: "#8790a3", marginBottom: 12 }}>
-          Check a customer to block that product from ever being logged against their potatoes.
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {products.map((p) => (
-            <div key={p.id} style={{ background: "#0e1420", border: "1px solid #232d40", borderRadius: 8, padding: 12 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                <EditableInline value={p.name} disabled={readOnly} onSave={(v) => onRenameProduct(p.id, v)} width={200} />
-                <DeleteButton
-                  disabled={readOnly}
-                  title="Delete product"
-                  confirmMessage={`Remove "${p.name}" from the product library? Already-logged applications keep their record — this only stops it from being offered for new ones.`}
-                  onConfirm={() => onDeleteProduct(p.id)}
-                />
-              </div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {customers.map((c) => {
-                  const isRestricted = p.restrictedCustomers.includes(c);
-                  return (
-                    <button key={c} onClick={() => toggleRestriction(p, c)} style={{
-                      border: `1px solid ${isRestricted ? "#e08787" : "#2b3549"}`,
-                      background: isRestricted ? "rgba(224,135,135,0.14)" : "transparent",
-                      color: isRestricted ? "#e08787" : "#8790a3",
-                      borderRadius: 20, padding: "4px 10px", fontSize: 12, cursor: "pointer", fontWeight: 600,
-                      display: "flex", alignItems: "center", gap: 4,
-                    }}>
-                      {isRestricted && <AlertTriangle size={11} />} {c}
-                    </button>
-                  );
-                })}
-                {customers.length === 0 && <span style={{ fontSize: 12, color: "#5b6478" }}>Add customers first to set restrictions.</span>}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-          <input value={newProductName} onChange={(e) => { setNewProductName(e.target.value); setProductError(""); }}
-            onKeyDown={(e) => e.key === "Enter" && addProduct()} style={{ ...inputStyle, flex: 1 }} placeholder="Add a product, e.g. 1,4 SIGHT" />
-          <Button onClick={addProduct}><Plus size={14} /> Add</Button>
-        </div>
-        {productError && <div style={{ fontSize: 12, color: "#e08787", marginTop: 6 }}>{productError}</div>}
-      </div>
-      {/* Applicator companies */}
-      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Applicator companies</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
-          {applicators.map((a) => (
-            <div key={a} style={{ display: "flex", alignItems: "center", gap: 8, background: "#0e1420", border: "1px solid #232d40", borderRadius: 8, padding: "6px 10px" }}>
-              <EditableInline value={a} disabled={readOnly} onSave={(v) => onRenameApplicator(a, v)} width={220} />
-              <DeleteButton
-                disabled={readOnly}
-                title="Delete applicator company"
-                confirmMessage={`Remove "${a}" from the applicator list? Already-logged applications keep their record — this only stops it from being offered for new ones.`}
-                onConfirm={() => onDeleteApplicator(a)}
-              />
-            </div>
-          ))}
-          {applicators.length === 0 && <span style={{ fontSize: 12, color: "#5b6478" }}>No applicator companies added yet.</span>}
-        </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input value={newApplicatorName} onChange={(e) => setNewApplicatorName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addApplicator()} style={{ ...inputStyle, flex: 1 }} placeholder="Add a company, e.g. Western Ag Applicators" />
-          <Button onClick={addApplicator}><Plus size={14} /> Add</Button>
-        </div>
-      </div>
+      {/* Product library and Applicator companies moved to Setup — see
+          ProductsTab/ApplicatorsTab above. products/applicators here are
+          read-only, for this screen's own dropdowns. */}
       {/* Log application */}
       <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 6, color: "#eef1f6" }}>Log an application</div>
@@ -5192,6 +5209,8 @@ export default function PotatoStorage() {
     { id: "manage", label: "Manage Sites", icon: Building2 },
     { id: "customers", label: "Customers", icon: Users },
     { id: "varieties", label: "Varieties", icon: Sprout },
+    { id: "products", label: "Products", icon: FlaskConical },
+    { id: "applicators", label: "Applicators", icon: Users },
   ];
   if (!loaded) {
     return (
@@ -5426,6 +5445,19 @@ export default function PotatoStorage() {
             <VarietiesTab varieties={sortedVarieties} bays={displayBays} onAdd={onAddVariety} />
           </div>
         )}
+        {tab === "products" && (
+          <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+            <ProductsTab customers={sortedCustomers} products={sortedProducts} readOnly={isReadOnly}
+              onAddProduct={onAddProduct} onUpdateProductRestrictions={onUpdateProductRestrictions}
+              onRenameProduct={onRenameProduct} onDeleteProduct={onDeleteProduct} />
+          </div>
+        )}
+        {tab === "applicators" && (
+          <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+            <ApplicatorsTab applicators={sortedApplicators} readOnly={isReadOnly}
+              onAddApplicator={onAddApplicator} onRenameApplicator={onRenameApplicator} onDeleteApplicator={onDeleteApplicator} />
+          </div>
+        )}
         {tab === "temp" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
@@ -5443,10 +5475,8 @@ export default function PotatoStorage() {
         {tab === "sproutnip" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
-              <SproutNipTab bays={locationBays} dataById={displayDataById} statsById={statsById} customers={sortedCustomers} products={sortedProducts} applicators={sortedApplicators}
-                readOnly={isReadOnly} onAddSproutApplication={onAddSproutApplication} onDeleteSproutApplication={onDeleteSproutApplication} onAddProduct={onAddProduct}
-                onUpdateProductRestrictions={onUpdateProductRestrictions} onRenameProduct={onRenameProduct} onDeleteProduct={onDeleteProduct}
-                onAddApplicator={onAddApplicator} onRenameApplicator={onRenameApplicator} onDeleteApplicator={onDeleteApplicator} />
+              <SproutNipTab bays={locationBays} dataById={displayDataById} statsById={statsById} products={sortedProducts} applicators={sortedApplicators}
+                readOnly={isReadOnly} onAddSproutApplication={onAddSproutApplication} onDeleteSproutApplication={onDeleteSproutApplication} />
             )}
           </div>
         )}
