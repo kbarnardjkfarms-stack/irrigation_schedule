@@ -157,10 +157,27 @@ function styleForState(state, additive) {
 }
 
 export default function App() {
+  // Keep the service worker registration so new deploys are noticed quickly
+  // (see the polling effect below) instead of only on the next full page load.
+  const swRegistrationRef = useRef(null)
   const {
     needRefresh: [needRefresh],
     updateServiceWorker
-  } = useRegisterSW()
+  } = useRegisterSW({
+    onRegisteredSW(_swUrl, registration) {
+      swRegistrationRef.current = registration || null
+    }
+  })
+  useEffect(() => {
+    const check = () => {
+      const reg = swRegistrationRef.current
+      if (reg && navigator.onLine) reg.update().catch(() => {})
+    }
+    const id = setInterval(check, 60 * 1000)
+    const onVisible = () => { if (document.visibilityState === 'visible') check() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible) }
+  }, [])
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
   const [userProfile, setUserProfile] = useState(null)
@@ -345,7 +362,30 @@ export default function App() {
   // Mirrors firestore.rules' canViewAgronomy() — Admin, Owner, or Farm
   // manager only. Deliberately excludes Irrigation manager and Irrigator,
   // unlike canEditField()'s farm-scoped roles above.
-  const canSeeAgronomy = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager'
+  // Module access. Mirrors firestore.rules' hasModule(): Admin/Owner always
+  // have every module; anyone else follows the `modules` list on their
+  // profile, and a profile with NO list keeps everything their role already
+  // allowed. Not loaded yet (no profile) counts as no access, so nothing
+  // flashes up for someone who shouldn't see it. The rules are the real
+  // enforcement — this only keeps the UI honest.
+  const hasModule = (id) => {
+    if (userRole === 'admin' || userRole === 'owner') return true
+    if (!userProfile) return false
+    return !Array.isArray(userProfile.modules) || userProfile.modules.includes(id)
+  }
+  const irrigationAllowed = hasModule('irrigation')
+  const canSeeAgronomy = (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager') && hasModule('agronomy')
+
+  // If someone's module access changes while they're sitting on a page they
+  // no longer have, send them home rather than leaving a dead screen.
+  useEffect(() => {
+    if (!userRole) return
+    const needs = page === 'potato-storage' ? 'potato-storage'
+      : page === 'agronomy' ? 'agronomy'
+      : (page === 'irrigation' || page === 'pivot-profile' || page === 'pivot-profiles-list') ? 'irrigation'
+      : null
+    if (needs && !hasModule(needs)) setPage('home')
+  }, [page, userRole, userProfile]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
@@ -364,24 +404,24 @@ export default function App() {
   // something recreates it. Gating on `user` means the listener is only ever
   // created once auth is confirmed, so there's nothing stale to get stuck on.
   useEffect(() => {
-    if (!user) return
+    if (!user || !irrigationAllowed) return
     const unsub = onSnapshot(collection(db, 'weeks', weekId, 'events'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data().events || [] })
       setEventsByField(next)
     })
     return () => unsub()
-  }, [user, weekId])
+  }, [user, weekId, irrigationAllowed])
 
   useEffect(() => {
-    if (!user) return
+    if (!user || !irrigationAllowed) return
     const unsub = onSnapshot(collection(db, 'fieldSettings'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data().gpm ?? null })
       setGpmByField(next)
     })
     return () => unsub()
-  }, [user])
+  }, [user, irrigationAllowed])
 
   useEffect(() => {
     if (!user) return
@@ -425,24 +465,24 @@ export default function App() {
   }, [user])
 
   useEffect(() => {
-    if (!user) return
+    if (!user || !irrigationAllowed) return
     const unsub = onSnapshot(collection(db, 'pivotFieldMapping'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.data().fieldId] = d.data().pivotGuid })
       setPivotGuidByFieldId(next)
     })
     return () => unsub()
-  }, [user])
+  }, [user, irrigationAllowed])
 
   useEffect(() => {
-    if (!user) return
+    if (!user || !irrigationAllowed) return
     const unsub = onSnapshot(collection(db, 'pivots'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data() })
       setPivotsByGuid(next)
     })
     return () => unsub()
-  }, [user])
+  }, [user, irrigationAllowed])
 
   // GPM now lives on the pivot's own profile (a pivot can serve more than
   // one field, e.g. Mietzner Middle, so it belongs with the machine, not
@@ -452,14 +492,14 @@ export default function App() {
   // Also carries the stuck-pivot alert state (stuckAlertActive, etc.) used
   // for the badge and the "Clear error" action.
   useEffect(() => {
-    if (!user) return
+    if (!user || !irrigationAllowed) return
     const unsub = onSnapshot(collection(db, 'pivotProfiles'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data() })
       setPivotProfilesByGuid(next)
     })
     return () => unsub()
-  }, [user])
+  }, [user, irrigationAllowed])
 
   useEffect(() => {
     if (!user || !selectedSeasonId) return
@@ -714,6 +754,7 @@ export default function App() {
       </header>
       {page === 'home' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, 160px)', gap: '16px', padding: '24px' }}>
+          {hasModule('irrigation') && (
           <div
             onClick={() => setPage('irrigation')}
             style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
@@ -735,6 +776,8 @@ export default function App() {
             </div>
             <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Irrigation</div>
           </div>
+          )}
+          {hasModule('potato-storage') && (
           <div
             onClick={() => setPage('potato-storage')}
             style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
@@ -742,6 +785,7 @@ export default function App() {
             <img src={potatoStorageLogo} alt="Potato Storage" style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover' }} />
             <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato storage</div>
           </div>
+          )}
           {canSeeAgronomy && (
             <div
               onClick={() => setPage('agronomy')}
@@ -766,10 +810,10 @@ export default function App() {
           )}
         </div>
       )}
-      {page === 'potato-storage' && <PotatoStorage />}
+      {page === 'potato-storage' && hasModule('potato-storage') && <PotatoStorage />}
       {page === 'users' && <Users />}
-      {page === 'pivot-profile' && <PivotProfile pivotGuid={pivotProfileGuid} onBack={() => setPage('irrigation')} />}
-      {page === 'pivot-profiles-list' && (
+      {page === 'pivot-profile' && hasModule('irrigation') && <PivotProfile pivotGuid={pivotProfileGuid} onBack={() => setPage('irrigation')} />}
+      {page === 'pivot-profiles-list' && hasModule('irrigation') && (
         <PivotProfilesList
           farms={farms}
           pivotsByGuid={pivotsByGuid}
@@ -784,7 +828,7 @@ export default function App() {
         />
       )}
       {page === 'agronomy' && canSeeAgronomy && <Agronomy />}
-      {page === 'irrigation' && (
+      {page === 'irrigation' && hasModule('irrigation') && (
         <>
           {view === 'live-data' && <LiveData />}
           {view === 'schedule' && <div className="filter-bar">
