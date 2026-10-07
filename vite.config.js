@@ -5,7 +5,10 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'prompt',
+      // autoUpdate: a new deploy installs, takes over and reloads the page on its
+      // own — no waiting-worker/banner step, which is what used to leave the
+      // old version showing until an incognito window got around it.
+      registerType: 'autoUpdate',
       injectRegister: false,
       manifest: {
         name: 'AIO',
@@ -24,6 +27,9 @@ export default defineConfig({
         // Cache the app shell aggressively so it loads with zero signal.
         // Firestore's own SDK handles offline data caching separately.
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true,
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.origin.includes('firestore.googleapis.com'),
