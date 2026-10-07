@@ -12,14 +12,35 @@ const ROLE_LABELS = {
   irrigator: 'Irrigator'
 }
 const FARM_SCOPED_ROLES = ['farm_manager', 'irrigation_manager', 'irrigator']
+// Which AIO modules a person can use. Ids must match firestore.rules'
+// hasModule() and App.jsx's hasModule(). Admin/Owner always get everything,
+// so the checklist is hidden for them. A profile with no `modules` list means
+// "everything their role already allows" — so all boxes checked is saved as
+// no list at all, not as a list of every module.
+const MODULES = [
+  { id: 'irrigation', label: 'Irrigation' },
+  { id: 'potato-storage', label: 'Potato storage' },
+  { id: 'agronomy', label: 'Agronomy', note: 'Only Admin, Owner and Farm manager roles can ever see this one.' }
+]
+const ALL_MODULE_IDS = MODULES.map((m) => m.id)
+const FULL_ACCESS_ROLES = ['admin', 'owner']
+function modulesToSave(role, modules) {
+  if (FULL_ACCESS_ROLES.includes(role)) return null
+  const allChecked = ALL_MODULE_IDS.every((id) => modules.includes(id))
+  return allChecked ? null : modules
+}
 
-const EMPTY_FORM = { name: '', email: '', phone: '', receiveTextAlerts: true, role: 'irrigator', farmIds: [], canEditSchedule: false }
+const EMPTY_FORM = { name: '', email: '', phone: '', receiveTextAlerts: true, role: 'irrigator', farmIds: [], canEditSchedule: false, modules: ALL_MODULE_IDS }
 
 function ProfileForm({ initial, farms, emailEditable, submitLabel, onCancel, onSubmit }) {
   const [form, setForm] = useState(initial)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const farmScoped = FARM_SCOPED_ROLES.includes(form.role)
+
+  function toggleModule(id) {
+    setForm((f) => ({ ...f, modules: f.modules.includes(id) ? f.modules.filter((m) => m !== id) : [...f.modules, id] }))
+  }
 
   function toggleFarm(farmId) {
     setForm((f) => {
@@ -33,6 +54,10 @@ function ProfileForm({ initial, farms, emailEditable, submitLabel, onCancel, onS
     setError(null)
     if (farmScoped && form.farmIds.length === 0) {
       setError('Pick at least one farm for this role.')
+      return
+    }
+    if (!FULL_ACCESS_ROLES.includes(form.role) && form.modules.length === 0) {
+      setError('Pick at least one module, or this person will have nothing to open.')
       return
     }
     setBusy(true)
@@ -125,6 +150,23 @@ function ProfileForm({ initial, farms, emailEditable, submitLabel, onCancel, onS
           <label htmlFor="canEditSchedule" style={{ fontSize: '12px' }}>Allow this person to edit the irrigation schedule</label>
         </div>
       )}
+      {!FULL_ACCESS_ROLES.includes(form.role) && (
+        <>
+          <div className="editor-label">Modules</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '6px' }}>
+            {MODULES.map((m) => (
+              <label key={m.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+                <input type="checkbox" checked={form.modules.includes(m.id)} onChange={() => toggleModule(m.id)} style={{ margin: 0 }} />
+                {m.label}
+              </label>
+            ))}
+          </div>
+          <p style={{ fontSize: '11px', color: '#888', margin: '0 0 12px' }}>
+            Unchecked modules are hidden and blocked at the database level. All checked means full access, including any module added later.
+            {form.modules.includes('agronomy') && form.role !== 'farm_manager' ? ' Agronomy still needs the Farm manager role.' : ''}
+          </p>
+        </>
+      )}
       {error && <p style={{ color: '#A32D2D', fontSize: '13px', margin: '0 0 10px' }}>{error}</p>}
       <div style={{ display: 'flex', gap: '8px' }}>
         <button type="submit" className="save" disabled={busy} style={{ flex: 1 }}>{busy ? 'Saving\u2026' : submitLabel}</button>
@@ -181,6 +223,12 @@ export default function Users() {
       farmIds: form.farmIds,
       canEditSchedule: form.canEditSchedule
     })
+    // createUser doesn't know about modules, so set them right after — an
+    // Admin/Owner session is allowed to write any users doc under the rules.
+    const newModules = modulesToSave(form.role, form.modules)
+    if (newModules && result.data && result.data.uid) {
+      await updateDoc(doc(db, 'users', result.data.uid), { modules: newModules })
+    }
     let emailSent = true
     try {
       await sendPasswordResetEmail(auth, form.email.trim())
@@ -208,6 +256,8 @@ export default function Users() {
     } else {
       update.canEditSchedule = deleteField()
     }
+    const savedModules = modulesToSave(form.role, form.modules)
+    update.modules = savedModules ? savedModules : deleteField()
     await updateDoc(doc(db, 'users', uid), update)
     setEditingUid(null)
   }
@@ -263,6 +313,12 @@ export default function Users() {
     if (!FARM_SCOPED_ROLES.includes(user.role)) return 'All farms'
     if (!user.farmIds || user.farmIds.length === 0) return '\u2014'
     return user.farmIds.map((id) => farmNameById[id] || id).join(', ')
+  }
+
+  function moduleSummary(user) {
+    if (FULL_ACCESS_ROLES.includes(user.role) || !Array.isArray(user.modules)) return 'All'
+    if (user.modules.length === 0) return 'None'
+    return MODULES.filter((m) => user.modules.includes(m.id)).map((m) => m.label).join(', ')
   }
 
   function scheduleAccessSummary(user) {
@@ -326,6 +382,7 @@ export default function Users() {
             <th style={{ padding: '6px 8px' }}>Role</th>
             <th style={{ padding: '6px 8px' }}>Farms</th>
             <th style={{ padding: '6px 8px' }}>Schedule access</th>
+            <th style={{ padding: '6px 8px' }}>Modules</th>
             <th style={{ padding: '6px 8px' }}></th>
           </tr>
         </thead>
@@ -344,6 +401,7 @@ export default function Users() {
                 <td style={{ padding: '8px' }}>{ROLE_LABELS[user.role] || user.role}</td>
                 <td style={{ padding: '8px', color: '#666' }}>{farmSummary(user)}</td>
                 <td style={{ padding: '8px', color: '#666' }}>{scheduleAccessSummary(user)}</td>
+                <td style={{ padding: '8px', color: '#666' }}>{moduleSummary(user)}</td>
                 <td style={{ padding: '8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                   <button onClick={() => setEditingUid(editingUid === user.uid ? null : user.uid)} style={{ marginRight: '6px' }}>
                     {editingUid === user.uid ? 'Close' : 'Edit'}
@@ -359,7 +417,7 @@ export default function Users() {
               </tr>
               {editingUid === user.uid && (
                 <tr>
-                  <td colSpan={6} style={{ padding: '12px 8px' }}>
+                  <td colSpan={7} style={{ padding: '12px 8px' }}>
                     <ProfileForm
                       initial={{
                         name: user.name || '',
@@ -368,7 +426,8 @@ export default function Users() {
                         receiveTextAlerts: user.receiveTextAlerts !== false,
                         role: user.role || 'irrigator',
                         farmIds: user.farmIds || [],
-                        canEditSchedule: !!user.canEditSchedule
+                        canEditSchedule: !!user.canEditSchedule,
+                        modules: Array.isArray(user.modules) ? user.modules : ALL_MODULE_IDS
                       }}
                       farms={farms}
                       emailEditable={false}
