@@ -760,9 +760,14 @@ function applyZoneFill(bayMesh, bay, zoneStatsById, maxH, filterCtx) {
 // stacked cleanly top-to-bottom in a column — each one keeps its real pile
 // position (ax/ay) alongside its new on-screen spot (x/y), so a thin line
 // can be drawn from the card back to the actual pile it describes.
-const LABEL_BOX = { bay: { w: 120, h: 36 }, building: { w: 150, h: 22 } };
-function labelKind(l) {
-  return l.isBuildingLabel ? "building" : "bay";
+// A bay label with Agri-Stor/IVI badges attached is much taller than a plain
+// name + fill%, so the collision box has to grow with it.
+function getLabelBox(l) {
+  if (l.isBuildingLabel) return { w: 150, h: 22 };
+  let h = 36;
+  if (l.hasAgristor) h += 34;
+  if (l.hasIvi) h += 34;
+  return { w: 130, h };
 }
 function deconflictLabels(labels) {
   const spaced = labels.filter((l) => l.visible && (l.isBayLabel || l.isBuildingLabel));
@@ -776,7 +781,7 @@ function deconflictLabels(labels) {
   spaced.sort((a, b) => a.y - b.y || a.x - b.x);
   const placed = [];
   spaced.forEach((l) => {
-    const box = LABEL_BOX[labelKind(l)];
+    const box = getLabelBox(l);
     let y = l.y;
     let shifted = true;
     let guard = 0;
@@ -860,7 +865,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     // extra space on, per direct instruction. TIGHT_GAP (bay-to-bay within
     // one building) is left as-is; those bays are meant to read as one
     // continuous building with internal bays, not separate structures.
-    const TIGHT_GAP = 14, BUILDING_GAP = 36;
+    const TIGHT_GAP = 14, BUILDING_GAP = 10;
     let xPositions = [0];
     if (mode !== "interior") {
       let x = 0;
@@ -953,13 +958,20 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     // fans), positioned along the pipe run itself (Z axis) rather than
     // across bays (X axis), landing just past whichever end of the actual
     // pipe layout it is.
-    if (mode === "interior" && bays[0]?.fanHousePipeEnd) {
+    // Falls back to the BUILDING's fanHouseEnd when this bay hasn't set its
+    // own override — the per-bay field only matters when a bay's numbering
+    // runs opposite the building's default.
+    if (mode === "interior" && bays[0]) {
       const bay = bays[0];
-      const m = bayMeshes[bay.id];
-      const z = bay.fanHousePipeEnd === "low"
-        ? m.zStart - 1.5
-        : m.zStart + m.totalPipes * m.pipeWidth + 1.5;
-      fanHouseWorldPositions[bay.id] = { x: 0, y: DIMS.H * 0.275, z, spanWidth: DIMS.W / 2 };
+      const building = buildingsById[bay.buildingId];
+      const effectiveEnd = bay.fanHousePipeEnd || building?.fanHouseEnd;
+      if (effectiveEnd === "low" || effectiveEnd === "high") {
+        const m = bayMeshes[bay.id];
+        const z = effectiveEnd === "low"
+          ? m.zStart - 1.5
+          : m.zStart + m.totalPipes * m.pipeWidth + 1.5;
+        fanHouseWorldPositions[bay.id] = { x: 0, y: DIMS.H * 0.275, z, spanWidth: DIMS.W / 2 };
+      }
     }
     // Build each Fan House marker now that every position (yard-mode,
     // per-building; interior-mode, per-bay) is known — a simple small
@@ -1100,6 +1112,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
           p2.project(camera);
           newLabels.push({
             key: `bay:${bay.id}`, bayId: bay.id, isBayLabel: true,
+            hasAgristor: !!bay.agristorBinName, hasIvi: !!bay.iviPanelId,
             x: (p2.x * 0.5 + 0.5) * mount.clientWidth,
             y: (-p2.y * 0.5 + 0.5) * mount.clientHeight,
             visible: p2.z < 1,
