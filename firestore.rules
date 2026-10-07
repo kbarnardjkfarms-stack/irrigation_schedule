@@ -28,6 +28,18 @@ service cloud.firestore {
     function canViewAgronomy() {
       return isAdminOrOwner() || myRole() == 'farm_manager';
     }
+    // Module access. A profile may carry a `modules` list (e.g.
+    // ['irrigation', 'potato-storage']) saying which AIO modules that person
+    // can use at all. A profile with NO `modules` field keeps exactly what
+    // its role already allowed, so deploying this changes nothing for
+    // anyone until an Admin actually sets a list. Admin/Owner always have
+    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy'.
+    // This is the real enforcement — hiding a tile in the UI is only
+    // cosmetic, since anyone could still query Firestore directly.
+    function hasModule(m) {
+      let mods = myData().get('modules', null);
+      return isAdminOrOwner() || mods == null || m in mods;
+    }
     function myFarmIds() {
       return myData().farmIds;
     }
@@ -94,10 +106,10 @@ service cloud.firestore {
     // Function writes this with an Admin key; the app only ever reads it
     // (Live Data tab).
     match /devices/{deviceId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasModule('irrigation');
       allow write: if false;
       match /readings/{readingId} {
-        allow read: if signedIn();
+        allow read: if signedIn() && hasModule('irrigation');
         allow write: if false;
       }
     }
@@ -105,11 +117,11 @@ service cloud.firestore {
     // to its AgWorld field. Same pattern — the sync Cloud Function writes
     // these with an Admin key; the app only ever reads them.
     match /pivots/{pivotId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasModule('irrigation');
       allow write: if false;
     }
     match /pivotFieldMapping/{mappingId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasModule('irrigation');
       allow write: if false;
     }
     // Soil/petiole/nematode/compost sample data, synced hourly from
@@ -118,11 +130,11 @@ service cloud.firestore {
     // unlike the read-everything pattern above - this is the Agronomy
     // module's own access boundary.
     match /samples/{sampleId} {
-      allow read: if signedIn() && canViewAgronomy();
+      allow read: if signedIn() && canViewAgronomy() && hasModule('agronomy');
       allow write: if false;
     }
     match /syncState/{document} {
-      allow read: if signedIn() && canViewAgronomy();
+      allow read: if signedIn() && canViewAgronomy() && hasModule('agronomy');
       allow write: if false;
     }
     // Pivot profiles: sprinkler package reference (metadata only — the PDF
@@ -135,8 +147,8 @@ service cloud.firestore {
     // now to gate on role alone; can be tightened once/if a pivot's farm
     // ownership needs to be unambiguous.
     match /pivotProfiles/{pivotId} {
-      allow read: if signedIn();
-      allow write: if signedIn() && (isAdminOrOwner() || myRole() == 'farm_manager' || myRole() == 'irrigation_manager');
+      allow read: if signedIn() && hasModule('irrigation');
+      allow write: if signedIn() && hasModule('irrigation') && (isAdminOrOwner() || myRole() == 'farm_manager' || myRole() == 'irrigation_manager');
     }
     // The actual irrigation schedule. Everyone signed in can view it (read
     // access isn't farm-scoped — farm/irrigation managers are explicitly
@@ -144,12 +156,12 @@ service cloud.firestore {
     // their farm is handled client-side via the farm picker rather than
     // here). Editing is scoped per-farm via canEditSchedule() above.
     match /weeks/{weekId}/events/{fieldId} {
-      allow read: if signedIn();
-      allow write: if signedIn() && canEditSchedule(fieldId);
+      allow read: if signedIn() && hasModule('irrigation');
+      allow write: if signedIn() && hasModule('irrigation') && canEditSchedule(fieldId);
     }
     match /fieldSettings/{fieldId} {
-      allow read: if signedIn();
-      allow write: if signedIn() && canEditFarmData(fieldId);
+      allow read: if signedIn() && hasModule('irrigation');
+      allow write: if signedIn() && hasModule('irrigation') && canEditFarmData(fieldId);
     }
     // Agri-Stor live conditions for Potato Storage — the "latest reading"
     // doc per bin, plus its history subcollection (Plenum/Return
@@ -161,10 +173,10 @@ service cloud.firestore {
     // had no rule at all, which Firestore defaults to denying — that's
     // what was causing "Missing or insufficient permissions" in the app.
     match /agristorReadings/{binId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasModule('potato-storage');
       allow write: if false;
       match /history/{historyId} {
-        allow read: if signedIn();
+        allow read: if signedIn() && hasModule('potato-storage');
         allow write: if false;
       }
     }
@@ -176,20 +188,21 @@ service cloud.firestore {
     // panel's own GUID, plus an hourly history subcollection (supply/
     // return/Δ T over time) matching agristorReadings/history's shape.
     match /iviReadings/{panelId} {
-      allow read: if signedIn();
+      allow read: if signedIn() && hasModule('potato-storage');
       allow write: if false;
       match /history/{historyId} {
-        allow read: if signedIn();
+        allow read: if signedIn() && hasModule('potato-storage');
         allow write: if false;
       }
     }
     // Potato Storage module. All of its data (bays, seasons, tube checks,
     // cwt runs, temp logs, Sprout Nip applications, product/customer/variety
     // rosters, etc.) lives in this single collection, one document per key.
-    // Any signed-in person can read/write — same access model as before;
-    // the new role system doesn't reach into this module yet.
+    // Gated by the 'potato-storage' module (see hasModule above): anyone
+    // whose profile has no modules list keeps access as before; anyone with
+    // a list needs 'potato-storage' in it.
     match /potatoStorage/{document} {
-      allow read, write: if signedIn();
+      allow read, write: if signedIn() && hasModule('potato-storage');
     }
   }
 }
