@@ -1,15 +1,17 @@
 import { useState, useEffect, useMemo, Fragment } from 'react'
 import { httpsCallable } from 'firebase/functions'
-import { collection, onSnapshot, doc, updateDoc, deleteField } from 'firebase/firestore'
+import { collection, onSnapshot, doc, updateDoc, deleteField, getDoc, getDocs } from 'firebase/firestore'
 import { sendPasswordResetEmail } from 'firebase/auth'
 import { auth, db, functions } from './firebase.js'
+import { customerKey } from './customerKey.js'
 
 const ROLE_LABELS = {
   admin: 'Admin',
   owner: 'Owner',
   farm_manager: 'Farm manager',
   irrigation_manager: 'Irrigation manager',
-  irrigator: 'Irrigator'
+  irrigator: 'Irrigator',
+  customer: 'Customer'
 }
 const FARM_SCOPED_ROLES = ['farm_manager', 'irrigation_manager', 'irrigator']
 // Which AIO modules a person can use. Ids must match firestore.rules'
@@ -24,19 +26,26 @@ const MODULES = [
 ]
 const ALL_MODULE_IDS = MODULES.map((m) => m.id)
 const FULL_ACCESS_ROLES = ['admin', 'owner']
+// Customers are outside staff modules entirely: they get a read-only portal
+// limited to the customer names linked to their login (customers/customerKeys).
+const CUSTOMER_ROLE = 'customer'
 function modulesToSave(role, modules) {
   if (FULL_ACCESS_ROLES.includes(role)) return null
   const allChecked = ALL_MODULE_IDS.every((id) => modules.includes(id))
   return allChecked ? null : modules
 }
 
-const EMPTY_FORM = { name: '', email: '', phone: '', receiveTextAlerts: true, role: 'irrigator', farmIds: [], canEditSchedule: false, modules: ALL_MODULE_IDS }
+const EMPTY_FORM = { name: '', email: '', phone: '', receiveTextAlerts: true, role: 'irrigator', farmIds: [], canEditSchedule: false, modules: ALL_MODULE_IDS, customers: [] }
 
-function ProfileForm({ initial, farms, emailEditable, submitLabel, onCancel, onSubmit }) {
+function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabel, onCancel, onSubmit }) {
   const [form, setForm] = useState(initial)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const farmScoped = FARM_SCOPED_ROLES.includes(form.role)
+
+  function toggleCustomer(name) {
+    setForm((f) => ({ ...f, customers: f.customers.includes(name) ? f.customers.filter((c) => c !== name) : [...f.customers, name] }))
+  }
 
   function toggleModule(id) {
     setForm((f) => ({ ...f, modules: f.modules.includes(id) ? f.modules.filter((m) => m !== id) : [...f.modules, id] }))
@@ -56,7 +65,11 @@ function ProfileForm({ initial, farms, emailEditable, submitLabel, onCancel, onS
       setError('Pick at least one farm for this role.')
       return
     }
-    if (!FULL_ACCESS_ROLES.includes(form.role) && form.modules.length === 0) {
+    if (form.role === CUSTOMER_ROLE && form.customers.length === 0) {
+      setError('Pick at least one customer for this login to see.')
+      return
+    }
+    if (!FULL_ACCESS_ROLES.includes(form.role) && form.role !== CUSTOMER_ROLE && form.modules.length === 0) {
       setError('Pick at least one module, or this person will have nothing to open.')
       return
     }
@@ -150,7 +163,24 @@ function ProfileForm({ initial, farms, emailEditable, submitLabel, onCancel, onS
           <label htmlFor="canEditSchedule" style={{ fontSize: '12px' }}>Allow this person to edit the irrigation schedule</label>
         </div>
       )}
-      {!FULL_ACCESS_ROLES.includes(form.role) && (
+      {form.role === CUSTOMER_ROLE && (
+        <>
+          <div className="editor-label">Customers this login can see</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '6px' }}>
+            {customerRoster.map((name) => (
+              <label key={name} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
+                <input type="checkbox" checked={form.customers.includes(name)} onChange={() => toggleCustomer(name)} style={{ margin: 0 }} />
+                {name}
+              </label>
+            ))}
+            {customerRoster.length === 0 && <span style={{ fontSize: '12px', color: '#888' }}>No customers found — add them in Potato Storage first.</span>}
+          </div>
+          <p style={{ fontSize: '11px', color: '#888', margin: '0 0 12px' }}>
+            This login sees only these customers' fields, loads shipped from them, Sprout Nip applications, pile temperatures and fill/empty dates — nothing else in AIO. Pick more than one if a buyer has several names (e.g. Mart Fresh and Mart Frozen).
+          </p>
+        </>
+      )}
+      {!FULL_ACCESS_ROLES.includes(form.role) && form.role !== CUSTOMER_ROLE && (
         <>
           <div className="editor-label">Modules</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '6px' }}>
@@ -179,6 +209,7 @@ function ProfileForm({ initial, farms, emailEditable, submitLabel, onCancel, onS
 export default function Users() {
   const [farms, setFarms] = useState([])
   const [users, setUsers] = useState([])
+  const [customerRoster, setCustomerRoster] = useState([])
   const [adding, setAdding] = useState(false)
   const [editingUid, setEditingUid] = useState(null)
   const [notice, setNotice] = useState(null)
@@ -194,6 +225,33 @@ export default function Users() {
       setFarms(list)
     })
     return () => unsub()
+  }, [])
+
+  // Customer names for the Customer role's checklist. The roster lives in
+  // Potato Storage's own data (one JSON-encoded doc); if it was never saved
+  // (the app is still on its built-in defaults), fall back to the names of any
+  // customer views that have already been published.
+  useEffect(() => {
+    let cancelled = false
+    async function loadRoster() {
+      let names = []
+      try {
+        const snap = await getDoc(doc(db, 'potatoStorage', 'norland-customers-v2'))
+        if (snap.exists()) {
+          const parsed = JSON.parse(snap.data().value)
+          if (Array.isArray(parsed)) names = parsed
+        }
+        if (names.length === 0) {
+          const views = await getDocs(collection(db, 'customerViews'))
+          views.forEach((d) => { if (d.data().customer) names.push(d.data().customer) })
+        }
+      } catch {
+        // leave empty — the form says to add customers in Potato Storage first
+      }
+      if (!cancelled) setCustomerRoster(names.slice().sort((a, b) => a.localeCompare(b)))
+    }
+    loadRoster()
+    return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
@@ -226,7 +284,9 @@ export default function Users() {
     // createUser doesn't know about modules, so set them right after — an
     // Admin/Owner session is allowed to write any users doc under the rules.
     const newModules = modulesToSave(form.role, form.modules)
-    if (newModules && result.data && result.data.uid) {
+    if (form.role === CUSTOMER_ROLE && result.data && result.data.uid) {
+      await updateDoc(doc(db, 'users', result.data.uid), { customers: form.customers, customerKeys: form.customers.map(customerKey) })
+    } else if (newModules && result.data && result.data.uid) {
       await updateDoc(doc(db, 'users', result.data.uid), { modules: newModules })
     }
     let emailSent = true
@@ -256,8 +316,15 @@ export default function Users() {
     } else {
       update.canEditSchedule = deleteField()
     }
-    const savedModules = modulesToSave(form.role, form.modules)
+    const savedModules = form.role === CUSTOMER_ROLE ? null : modulesToSave(form.role, form.modules)
     update.modules = savedModules ? savedModules : deleteField()
+    if (form.role === CUSTOMER_ROLE) {
+      update.customers = form.customers
+      update.customerKeys = form.customers.map(customerKey)
+    } else {
+      update.customers = deleteField()
+      update.customerKeys = deleteField()
+    }
     await updateDoc(doc(db, 'users', uid), update)
     setEditingUid(null)
   }
@@ -310,18 +377,21 @@ export default function Users() {
   }
 
   function farmSummary(user) {
+    if (user.role === CUSTOMER_ROLE) return '\u2014'
     if (!FARM_SCOPED_ROLES.includes(user.role)) return 'All farms'
     if (!user.farmIds || user.farmIds.length === 0) return '\u2014'
     return user.farmIds.map((id) => farmNameById[id] || id).join(', ')
   }
 
   function moduleSummary(user) {
+    if (user.role === CUSTOMER_ROLE) return `Customer portal: ${(user.customers || []).join(', ') || '\u2014'}`
     if (FULL_ACCESS_ROLES.includes(user.role) || !Array.isArray(user.modules)) return 'All'
     if (user.modules.length === 0) return 'None'
     return MODULES.filter((m) => user.modules.includes(m.id)).map((m) => m.label).join(', ')
   }
 
   function scheduleAccessSummary(user) {
+    if (user.role === CUSTOMER_ROLE) return '\u2014'
     if (!FARM_SCOPED_ROLES.includes(user.role)) return 'Edit'
     if (user.role === 'farm_manager' || user.role === 'irrigation_manager') return 'Edit (own), view (rest)'
     return user.canEditSchedule ? 'Edit' : 'View only'
@@ -366,6 +436,7 @@ export default function Users() {
           <ProfileForm
             initial={EMPTY_FORM}
             farms={farms}
+            customerRoster={customerRoster}
             emailEditable
             submitLabel="Create account"
             onCancel={() => setAdding(false)}
@@ -427,9 +498,11 @@ export default function Users() {
                         role: user.role || 'irrigator',
                         farmIds: user.farmIds || [],
                         canEditSchedule: !!user.canEditSchedule,
-                        modules: Array.isArray(user.modules) ? user.modules : ALL_MODULE_IDS
+                        modules: Array.isArray(user.modules) ? user.modules : ALL_MODULE_IDS,
+                        customers: user.customers || []
                       }}
                       farms={farms}
+                      customerRoster={customerRoster}
                       emailEditable={false}
                       submitLabel="Save changes"
                       onCancel={() => setEditingUid(null)}
