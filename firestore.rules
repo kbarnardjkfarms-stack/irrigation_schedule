@@ -22,6 +22,16 @@ service cloud.firestore {
     function isAdminOrOwner() {
       return myRole() == 'admin' || myRole() == 'owner';
     }
+    // Customer logins (role 'customer') are outside staff entirely: they can
+    // read only their own published customerViews doc(s), nothing else.
+    // They're excluded from every staff module via hasModule() below, and
+    // from the shared reference data via isStaff().
+    function isCustomer() {
+      return myRole() == 'customer';
+    }
+    function isStaff() {
+      return signedIn() && !isCustomer();
+    }
     // Agronomy module - Admin, Owner, or Farm manager only. Narrower than
     // isAdminOrOwner() alone, and deliberately excludes Irrigation manager
     // and Irrigator, unlike the farm-scoped functions below.
@@ -38,7 +48,7 @@ service cloud.firestore {
     // cosmetic, since anyone could still query Firestore directly.
     function hasModule(m) {
       let mods = myData().get('modules', null);
-      return isAdminOrOwner() || mods == null || m in mods;
+      return isAdminOrOwner() || (!isCustomer() && (mods == null || m in mods));
     }
     function myFarmIds() {
       return myData().farmIds;
@@ -76,18 +86,18 @@ service cloud.firestore {
     // only the sync Cloud Functions write it, and those use an Admin key
     // that bypasses these rules entirely — so this doesn't affect them.
     match /farms/{farmId} {
-      allow read: if signedIn();
+      allow read: if isStaff();
       allow write: if false;
     }
     match /seasons/{seasonId} {
-      allow read: if signedIn();
+      allow read: if isStaff();
       allow write: if false;
     }
     match /fields/{fieldId} {
-      allow read: if signedIn();
+      allow read: if isStaff();
       allow write: if false;
       match /seasons/{seasonId} {
-        allow read: if signedIn();
+        allow read: if isStaff();
         allow write: if false;
       }
     }
@@ -99,7 +109,7 @@ service cloud.firestore {
     // a rule using the {path=**} wildcard for that. This rule only adds
     // read permission; it doesn't loosen anything else.
     match /{path=**}/seasons/{seasonId} {
-      allow read: if signedIn();
+      allow read: if isStaff();
       allow write: if false;
     }
     // Sensor data from ChirpStack. Same pattern — the webhook Cloud
@@ -201,6 +211,15 @@ service cloud.firestore {
     // Gated by the 'potato-storage' module (see hasModule above): anyone
     // whose profile has no modules list keeps access as before; anyone with
     // a list needs 'potato-storage' in it.
+    // Customer portal: one filtered copy per customer, published by staff
+    // sessions from Potato Storage (see publishCustomerViews). A customer
+    // login can read only the docs whose key is on their own profile's
+    // `customerKeys` list; staff with the Potato Storage module can read and
+    // write them all (writes include deleting a view for a removed customer).
+    match /customerViews/{key} {
+      allow read: if signedIn() && (hasModule('potato-storage') || (isCustomer() && key in myData().get('customerKeys', [])));
+      allow write: if signedIn() && hasModule('potato-storage');
+    }
     match /potatoStorage/{document} {
       allow read, write: if signedIn() && hasModule('potato-storage');
     }
