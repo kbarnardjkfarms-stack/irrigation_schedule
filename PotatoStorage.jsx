@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, query, where, getDocs, onSnapshot } from "firebase/firestore";
 import { db } from "./firebase.js"; // AIO's existing Firebase project — same login, no second sign-in
+import { customerKey } from "./customerKey.js";
 /* =================================================================
    NORLAND CELLARS — seed data (pulled from the 2025 storage workbook)
    1200 N. Meridian, Rupert, ID
@@ -3747,7 +3748,8 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
    place new customers get created; every other customer field in
    the app is a select restricted to this list.
 ----------------------------------------------------------------*/
-function CustomersTab({ customers, bays, onAdd }) {
+function CustomersTab({ customers, bays, onAdd, publishStatus, onPublishNow }) {
+  const [publishing, setPublishing] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const submit = () => {
@@ -3785,6 +3787,26 @@ function CustomersTab({ customers, bays, onAdd }) {
           <Button onClick={submit}><Plus size={14} /> Add</Button>
         </div>
         {error && <div style={{ fontSize: 12, color: "#e08787", marginTop: 8 }}>{error}</div>}
+      </div>
+      <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 6, color: "#eef1f6" }}>Customer portal</div>
+        <div style={{ fontSize: 12, color: "#8790a3", marginBottom: 10, lineHeight: 1.5 }}>
+          Customers with a login (Users &amp; Permissions, role Customer) see only their own fields, loads shipped
+          from them, Sprout Nip applications, pile temperatures and fill/empty dates — never shrink, capacity,
+          notes, or anyone else's data. Their view refreshes about 20 seconds after changes are saved here.
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <Button onClick={async () => { setPublishing(true); await onPublishNow(); setPublishing(false); }} disabled={publishing}>
+            {publishing ? "Publishing…" : "Publish now"}
+          </Button>
+          <span style={{ fontSize: 12, color: publishStatus?.error ? "#e08787" : "#8790a3" }}>
+            {publishStatus?.error
+              ? `Couldn't publish: ${publishStatus.error}`
+              : publishStatus
+                ? `Checked ${new Date(publishStatus.at).toLocaleTimeString()} — ${publishStatus.written === 0 ? "every customer's view was already up to date" : `${publishStatus.written} view${publishStatus.written === 1 ? "" : "s"} updated`}`
+                : "Not published yet this session."}
+          </span>
+        </div>
       </div>
       <div>
         <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Current customers</div>
@@ -4421,6 +4443,96 @@ function buildLedger(bays, statsById, buildingsById, locationsById) {
   });
   return rows;
 }
+/* ---------------------------------------------------------------
+   Customer portal publishing. A customer login can't read the real
+   storage data (it holds every customer's fields side by side), so staff
+   sessions publish a filtered copy per customer into customerViews/{key},
+   built from the SAME stats code the Summary tab uses — the numbers a
+   customer sees match what staff see. A view only ever contains fields
+   whose zone.customer is that customer; nothing else is copied in.
+   Shrink, capacity and notes are deliberately never included, and a
+   load's destination is left off (only date/cwt/field/variety go out).
+----------------------------------------------------------------*/
+function hashString(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  return String(h);
+}
+function buildCustomerViews(bays, dataById, buildings, locations, customers) {
+  const buildingsById = Object.fromEntries(buildings.map((b) => [b.id, b]));
+  const locationsById = Object.fromEntries(locations.map((l) => [l.id, l]));
+  const views = {};
+  customers.forEach((name) => {
+    const key = customerKey(name);
+    views[key] = { customer: name, key, fields: [], shipments: [], applications: [], temps: [] };
+  });
+  bays.forEach((bay) => {
+    const bayData = dataById[bay.id] || emptyBayData(bay);
+    const bs = computeBayStats(bay, bayData);
+    const building = buildingsById[bay.buildingId];
+    const locationName = (building && locationsById[building.locationId]?.name) || "Unknown";
+    bay.zones.forEach((zone) => {
+      const view = views[customerKey(zone.customer)];
+      if (!view) return; // not on the customer roster (e.g. "Unassigned") — nobody to publish this to
+      const zs = bs.zoneStats[zone.id];
+      const zoneData = bayData.zones?.[zone.id] || {};
+      const fieldLabel = `${zone.name}${zone.customerFieldCode ? ` — ${zone.customerFieldCode}` : ""}`;
+      const footprint = pipeRangeSet(zone.pipeRanges);
+      view.fields.push({
+        location: locationName, bay: bay.name, field: fieldLabel, variety: zone.variety || null,
+        pipes: footprint.size, inStorageCwt: Math.round(zs.currentCwt), shippedCwt: Math.round(zs.totalRun),
+        fillDate: bay.fillDate || null, emptyDate: bay.emptyDate || null,
+      });
+      // Loads that came out of THIS customer's own fields, wherever they went.
+      (zoneData.cwtRuns || []).forEach((r) => view.shipments.push({
+        date: r.date || null, cwt: Math.round(Number(r.cwt || 0)), field: fieldLabel, bay: bay.name, variety: zone.variety || null,
+      }));
+      (zoneData.sproutApplications || []).forEach((a) => view.applications.push({
+        date: a.date || null, product: a.productName || "Unknown product", rate: a.rate ?? null, rateUnit: a.rateUnit || null,
+        cwtApplied: Math.round(Number(a.cwtApplied || 0)), applicator: a.applicator || null, field: fieldLabel, bay: bay.name,
+      }));
+      // Temperature readings are logged per bay by pipe number — only the
+      // ones at pipes inside this customer's own field go out, averaged by day.
+      const logs = (bayData.tempLogs || []).filter((l) => footprint.has(Number(l.pipeNumber)));
+      buildBayDaySeries(logs).forEach((d) => view.temps.push({ bay: bay.name, field: fieldLabel, date: d.date, top: d.top, bottom: d.bottom }));
+    });
+  });
+  Object.values(views).forEach((v) => {
+    v.shipments.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    v.applications.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    v.temps.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    // A Firestore doc tops out at 1 MiB — keep well under it by trimming the
+    // oldest temperature days first if a customer has an unusually large season.
+    while (v.temps.length > 0 && JSON.stringify(v).length > 700000) v.temps = v.temps.slice(Math.ceil(v.temps.length * 0.2));
+  });
+  return views;
+}
+// Writes only the views whose content actually changed (compared by a hash
+// stored on each doc), so opening the app or an edit that doesn't touch a
+// customer's numbers writes nothing for them. Also removes views for
+// customers no longer on the roster.
+async function publishCustomerViews(views, knownRef) {
+  if (!knownRef.current) {
+    const snap = await getDocs(collection(db, "customerViews"));
+    const known = {};
+    snap.forEach((d) => { known[d.id] = d.data().contentHash || null; });
+    knownRef.current = known;
+  }
+  const known = knownRef.current;
+  let written = 0;
+  const keys = Object.keys(views);
+  for (const key of keys) {
+    const contentHash = hashString(JSON.stringify(views[key]));
+    if (known[key] === contentHash) continue;
+    await setDoc(doc(db, "customerViews", key), { ...views[key], contentHash, publishedAt: Date.now() });
+    known[key] = contentHash;
+    written++;
+  }
+  for (const key of Object.keys(known)) {
+    if (!views[key]) { await deleteDoc(doc(db, "customerViews", key)); delete known[key]; written++; }
+  }
+  return { total: keys.length, written, at: Date.now() };
+}
 const DIM_OPTIONS = [
   { key: "variety", label: "Variety" },
   { key: "customer", label: "Customer" },
@@ -4753,6 +4865,27 @@ export default function PotatoStorage() {
   const activeSeason = useMemo(() => seasons.find((s) => s.snapshot === null) || seasons[seasons.length - 1], [seasons]);
   const isReadOnly = activeSeason ? selectedSeasonId !== activeSeason.id : false;
   const selectedSeason = seasons.find((s) => s.id === selectedSeasonId) || activeSeason;
+  // Customer portal: keep each customer's published view current. Runs off
+  // the LIVE data (never an archived season's snapshot), waits for edits to
+  // settle (20s), and does nothing when nothing changed — see
+  // publishCustomerViews. The Customers tab also has a Publish now button.
+  const publishKnownRef = useRef(null);
+  const [publishStatus, setPublishStatus] = useState(null);
+  const publishNow = useCallback(async () => {
+    try {
+      const views = buildCustomerViews(bays, dataById, buildings, locations, customers);
+      const result = await publishCustomerViews(views, publishKnownRef);
+      setPublishStatus(result);
+    } catch (e) {
+      console.error("customer view publish failed", e);
+      setPublishStatus({ error: e?.message || "Publish failed" });
+    }
+  }, [bays, dataById, buildings, locations, customers]);
+  useEffect(() => {
+    if (!loaded || isReadOnly) return;
+    const t = setTimeout(() => { publishNow(); }, 20000);
+    return () => clearTimeout(t);
+  }, [loaded, isReadOnly, publishNow]);
   const displayBays = isReadOnly && selectedSeason?.snapshot ? selectedSeason.snapshot.bays : bays;
   const displayDataById = isReadOnly && selectedSeason?.snapshot ? selectedSeason.snapshot.dataById : dataById;
   const displayInspections = isReadOnly && selectedSeason?.snapshot ? selectedSeason.snapshot.inspections : inspections;
@@ -5450,7 +5583,7 @@ export default function PotatoStorage() {
         )}
         {tab === "customers" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-            <CustomersTab customers={sortedCustomers} bays={displayBays} onAdd={onAddCustomer} />
+            <CustomersTab customers={sortedCustomers} bays={displayBays} onAdd={onAddCustomer} publishStatus={publishStatus} onPublishNow={publishNow} />
           </div>
         )}
         {tab === "varieties" && (
