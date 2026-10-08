@@ -19,6 +19,7 @@ import Users from './Users.jsx'
 import PivotProfile from './PivotProfile.jsx'
 import PivotProfilesList from './PivotProfilesList.jsx'
 import Agronomy from './Agronomy.jsx'
+import CustomerPortal from './CustomerPortal.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
 
@@ -65,7 +66,8 @@ const ROLE_LABELS = {
   owner: 'Owner',
   farm_manager: 'Farm manager',
   irrigation_manager: 'Irrigation manager',
-  irrigator: 'Irrigator'
+  irrigator: 'Irrigator',
+  customer: 'Customer'
 }
 
 function mondayOf(d) {
@@ -370,10 +372,14 @@ export default function App() {
   // enforcement — this only keeps the UI honest.
   const hasModule = (id) => {
     if (userRole === 'admin' || userRole === 'owner') return true
+    if (userRole === 'customer') return false
     if (!userProfile) return false
     return !Array.isArray(userProfile.modules) || userProfile.modules.includes(id)
   }
   const irrigationAllowed = hasModule('irrigation')
+  // farms/seasons/fields are shared reference data that customer logins are
+  // locked out of in firestore.rules — don't even try to listen for them.
+  const staffReady = !!userRole && userRole !== 'customer'
   const canSeeAgronomy = (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager') && hasModule('agronomy')
 
   // If someone's module access changes while they're sitting on a page they
@@ -424,7 +430,7 @@ export default function App() {
   }, [user, irrigationAllowed])
 
   useEffect(() => {
-    if (!user) return
+    if (!user || !staffReady) return
     const unsub = onSnapshot(collection(db, 'seasons'), (snap) => {
       const list = []
       snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
@@ -441,10 +447,10 @@ export default function App() {
       })
     })
     return () => unsub()
-  }, [user])
+  }, [user, staffReady])
 
   useEffect(() => {
-    if (!user) return
+    if (!user || !staffReady) return
     const unsub = onSnapshot(collection(db, 'farms'), (snap) => {
       const list = []
       snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
@@ -452,17 +458,17 @@ export default function App() {
       setFarms(list)
     })
     return () => unsub()
-  }, [user])
+  }, [user, staffReady])
 
   useEffect(() => {
-    if (!user) return
+    if (!user || !staffReady) return
     const unsub = onSnapshot(collection(db, 'fields'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data() })
       setBaseFieldsById(next)
     })
     return () => unsub()
-  }, [user])
+  }, [user, staffReady])
 
   useEffect(() => {
     if (!user || !irrigationAllowed) return
@@ -502,7 +508,7 @@ export default function App() {
   }, [user, irrigationAllowed])
 
   useEffect(() => {
-    if (!user || !selectedSeasonId) return
+    if (!user || !staffReady || !selectedSeasonId) return
     const q = query(collectionGroup(db, 'seasons'), where('seasonId', '==', selectedSeasonId))
     const unsub = onSnapshot(q, (snap) => {
       const next = {}
@@ -513,7 +519,7 @@ export default function App() {
       setSeasonDataByField(next)
     })
     return () => unsub()
-  }, [user, selectedSeasonId])
+  }, [user, staffReady, selectedSeasonId])
 
   const fields = useMemo(() => {
     return Object.entries(baseFieldsById)
@@ -670,6 +676,31 @@ export default function App() {
 
   if (!user) {
     return <Login />
+  }
+
+  // Customer logins see nothing but their own portal — no module tiles, no
+  // internal data. (firestore.rules enforces this too; this is just the UI.)
+  if (userRole === 'customer') {
+    return (
+      <div className="app">
+        {needRefresh && (
+          <div className="update-banner">
+            <span>A new version of AIO is available.</span>
+            <button onClick={() => updateServiceWorker(true)}>Reload</button>
+          </div>
+        )}
+        <header className="topbar">
+          <div className="brand" style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <img src={aioLogoIcon} alt="AIO — All In One" style={{ height: '40px' }} />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: 'auto' }}>
+            <span style={{ fontSize: '13px', color: '#888' }}>{user.email}</span>
+            <button onClick={handleSignOut}>Sign out</button>
+          </div>
+        </header>
+        <CustomerPortal profile={userProfile} />
+      </div>
+    )
   }
 
   return (
