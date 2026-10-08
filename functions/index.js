@@ -378,7 +378,10 @@ exports.chirpstackWebhook = onRequest(async (req, res) => {
   }
 });
 
-const VALID_ROLES = ['admin', 'owner', 'farm_manager', 'irrigation_manager', 'irrigator'];
+// 'customer' = an outside buyer's login: no staff access, just the read-only
+// customer portal (their customers/customerKeys are set by Users.jsx right
+// after the account is created). Not farm-scoped, so it needs no farmIds.
+const VALID_ROLES = ['admin', 'owner', 'farm_manager', 'irrigation_manager', 'irrigator', 'customer'];
 const FARM_SCOPED_ROLES = ['farm_manager', 'irrigation_manager', 'irrigator'];
 
 // Confirms the calling user's own Firestore profile says admin or owner.
