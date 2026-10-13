@@ -3611,6 +3611,40 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
     });
     setRate(""); setAppError("");
   };
+  // History summarized by bay: one row per bay (fields treated, number of
+  // applications, products, last date, total cwt), expandable down to each
+  // field's own cwt. A multi-field application is stored as one record per
+  // field sharing a batchId, so "applications" counts a batch once. Cwt
+  // here is summed across every record, so a field treated twice counts
+  // its cwt twice — it's cwt APPLIED, not cwt of potatoes treated.
+  const [expandedBays, setExpandedBays] = useState(() => new Set());
+  const historyByBay = useMemo(() => {
+    const groups = [];
+    bays.forEach((bay) => {
+      const fieldGroups = [];
+      bay.zones.forEach((zone) => {
+        const apps = (dataById[bay.id]?.zones?.[zone.id]?.sproutApplications || [])
+          .slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+        if (apps.length) fieldGroups.push({ zone, apps, cwt: apps.reduce((sum, a) => sum + Number(a.cwtApplied || 0), 0) });
+      });
+      if (!fieldGroups.length) return;
+      const all = fieldGroups.flatMap((g) => g.apps);
+      groups.push({
+        bay,
+        fieldGroups: sortByNatural(fieldGroups, (g) => g.zone.name),
+        appCount: new Set(all.map((a) => a.batchId || a.id)).size,
+        products: Array.from(new Set(all.map((a) => a.productName))).filter(Boolean),
+        lastDate: all.reduce((m, a) => ((a.date || "") > m ? a.date : m), ""),
+        cwt: fieldGroups.reduce((sum, g) => sum + g.cwt, 0),
+      });
+    });
+    return sortByNatural(groups, (g) => g.bay.name);
+  }, [bays, dataById]);
+  const toggleBay = (id) => setExpandedBays((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
       {/* Product library and Applicator companies moved to Setup — see
@@ -3691,51 +3725,106 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
         {appError && !blocked && <div style={{ fontSize: 12.5, color: "#e08787", marginBottom: 10 }}>{appError}</div>}
         <Button onClick={submitApplication} disabled={readOnly || blocked}><Plus size={14} /> Log application</Button>
       </div>
-      {/* History — every application across every field at this site */}
+      {/* History — summarized by bay, expandable down to cwt per field */}
       <div>
-        <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Application history</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ fontWeight: 700, color: "#eef1f6" }}>Application history by bay</div>
+          {historyByBay.length > 0 && (
+            <button
+              onClick={() => setExpandedBays(expandedBays.size === historyByBay.length ? new Set() : new Set(historyByBay.map((g) => g.bay.id)))}
+              style={{ background: "transparent", border: "1px solid #2b3549", color: "#c7cede", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}
+            >
+              {expandedBays.size === historyByBay.length ? "Collapse all" : "Expand all"}
+            </button>
+          )}
+        </div>
         <div style={{ overflowX: "auto", border: "1px solid #232d40", borderRadius: 10 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ background: "#141b28", textAlign: "left" }}>
-                <th style={thStyle}>Date</th>
                 <th style={thStyle}>Bay</th>
-                <th style={thStyle}>Field</th>
-                <th style={thStyle}>Product</th>
-                <th style={thStyle}>Rate</th>
+                <th style={thStyle}>Fields treated</th>
+                <th style={thStyle}>Applications</th>
+                <th style={thStyle}>Products</th>
+                <th style={thStyle}>Last applied</th>
                 <th style={thStyle}>Cwt applied</th>
-                <th style={thStyle}>Applicator</th>
-                <th style={thStyle}></th>
               </tr>
             </thead>
             <tbody>
-              {(() => {
-                const rows = [];
-                allFields.forEach((f) => {
-                  const apps = dataById[f.bay.id]?.zones?.[f.zone.id]?.sproutApplications || [];
-                  apps.forEach((a) => rows.push({ ...a, bay: f.bay, zone: f.zone }));
-                });
-                rows.sort((a, b) => b.date.localeCompare(a.date));
-                if (rows.length === 0) return <tr><td colSpan={8} style={{ ...tdStyle, color: "#5b6478" }}>No applications logged at this site yet.</td></tr>;
-                return rows.map((a) => (
-                  <tr key={a.id} style={{ borderTop: "1px solid #232d40" }}>
-                    <td style={tdStyle}><b style={{ color: "#eef1f6" }}>{a.date}</b></td>
-                    <td style={tdStyle}>{a.bay.name}</td>
-                    <td style={tdStyle}>{a.zone.name}{a.zone.customerFieldCode ? ` — ${a.zone.customerFieldCode}` : ""}{a.fieldCount > 1 ? ` (1 of ${a.fieldCount})` : ""}</td>
-                    <td style={tdStyle}>{a.productName}</td>
-                    <td style={tdStyle}>{a.rate} {a.rateUnit}</td>
-                    <td style={tdStyle}>{fmt(a.cwtApplied)} cwt</td>
-                    <td style={tdStyle}>{a.applicator}</td>
-                    <td style={tdStyle}>
-                      <DeleteButton
-                        disabled={readOnly}
-                        confirmMessage={`Delete this Sprout Nip application on ${a.zone.name}? This can't be undone.`}
-                        onConfirm={() => onDeleteSproutApplication(a.bay.id, a.zone.id, a.id)}
-                      />
-                    </td>
-                  </tr>
-                ));
-              })()}
+              {historyByBay.length === 0 && (
+                <tr><td colSpan={6} style={{ ...tdStyle, color: "#5b6478" }}>No applications logged at this site yet.</td></tr>
+              )}
+              {historyByBay.map((g) => {
+                const open = expandedBays.has(g.bay.id);
+                return (
+                  <React.Fragment key={g.bay.id}>
+                    <tr onClick={() => toggleBay(g.bay.id)} style={{ borderTop: "1px solid #232d40", cursor: "pointer", background: open ? "#141b28" : "transparent" }}>
+                      <td style={tdStyle}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          <ChevronRight size={14} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .15s" }} />
+                          <b style={{ color: "#eef1f6" }}>{g.bay.name}</b>
+                        </span>
+                      </td>
+                      <td style={tdStyle}>{g.fieldGroups.length}</td>
+                      <td style={tdStyle}>{g.appCount}</td>
+                      <td style={tdStyle}>{g.products.join(", ")}</td>
+                      <td style={tdStyle}>{g.lastDate || "—"}</td>
+                      <td style={tdStyle}><b style={{ color: "#eef1f6" }}>{fmt(g.cwt)} cwt</b></td>
+                    </tr>
+                    {open && (
+                      <tr>
+                        <td colSpan={6} style={{ padding: "4px 0 10px 28px", background: "#0e1420" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                            <thead>
+                              <tr style={{ textAlign: "left" }}>
+                                <th style={thStyle}>Field / date</th>
+                                <th style={thStyle}>Product</th>
+                                <th style={thStyle}>Rate</th>
+                                <th style={thStyle}>Applicator</th>
+                                <th style={{ ...thStyle, textAlign: "right" }}>Cwt applied</th>
+                                <th style={thStyle}></th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {g.fieldGroups.map((fg) => (
+                                <React.Fragment key={fg.zone.id}>
+                                  <tr style={{ borderTop: "1px solid #232d40", background: "#141b28" }}>
+                                    <td style={tdStyle} colSpan={4}>
+                                      <b style={{ color: "#eef1f6" }}>{fg.zone.name}{fg.zone.customerFieldCode ? ` — ${fg.zone.customerFieldCode}` : ""}</b>
+                                      <span style={{ color: "#8790a3" }}> · {fg.apps.length} application{fg.apps.length === 1 ? "" : "s"}</span>
+                                    </td>
+                                    <td style={{ ...tdStyle, textAlign: "right" }}><b style={{ color: "#f2c14e" }}>{fmt(fg.cwt)} cwt</b></td>
+                                    <td style={tdStyle}></td>
+                                  </tr>
+                                  {fg.apps.map((a) => (
+                                    <tr key={a.id} style={{ borderTop: "1px solid #1c2434" }}>
+                                      <td style={{ ...tdStyle, paddingLeft: 24 }}>
+                                        {a.date}
+                                        {a.fieldCount > 1 && <span style={{ color: "#6f7890" }}> · 1 of {a.fieldCount} fields</span>}
+                                      </td>
+                                      <td style={tdStyle}>{a.productName}</td>
+                                      <td style={tdStyle}>{a.rate} {a.rateUnit}</td>
+                                      <td style={tdStyle}>{a.applicator}</td>
+                                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmt(a.cwtApplied)} cwt</td>
+                                      <td style={tdStyle}>
+                                        <DeleteButton
+                                          disabled={readOnly}
+                                          confirmMessage={`Delete this Sprout Nip application on ${fg.zone.name}? This can't be undone.`}
+                                          onConfirm={() => onDeleteSproutApplication(g.bay.id, fg.zone.id, a.id)}
+                                        />
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </React.Fragment>
+                              ))}
+                            </tbody>
+                          </table>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
