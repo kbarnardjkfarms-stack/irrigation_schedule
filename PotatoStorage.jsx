@@ -18,8 +18,7 @@ import { customerKey } from "./customerKey.js";
 ==================================================================*/
 /* ---------------------------------------------------------------
    Color encoding — variety AND customer are shown at once:
-   pile body = variety hue (warm palette), pile top cap + accents =
-   customer hue (cool/varied palette). Known names get fixed, stable
+   pile body = variety color, pile top cap + accents = customer color. Known names get fixed, stable
    colors; anything new is hashed into the pool so it stays consistent
    across reloads without needing to be configured.
 ----------------------------------------------------------------*/
@@ -28,31 +27,31 @@ function hashStr(s) {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return h;
 }
-// Two-channel color encoding: variety and customer both need to read at a
-// glance, and stand apart from EACH OTHER, not just from their own kind.
-// Fix: variety stays entirely in the warm/neutral half of the wheel (reds,
-// rusts, golds, ambers, browns, one muted plum) — no blue, no green, no
-// violet. Customer stays entirely in the cool half (teal through blue to
-// violet/purple) — no warm hues. That split alone makes "which channel is
-// this" obvious without reading the legend. Within each family, hues are
-// spread across as much of that half of the wheel as the palette will
-// allow, varying lightness/saturation too so near neighbors in hue still
-// read as genuinely different colors, not shades of one color.
-// Every place these render also shows the name as text, so no pair
-// depends on color alone even where 14+ items still leaves some hues
-// closer together than an 8-color colorblind-safe palette could manage.
-// Norkotah was #c9622e — nearly the same orange as Reveille (color difference
-// 6.4) and close to Gala, and read as a near-twin of Burbank's gold next to
-// it in piles and legends. Moved to a dusty rose, picked by searching the
-// warm range for the color farthest from every other variety (38 from
-// Burbank; nothing closer than 25 to any other variety).
+// Two-channel color encoding: variety (pile body) and customer (cap, dots)
+// both need to read at a glance. The three varieties that matter most —
+// Burbank, Ranger and Norkotah — are deliberately the loudest and the most
+// different from each other: green, yellow and red. Each is a family, so
+// "Russet Burbank" and "G3 Burbank" share Burbank's green, "Ranger Russet"
+// shares Ranger's yellow, and so on (see varietyFamily below). Every other
+// variety is a softer, less saturated color chosen by search to sit as far as
+// possible from all the others, from those three mains (at least 28 apart on
+// the CIEDE2000 scale, where ~10 reads as "similar"), from the customer
+// colors (at least 16), and to stay clearly visible on the dark background.
+// Overall no two varieties are closer than about 19. The look-alike
+// customer hues (blues, teals, violets) are the one place a variety can echo
+// the other channel, which is why those are kept a safe distance away.
+// Every place these render also shows the name as text, so no pair depends on
+// color alone.
 const VARIETY_FIXED = {
-  "Burbank": "#d9a441", "Ranger": "#8a2e2e", "Dakota": "#5c3a1e", "Clearwater": "#e8d060",
-  "Teton": "#b23d6b", "Norkotah": "#d49bb2", "Reveille": "#d9704a", "G3 Burbank": "#f0b429",
-  "G3 Reveille": "#6b2450", "Ciklamen": "#8a9c3f", "Nordaana": "#7a4a2e", "907-15": "#c23f3f",
-  "9426": "#9c8a6b", "Gala": "#c77b3f",
+  "Burbank": "#58b947", "Ranger": "#ffd60a", "Norkotah": "#dc2626",
+  "Dakota": "#716c3d", "Clearwater": "#67e9e9", "Teton": "#e967a8", "Reveille": "#f4b4af",
+  "Ciklamen": "#84a1a4", "Nordaana": "#8484a4", "907-15": "#e3b6ed", "9426": "#a49184", "Gala": "#afcbf4",
+  // seed-generation variants follow their base variety (see varietyFamily)
+  "G3 Burbank": "#58b947", "G3 Reveille": "#f4b4af",
 };
-const VARIETY_POOL = ["#a15a2e", "#d94f6b", "#8a6b2e", "#c73f2e", "#6b3d5a", "#b8942e"];
+// Colors for varieties not listed above, picked by hashing the name — chosen
+// to be far from every fixed variety color and from each other.
+const VARIETY_POOL = ["#44bce4", "#ac8bee", "#b59baa", "#986c16", "#936c89", "#a9a9d1"];
 // Varieties that share a base name share a color: "Ranger" and "Ranger
 // Russet", "Burbank" and "Russet Burbank" (and "G3 Burbank") are the same
 // family. The base name is the variety with generic descriptors dropped —
