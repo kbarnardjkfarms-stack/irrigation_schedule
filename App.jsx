@@ -61,6 +61,43 @@ function slugifyFarmName(name) {
   return (name || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 }
 
+// Drops every service worker and cached file the browser is holding for this
+// site so the next load pulls everything fresh. With includeStorage it also
+// wipes the browser's stored app data (Firestore's offline cache, saved
+// login) — the one-tap "reset" for a phone that's gotten stuck.
+async function clearAppCaches({ includeStorage = false } = {}) {
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations()
+      await Promise.all(regs.map((r) => r.unregister()))
+    }
+    if (window.caches) {
+      const keys = await window.caches.keys()
+      await Promise.all(keys.map((k) => window.caches.delete(k)))
+    }
+    if (includeStorage) {
+      try { window.localStorage.clear(); window.sessionStorage.clear() } catch { /* storage blocked */ }
+      if (window.indexedDB && window.indexedDB.databases) {
+        const dbs = await window.indexedDB.databases()
+        await Promise.all(
+          dbs.filter((d) => d.name).map((d) => new Promise((resolve) => {
+            const req = window.indexedDB.deleteDatabase(d.name)
+            req.onsuccess = req.onerror = req.onblocked = () => resolve()
+          }))
+        )
+      }
+    }
+  } catch (e) {
+    console.warn('clearing app caches failed', e)
+  }
+}
+
+// Escape hatch: open the app at /?reset=1 (bookmark it on the phone) to wipe
+// the cached copy and stored data and start clean — no incognito window.
+if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('reset') === '1') {
+  clearAppCaches({ includeStorage: true }).finally(() => window.location.replace(window.location.pathname))
+}
+
 const ROLE_LABELS = {
   admin: 'Admin',
   owner: 'Owner',
@@ -179,6 +216,55 @@ export default function App() {
     const onVisible = () => { if (document.visibilityState === 'visible') check() }
     document.addEventListener('visibilitychange', onVisible)
     return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible) }
+  }, [])
+
+  // Belt-and-suspenders: don't rely on the service worker alone to notice a
+  // new deploy. /version.json is never cached and carries the build stamp
+  // baked into this bundle; if they differ, a newer build is live, so clear
+  // the old cached copy and reload. Re-checked on open, on returning to the
+  // app (phones freeze background apps rather than closing them), on
+  // regaining signal, and every couple of minutes.
+  useEffect(() => {
+    if (typeof __BUILD_ID__ === 'undefined') return undefined
+    let checking = false
+    async function checkVersion() {
+      if (checking || !navigator.onLine) return
+      checking = true
+      try {
+        const res = await fetch(`/version.json?t=${Date.now()}`, { cache: 'no-store' })
+        if (!res.ok) return
+        const { build } = await res.json()
+        if (!build || build === __BUILD_ID__) return
+        // Don't yank the page out from under someone mid-typing — catch it next check.
+        const tag = document.activeElement && document.activeElement.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+        // One reload attempt per new build per session, so a cache that
+        // refuses to clear can never trap the page in a reload loop.
+        if (window.sessionStorage.getItem('aio-reloaded-for') === build) return
+        window.sessionStorage.setItem('aio-reloaded-for', build)
+        await clearAppCaches()
+        window.location.reload()
+      } catch {
+        // offline, blocked, or running in dev (no version.json) — try again next time
+      } finally {
+        checking = false
+      }
+    }
+    const onVisible = () => { if (document.visibilityState === 'visible') checkVersion() }
+    const onPageShow = (e) => { if (e.persisted) checkVersion() }
+    checkVersion()
+    const id = setInterval(checkVersion, 2 * 60 * 1000)
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', checkVersion)
+    window.addEventListener('focus', checkVersion)
+    window.addEventListener('pageshow', onPageShow)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', checkVersion)
+      window.removeEventListener('focus', checkVersion)
+      window.removeEventListener('pageshow', onPageShow)
+    }
   }, [])
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
