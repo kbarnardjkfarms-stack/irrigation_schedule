@@ -48,10 +48,33 @@ const VARIETY_FIXED = {
   "9426": "#9c8a6b", "Gala": "#c77b3f",
 };
 const VARIETY_POOL = ["#a15a2e", "#d94f6b", "#8a6b2e", "#c73f2e", "#6b3d5a", "#b8942e"];
+// Varieties that share a base name share a color: "Ranger" and "Ranger
+// Russet", "Burbank" and "Russet Burbank" (and "G3 Burbank") are the same
+// family. The base name is the variety with generic descriptors dropped —
+// "russet" and seed-generation tags like G1/G2/G3. Matching on the base name
+// rather than any shared word matters: "Ranger Russet" and "Russet Burbank"
+// both contain "Russet" but are different varieties and must stay different.
+const VARIETY_GENERIC_WORDS = new Set(["russet"]);
+function varietyFamily(name) {
+  const lower = String(name || "").trim().toLowerCase();
+  const tokens = lower.split(/\s+/).filter((t) => t && !VARIETY_GENERIC_WORDS.has(t) && !/^g\d+$/.test(t));
+  return tokens.join(" ") || lower;
+}
+const VARIETY_FIXED_BY_FAMILY = (() => {
+  const out = {};
+  Object.entries(VARIETY_FIXED).forEach(([name, color]) => {
+    const fam = varietyFamily(name);
+    // the plain base name ("Burbank") wins over a variant ("G3 Burbank")
+    if (!(fam in out) || name.toLowerCase() === fam) out[fam] = color;
+  });
+  return out;
+})();
 function getVarietyColor(name) {
   if (!name) return "#7c8794";
-  if (VARIETY_FIXED[name]) return VARIETY_FIXED[name];
-  return VARIETY_POOL[hashStr(name) % VARIETY_POOL.length];
+  const fam = varietyFamily(name);
+  if (VARIETY_FIXED_BY_FAMILY[fam]) return VARIETY_FIXED_BY_FAMILY[fam];
+  // hashed on the base name too, so an unlisted family still matches its variants
+  return VARIETY_POOL[hashStr(fam) % VARIETY_POOL.length];
 }
 const CUSTOMER_FIXED = {
   "Lamb Weston": "#2389c2", "Simplot": "#1f9e8a", "McCain": "#6259d9",
