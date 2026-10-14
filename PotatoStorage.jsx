@@ -41,9 +41,14 @@ function hashStr(s) {
 // Every place these render also shows the name as text, so no pair
 // depends on color alone even where 14+ items still leaves some hues
 // closer together than an 8-color colorblind-safe palette could manage.
+// Norkotah was #c9622e — nearly the same orange as Reveille (color difference
+// 6.4) and close to Gala, and read as a near-twin of Burbank's gold next to
+// it in piles and legends. Moved to a dusty rose, picked by searching the
+// warm range for the color farthest from every other variety (38 from
+// Burbank; nothing closer than 25 to any other variety).
 const VARIETY_FIXED = {
   "Burbank": "#d9a441", "Ranger": "#8a2e2e", "Dakota": "#5c3a1e", "Clearwater": "#e8d060",
-  "Teton": "#b23d6b", "Norkotah": "#c9622e", "Reveille": "#d9704a", "G3 Burbank": "#f0b429",
+  "Teton": "#b23d6b", "Norkotah": "#d49bb2", "Reveille": "#d9704a", "G3 Burbank": "#f0b429",
   "G3 Reveille": "#6b2450", "Ciklamen": "#8a9c3f", "Nordaana": "#7a4a2e", "907-15": "#c23f3f",
   "9426": "#9c8a6b", "Gala": "#c77b3f",
 };
@@ -131,6 +136,27 @@ function bayMatchesFilter(bay, buildingsById, locationsById, filter) {
   if (filter.location.length && !filter.location.includes(zoneLocationName(bay, buildingsById, locationsById))) return false;
   if (bay.zones.length === 0) return !(filter.variety.length || filter.customer.length || filter.field.length);
   return bay.zones.some((z) => zoneMatchesFilter(z, bay, buildingsById, locationsById, filter));
+}
+// The Summary groups varieties by base name (see varietyFamily): "Ranger" and
+// "Ranger Russet" become one row. The row is labeled with the plain base name
+// when that variety exists ("Ranger"), otherwise the shortest name in the
+// group — worked out from the whole ledger, not just the filtered rows, so a
+// label doesn't change depending on what a filter happens to leave in view.
+function buildVarietyGroupLabels(names) {
+  const byFamily = new Map();
+  names.filter(Boolean).forEach((n) => {
+    const fam = varietyFamily(n);
+    if (!byFamily.has(fam)) byFamily.set(fam, new Set());
+    byFamily.get(fam).add(n);
+  });
+  const labels = new Map();
+  byFamily.forEach((set, fam) => {
+    const all = Array.from(set);
+    const label = all.find((n) => n.trim().toLowerCase() === fam)
+      || all.slice().sort((a, b) => a.length - b.length || a.localeCompare(b))[0];
+    all.forEach((n) => labels.set(n, label));
+  });
+  return labels;
 }
 function ledgerRowMatchesFilter(row, filter) {
   if (!isFilterActive(filter)) return true;
@@ -4681,20 +4707,24 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
     return Array.from(byKey.values()).sort((a, b) => naturalCompare(a.field, b.field));
   }, [fieldSearch, filteredLedger]);
   const toggleDim = (key) => setDims((d) => (d.includes(key) ? d.filter((k) => k !== key) : [...d, key]));
+  const varietyLabels = useMemo(() => buildVarietyGroupLabels(Array.from(new Set(ledger.map((r) => r.variety)))), [ledger]);
   const grouped = useMemo(() => {
     const map = new Map();
     filteredLedger.forEach((row) => {
-      const keyParts = dims.length ? dims.map((d) => row[d]) : ["All"];
+      const keyParts = dims.length
+        ? dims.map((d) => (d === "variety" ? (varietyLabels.get(row.variety) || row.variety) : row[d]))
+        : ["All"];
       const key = keyParts.join(" · ");
-      if (!map.has(key)) map.set(key, { key, labelParts: keyParts, capacity: 0, inStorage: 0, shipped: 0, shrink: 0 });
+      if (!map.has(key)) map.set(key, { key, labelParts: keyParts, members: new Set(), capacity: 0, inStorage: 0, shipped: 0, shrink: 0 });
       const g = map.get(key);
+      g.members.add(row.variety);
       if (row.metric === "Capacity") g.capacity += row.cwt;
       if (row.metric === "In Storage") g.inStorage += row.cwt;
       if (row.metric === "Shipped") g.shipped += row.cwt;
       if (row.metric === "Shrink") g.shrink += row.cwt;
     });
     return Array.from(map.values()).sort((a, b) => b.capacity - a.capacity);
-  }, [filteredLedger, dims]);
+  }, [filteredLedger, dims, varietyLabels]);
   const totals = grouped.reduce((acc, g) => ({
     capacity: acc.capacity + g.capacity, inStorage: acc.inStorage + g.inStorage,
     shipped: acc.shipped + g.shipped, shrink: acc.shrink + g.shrink,
@@ -4793,6 +4823,12 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
                       </span>
                     )) : g.key}
                   </b>
+                  {(() => {
+                    const vi = dims.indexOf("variety");
+                    if (vi < 0) return null;
+                    const others = Array.from(g.members).filter((m) => m && m !== g.labelParts[vi]).sort();
+                    return others.length ? <div style={{ fontSize: 11, color: "#6f7890", fontWeight: 400 }}>includes {others.join(", ")}</div> : null;
+                  })()}
                 </td>
                 <td style={tdStyle}>{fmt(g.capacity)}</td>
                 <td style={{ ...tdStyle, color: "#f2c14e" }}>{fmt(g.inStorage)}</td>
