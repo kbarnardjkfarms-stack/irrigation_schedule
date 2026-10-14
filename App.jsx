@@ -98,6 +98,44 @@ if (typeof window !== 'undefined' && new URLSearchParams(window.location.search)
   clearAppCaches({ includeStorage: true }).finally(() => window.location.replace(window.location.pathname))
 }
 
+// Shown on the home screen in place of the module tiles whenever the signed-in
+// person's profile hasn't loaded: a short "loading", then — if it's stuck or
+// failed — a way out that doesn't need an incognito window. A stuck copy of
+// the app's saved data on the device is the usual cause.
+function ProfileRecovery({ status, slow, onRetry, onSignOut }) {
+  const box = { margin: '24px', padding: '20px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px', maxWidth: '520px' }
+  const row = { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '14px' }
+  if (status === 'loading' && !slow) {
+    return <div style={{ padding: '24px', color: '#888', fontSize: '14px' }}>Loading your account…</div>
+  }
+  if (status === 'missing' || status === 'ready') {
+    return (
+      <div style={box}>
+        <div style={{ fontWeight: 600, marginBottom: '6px' }}>Your login isn't set up yet</div>
+        <div style={{ fontSize: '14px', color: '#666' }}>You're signed in, but this login has no role assigned. Ask an Admin to set it up, then try again.</div>
+        <div style={row}>
+          <button onClick={onRetry}>Try again</button>
+          <button onClick={onSignOut}>Sign out</button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div style={box}>
+      <div style={{ fontWeight: 600, marginBottom: '6px' }}>AIO is having trouble loading your account</div>
+      <div style={{ fontSize: '14px', color: '#666' }}>
+        This is usually a stuck saved copy of the app on this device, not a problem with your account. Try again first.
+        If it keeps happening, reset the app data — you'll need to sign in again.
+      </div>
+      <div style={row}>
+        <button onClick={onRetry}>Try again</button>
+        <button onClick={() => { clearAppCaches({ includeStorage: true }).finally(() => window.location.replace(window.location.pathname)) }}>Reset app data</button>
+        <button onClick={onSignOut}>Sign out</button>
+      </div>
+    </div>
+  )
+}
+
 const ROLE_LABELS = {
   admin: 'Admin',
   owner: 'Owner',
@@ -269,6 +307,12 @@ export default function App() {
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
   const [userProfile, setUserProfile] = useState(null)
+  // Where loading the signed-in person's profile stands. The home screen's
+  // tiles depend on it, so a stalled profile used to leave a blank page with
+  // no explanation — see ProfileRecovery.
+  const [profileStatus, setProfileStatus] = useState('loading') // 'loading' | 'ready' | 'missing' | 'error'
+  const [profileSlow, setProfileSlow] = useState(false)
+  const [profileAttempt, setProfileAttempt] = useState(0)
   const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', or 'agronomy' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
@@ -424,14 +468,31 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!user) { setUserRole(null); setUserProfile(null); return }
+    if (!user) { setUserRole(null); setUserProfile(null); setProfileStatus('loading'); return }
+    setProfileStatus('loading')
     const unsub = onSnapshot(doc(db, 'users', user.uid), (snap) => {
+      // A "no such doc" answer that only came from the device's saved copy
+      // isn't proof the profile is missing — wait for the server to say so.
+      if (!snap.exists() && snap.metadata.fromCache) return
       const data = snap.exists() ? snap.data() : null
       setUserRole(data ? data.role : null)
       setUserProfile(data)
+      setProfileStatus(data ? 'ready' : 'missing')
+    }, (err) => {
+      console.error('profile listener failed', err)
+      setProfileStatus('error')
     })
     return () => unsub()
-  }, [user])
+  }, [user, profileAttempt])
+
+  // If the profile hasn't answered in a few seconds, say so instead of
+  // leaving a blank screen.
+  useEffect(() => {
+    setProfileSlow(false)
+    if (!user || profileStatus !== 'loading') return undefined
+    const t = setTimeout(() => setProfileSlow(true), 6000)
+    return () => clearTimeout(t)
+  }, [user, profileStatus, profileAttempt])
 
   // Mirrors firestore.rules' canEditSchedule() logic — kept client-side too
   // so the UI reflects reality (disabled buttons, skipped selections)
@@ -869,6 +930,9 @@ export default function App() {
           </div>
         </div>
       </header>
+      {page === 'home' && !userRole && (
+        <ProfileRecovery status={profileStatus} slow={profileSlow} onRetry={() => setProfileAttempt((n) => n + 1)} onSignOut={handleSignOut} />
+      )}
       {page === 'home' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, 160px)', gap: '16px', padding: '24px' }}>
           {hasModule('irrigation') && (
