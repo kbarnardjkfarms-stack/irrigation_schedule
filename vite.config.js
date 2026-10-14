@@ -1,9 +1,25 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+
+// A stamp unique to each build. It's baked into the app (as __BUILD_ID__) and
+// also written to /version.json, which is never cached. The running app
+// compares the two, so it knows a newer build exists even when the service
+// worker's own update check is stuck, throttled, or suspended — which is
+// what phones do to apps sitting in the background.
+const BUILD_ID = String(Date.now())
+const emitVersionFile = () => ({
+  name: 'emit-version-json',
+  generateBundle() {
+    this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ build: BUILD_ID }) })
+  }
+})
+
 export default defineConfig({
+  define: { __BUILD_ID__: JSON.stringify(BUILD_ID) },
   plugins: [
     react(),
+    emitVersionFile(),
     VitePWA({
       // autoUpdate: a new deploy installs, takes over and reloads the page on its
       // own — no waiting-worker/banner step, which is what used to leave the
