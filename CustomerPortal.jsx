@@ -87,7 +87,10 @@ function ViewSection({ view }) {
                 {fields.map((f, i) => (
                   <tr key={i}>
                     <td style={td}>{f.field}</td><td style={td}>{f.variety || '\u2014'}</td><td style={td}>{f.location}</td><td style={td}>{f.bay}</td>
-                    <td style={{ ...td, textAlign: 'right' }}>{num(f.pipes)}</td>
+                    <td style={{ ...td, textAlign: 'right' }}>
+                      {num(f.pipes)}
+                      {f.pipeNumbers && <div style={{ fontSize: '11px', color: '#888' }}>{f.pipeNumbers}</div>}
+                    </td>
                     <td style={{ ...td, textAlign: 'right' }}>{num(f.inStorageCwt)}</td>
                     <td style={{ ...td, textAlign: 'right' }}>{num(f.shippedCwt)}</td>
                     <td style={td}>{f.fillDate || '\u2014'}</td><td style={td}>{f.emptyDate || '\u2014'}</td>
