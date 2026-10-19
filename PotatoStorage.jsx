@@ -58,9 +58,12 @@ const VARIETY_POOL = ["#44bce4", "#ac8bee", "#b59baa", "#986c16", "#936c89", "#a
 // "russet" and seed-generation tags like G1/G2/G3. Matching on the base name
 // rather than any shared word matters: "Ranger Russet" and "Russet Burbank"
 // both contain "Russet" but are different varieties and must stay different.
-const VARIETY_GENERIC_WORDS = new Set(["russet"]);
+// Parenthetical tags like "(potato)" are dropped the same way.
+const VARIETY_GENERIC_WORDS = new Set(["russet", "potato", "potatoes"]);
 function varietyFamily(name) {
-  const lower = String(name || "").trim().toLowerCase();
+  // Anything in parentheses is a qualifier, not part of the name — "Gala
+  // (potato)" (as Agworld labels it) is just Gala.
+  const lower = String(name || "").replace(/\([^)]*\)/g, " ").trim().toLowerCase();
   const tokens = lower.split(/\s+/).filter((t) => t && !VARIETY_GENERIC_WORDS.has(t) && !/^g\d+$/.test(t));
   return tokens.join(" ") || lower;
 }
@@ -4585,7 +4588,7 @@ function buildLedger(bays, statsById, buildingsById, locationsById) {
     if (unassigned > 0) {
       rows.push({
         location: locationName, bay: bay.name, field: "(unassigned pipe)", variety: "Unassigned", customer: "Unassigned",
-        metric: "Capacity", cwt: unassigned,
+        metric: "Capacity", cwt: unassigned, unassignedPipe: true,
       });
     }
   });
@@ -4703,6 +4706,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
     if (!term) return null;
     const byKey = new Map();
     filteredLedger.forEach((row) => {
+      if (row.unassignedPipe) return;
       if (row.metric !== "In Storage" && row.metric !== "Capacity") return;
       const haystack = `${row.field} ${row.bay} ${row.location} ${row.variety} ${row.customer}`.toLowerCase();
       if (!haystack.includes(term)) return;
@@ -4718,9 +4722,18 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
   }, [fieldSearch, filteredLedger]);
   const toggleDim = (key) => setDims((d) => (d.includes(key) ? d.filter((k) => k !== key) : [...d, key]));
   const varietyLabels = useMemo(() => buildVarietyGroupLabels(Array.from(new Set(ledger.map((r) => r.variety)))), [ledger]);
+  // Leftover bay capacity on pipes no field covers yet (the "(unassigned pipe)"
+  // ledger rows) isn't a variety, customer or field, so it stays out of the
+  // grouped list. It's still part of Total capacity — what the bays can
+  // hold — so it's summed here and noted under the totals, not dropped.
+  const unassignedCapacity = useMemo(
+    () => filteredLedger.filter((r) => r.unassignedPipe).reduce((sum, r) => sum + r.cwt, 0),
+    [filteredLedger]
+  );
   const grouped = useMemo(() => {
     const map = new Map();
     filteredLedger.forEach((row) => {
+      if (row.unassignedPipe) return;
       const keyParts = dims.length
         ? dims.map((d) => (d === "variety" ? (varietyLabels.get(row.variety) || row.variety) : row[d]))
         : ["All"];
@@ -4738,7 +4751,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
   const totals = grouped.reduce((acc, g) => ({
     capacity: acc.capacity + g.capacity, inStorage: acc.inStorage + g.inStorage,
     shipped: acc.shipped + g.shipped, shrink: acc.shrink + g.shrink,
-  }), { capacity: 0, inStorage: 0, shipped: 0, shrink: 0 });
+  }), { capacity: unassignedCapacity, inStorage: 0, shipped: 0, shrink: 0 });
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {onFilterChange && (
@@ -4807,6 +4820,11 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
         <StatBlock label="Shipped" value={`${fmt(totals.shipped)} cwt`} />
         <StatBlock label="Shrink" value={`${fmt(totals.shrink)} cwt`} sub={totals.capacity ? `${((totals.shrink / totals.capacity) * 100).toFixed(2)}% of capacity` : ""} accent="#e08787" />
       </div>
+      {unassignedCapacity > 0 && (
+        <div style={{ fontSize: 11.5, color: "#6f7890", marginTop: -8 }}>
+          Total capacity includes {fmt(unassignedCapacity)} cwt on bay pipes not assigned to a field yet — it isn't listed below.
+        </div>
+      )}
       <div style={{ overflowX: "auto", border: "1px solid #232d40", borderRadius: 10 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
