@@ -414,6 +414,17 @@ function formatPipeRanges(ranges) {
     .map(({ from, to }) => (Number(from) === Number(to) ? `${from}` : `${Math.min(from, to)}–${Math.max(from, to)}`))
     .join(", ");
 }
+// WHICH pipes a field covers, as text: "1–26", or "1–5, 36–40" when it's split,
+// plus its top-pipe stretch when that differs from the bottom one ("bottom
+// 1–26 · top 1–20"). Shown next to the pipe COUNT everywhere one appears, so
+// it's clear which pipes the number refers to. null when no pipe is assigned.
+function fieldPipeText(zone) {
+  const bottom = formatPipeRanges(zone.pipeRanges);
+  if (bottom === "—") return null;
+  const hasTop = (zone.topPipeRanges || []).length > 0;
+  return hasTop ? `bottom ${bottom} · top ${formatPipeRanges(zone.topPipeRanges)}` : bottom;
+}
+const pipeSuffix = (zone) => (fieldPipeText(zone) ? ` (${fieldPipeText(zone)})` : "");
 // Every cwt/pipe number on record (bay or field) was calibrated against an
 // 18' pile — that's been the assumption everywhere up to now. A bay can now
 // be marked as a 9' pile instead, which holds roughly half as much potato
@@ -1332,7 +1343,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
             <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}>
               <ColorDot color={getVarietyColor(zone.variety)} /><ColorDot color={getCustomerColor(zone.customer)} /> {zone.name}{zone.customerFieldCode ? ` — ${zone.customerFieldCode}` : ""}
             </div>
-            <div style={{ color: "#9aa4b8" }}>{zone.variety} · {zone.customer} · {zs.pipesFilled}/{zone.pipeCount} pipe · {Math.round(zs.fillPct * 100)}%</div>
+            <div style={{ color: "#9aa4b8" }}>{zone.variety} · {zone.customer} · {zs.pipesFilled}/{zone.pipeCount} pipe{pipeSuffix(zone)} · {Math.round(zs.fillPct * 100)}%</div>
             <div style={{ color: "#f2c14e", fontWeight: 700, marginTop: 2 }}>
               {fmt(zs.currentCwt)} cwt{zs.hasOverride ? " (manual)" : ""}
             </div>
@@ -2903,8 +2914,8 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
             <StatBlock label={`${zone.name}${zone.customerFieldCode ? ` — ${zone.customerFieldCode}` : ""} inventory`} value={`${fmt(zs.currentCwt)} cwt`}
               sub={zs.hasOverride
-                ? `manual · calculated from checks: ${fmt(zs.calculatedCwt)} cwt · ${zs.pipesFilled}/${zone.pipeCount} pipe`
-                : `${Math.round(zs.fillPct * 100)}% of ${fmt(zs.capacityCwt)} cwt · ${zs.pipesFilled}/${zone.pipeCount} pipe`}
+                ? `manual · calculated from checks: ${fmt(zs.calculatedCwt)} cwt · ${zs.pipesFilled}/${zone.pipeCount} pipe${pipeSuffix(zone)}`
+                : `${Math.round(zs.fillPct * 100)}% of ${fmt(zs.capacityCwt)} cwt · ${zs.pipesFilled}/${zone.pipeCount} pipe${pipeSuffix(zone)}`}
               accent="#f2c14e" />
             <div>
               <div style={{ fontSize: 10.5, letterSpacing: 1, textTransform: "uppercase", color: "#8790a3" }}>Actual cwt override</div>
@@ -4489,7 +4500,7 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
             <span style={{ color: "#6f7890" }}>code</span>
             <EditableInline value={z.customerFieldCode || ""} disabled={readOnly} placeholder="none" onSave={(v) => onUpdateZoneMeta(bay.id, z.id, { customerFieldCode: v })} width={100} />
             <span style={{ color: "#6f7890" }}>
-              pipe {formatPipeRanges(z.pipeRanges)} ({zonePipeCount(z)})
+              pipe {fieldPipeText(z) || "—"} ({zonePipeCount(z)})
             </span>
             <select value={z.variety} disabled={readOnly} onChange={(e) => onUpdateZoneMeta(bay.id, z.id, { variety: e.target.value })}
               style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
@@ -4617,7 +4628,7 @@ function buildCustomerViews(bays, dataById, buildings, locations, customers) {
       const footprint = pipeRangeSet(zone.pipeRanges);
       view.fields.push({
         location: locationName, bay: bay.name, field: fieldLabel, variety: zone.variety || null,
-        pipes: footprint.size, inStorageCwt: Math.round(zs.currentCwt), shippedCwt: Math.round(zs.totalRun),
+        pipes: footprint.size, pipeNumbers: fieldPipeText(zone), inStorageCwt: Math.round(zs.currentCwt), shippedCwt: Math.round(zs.totalRun),
         fillDate: bay.fillDate || null, emptyDate: bay.emptyDate || null,
       });
       // Loads that came out of THIS customer's own fields, wherever they went.
