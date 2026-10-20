@@ -4733,8 +4733,8 @@ function buildLedger(bays, statsById, buildingsById, locationsById) {
       rows.push({ ...base, customer: zone.customer, metric: "Proj Shrink", cwt: projShrink });
       if (eco.projectedShrinkPct != null) rows.push({ ...base, customer: zone.customer, metric: "Proj Rated", cwt: zs.initialCwt });
       if (eco.valuePerCwt != null) {
-        rows.push({ ...base, customer: zone.customer, metric: "Value Proj", cwt: (zs.initialCwt - projShrink) * eco.valuePerCwt });
-        rows.push({ ...base, customer: zone.customer, metric: "Value Actual", cwt: (zs.initialCwt - zs.shrinkCwt) * eco.valuePerCwt });
+        rows.push({ ...base, customer: zone.customer, metric: "Value Proj", cwt: Math.max(0, zs.currentCwt - projShrink) * eco.valuePerCwt });
+        rows.push({ ...base, customer: zone.customer, metric: "Value Actual", cwt: Math.max(0, zs.currentCwt) * eco.valuePerCwt });
         rows.push({ ...base, customer: zone.customer, metric: "Value Set", cwt: 1 });
       }
       // Run out is pipe-based (pipes hauled × cwt/pipe); logged load weights
@@ -4995,8 +4995,8 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <StatBlock label="Projected shrink" value={totals.projRated ? `${fmt(totals.projShrink)} cwt` : "—"} sub={totals.projRated ? `${((totals.projShrink / totals.projRated) * 100).toFixed(2)}% projected` : "set in Manage Sites"} accent="#e0a63e" />
         <StatBlock label="Actual vs projected" value={totals.projRated ? `${totals.shrink - totals.projShrink > 0 ? "+" : ""}${fmt(totals.shrink - totals.projShrink)} cwt` : "—"} sub={totals.projRated ? (totals.shrink > totals.projShrink ? "running over projection" : "under projection") : ""} accent={totals.shrink > totals.projShrink ? "#e08787" : "#8fd19e"} />
-        <StatBlock label="Pile value (projected shrink)" value={totals.valueSet ? fmtMoney(totals.valueProj) : "—"} sub={totals.valueSet ? "started cwt − projected shrink, × $/cwt" : "set $/cwt in Manage Sites"} accent="#8fd19e" />
-        <StatBlock label="Value at actual shrink" value={totals.valueSet ? fmtMoney(totals.valueActual) : "—"} sub={totals.valueSet ? "started cwt − actual shrink, × $/cwt" : ""} />
+        <StatBlock label="Pile value (projected shrink)" value={totals.valueSet ? fmtMoney(totals.valueProj) : "—"} sub={totals.valueSet ? "(in storage − projected shrink) × $/cwt" : "set $/cwt in Manage Sites"} accent="#8fd19e" />
+        <StatBlock label="Value of in storage" value={totals.valueSet ? fmtMoney(totals.valueActual) : "—"} sub={totals.valueSet ? "in storage × $/cwt" : ""} />
       </div>
       {unassignedCapacity > 0 && (
         <div style={{ fontSize: 11.5, color: "#6f7890", marginTop: -8 }}>
