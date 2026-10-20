@@ -5010,13 +5010,13 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
               <th style={thStyle}>{dims.length ? dims.map((d) => DIM_OPTIONS.find((o) => o.key === d).label).join(" / ") : "Group"}</th>
               <th style={thStyle}>Capacity (cwt)</th>
               <th style={thStyle}>In Storage (cwt)</th>
-              <th style={thStyle}>Fill %</th>
-              <th style={thStyle}>Run out (cwt)</th>
-              <th style={thStyle}>Actual shrink (cwt)</th>
-              <th style={thStyle}>Actual shrink %</th>
+              <th style={thStyle}>In Storage − proj. shrink (cwt)</th>
               <th style={thStyle}>Proj. shrink %</th>
               <th style={thStyle}>Proj. shrink (cwt)</th>
               <th style={thStyle}>Value ($)</th>
+              <th style={thStyle}>Run out (cwt)</th>
+              <th style={thStyle}>Actual shrink (cwt)</th>
+              <th style={thStyle}>Actual shrink %</th>
             </tr>
           </thead>
           <tbody>
@@ -5041,13 +5041,13 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
                 </td>
                 <td style={tdStyle}>{fmt(g.capacity)}</td>
                 <td style={{ ...tdStyle, color: "#f2c14e" }}>{fmt(g.inStorage)}</td>
-                <td style={tdStyle}>{g.capacity ? Math.round((g.inStorage / g.capacity) * 100) : 0}%</td>
-                <td style={tdStyle}>{fmt(g.shipped)}</td>
-                <td style={{ ...tdStyle, color: g.initial && g.shrink / g.initial > 0.08 ? "#e08787" : "#8fd19e" }}>{fmt(g.shrink)}</td>
-                <td style={tdStyle}>{g.initial ? ((g.shrink / g.initial) * 100).toFixed(2) : "0.00"}%</td>
+                <td style={tdStyle}>{g.projRated ? fmt(g.inStorage - g.projShrink) : "—"}</td>
                 <td style={tdStyle}>{g.projRated ? `${((g.projShrink / g.projRated) * 100).toFixed(2)}%` : "—"}</td>
                 <td style={tdStyle}>{g.projRated ? fmt(g.projShrink) : "—"}</td>
                 <td style={{ ...tdStyle, color: "#8fd19e" }}>{g.valueSet ? fmtMoney(g.valueProj) : "—"}</td>
+                <td style={tdStyle}>{fmt(g.shipped)}</td>
+                <td style={{ ...tdStyle, color: g.initial && g.shrink / g.initial > 0.08 ? "#e08787" : "#8fd19e" }}>{fmt(g.shrink)}</td>
+                <td style={tdStyle}>{g.initial ? ((g.shrink / g.initial) * 100).toFixed(2) : "0.00"}%</td>
               </tr>
             ))}
             {grouped.length === 0 && (
