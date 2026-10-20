@@ -900,12 +900,20 @@ function layoutZoneLabels(zoneLabels) {
   return positioned;
 }
 
-const COMPASS_VEC = { N: [0, -1], S: [0, 1], E: [1, 0], W: [-1, 0] }; // [east, south]
-const COMPASS_NAME = { N: "North", S: "South", E: "East", W: "West" };
+const R2 = Math.SQRT1_2;
+const COMPASS_VEC = { N: [0, -1], S: [0, 1], E: [1, 0], W: [-1, 0], NE: [R2, -R2], SW: [-R2, R2], NW: [-R2, -R2], SE: [R2, R2] }; // [east, south]
+const COMPASS_NAME = { N: "North", S: "South", E: "East", W: "West", NE: "Northeast", SW: "Southwest", NW: "Northwest", SE: "Southeast" };
+// Orientation = which line the pipes run along. SWNE: runs southwest–northeast
+// (low end SW); NWSE: runs northwest–southeast (low end NW).
+const ORIENTATION_OPTIONS = [["NS", "North – South"], ["EW", "East – West"], ["SWNE", "Southwest – Northeast"], ["NWSE", "Northwest – Southeast"]];
+const VALID_ORIENTATIONS = ["NS", "EW", "SWNE", "NWSE"];
 // Which compass ends a building's pipes run between. NS: pipes run north-south
 // (low end = north); EW: pipes run east-west (low end = west).
 function buildingEnds(orientation) {
-  return orientation === "EW" ? { low: "W", high: "E" } : { low: "N", high: "S" };
+  if (orientation === "EW") return { low: "W", high: "E" };
+  if (orientation === "SWNE") return { low: "SW", high: "NE" };
+  if (orientation === "NWSE") return { low: "NW", high: "SE" };
+  return { low: "N", high: "S" };
 }
 // Resolves where a bay's fan house is relative to ITS pipe numbering.
 //   near: 'low' (next to pipe #1) | 'high' (next to the last pipe) | null
@@ -916,7 +924,10 @@ function buildingEnds(orientation) {
 // (Center) / South. Stored on the bay as bay.bayPosition (compass letter, or
 // "C"); unset on every bay in a building = keep the list order.
 function crossEnds(orientation) {
-  return orientation === "EW" ? { first: "N", last: "S" } : { first: "W", last: "E" };
+  if (orientation === "EW") return { first: "N", last: "S" };
+  if (orientation === "SWNE") return { first: "NW", last: "SE" };
+  if (orientation === "NWSE") return { first: "NE", last: "SW" };
+  return { first: "W", last: "E" };
 }
 function validBayPosition(bay, building) {
   if (!building?.orientation) return null;
@@ -931,7 +942,7 @@ function effectiveFanSide(b) {
   return null;
 }
 function bayFanHouseInfo(bay, building) {
-  const compassKnown = building?.orientation === "NS" || building?.orientation === "EW";
+  const compassKnown = VALID_ORIENTATIONS.includes(building?.orientation);
   const ends = buildingEnds(building?.orientation);
   const validEnd = (c) => (c === ends.low || c === ends.high ? c : null);
   const pipe1End = compassKnown ? (validEnd(bay?.pipe1End) || ends.low) : null;
@@ -1004,7 +1015,10 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
         groups.push({ bId, from: gi, to: gj });
         gi = gj + 1;
       }
-      const exts = groups.map((g) => Math.max((g.to - g.from) * TIGHT_GAP + DIMS.W, DIMS.L + 4));
+      const exts = groups.map((g) => {
+        const e = Math.max((g.to - g.from) * TIGHT_GAP + DIMS.W, DIMS.L + 4);
+        return e * (buildingEnds(buildingsById[g.bId]?.orientation).low.length === 2 ? 1.3 : 1);
+      });
       const cell = Math.max(...exts, DIMS.L + 4) + CELL_PAD;
       const centers = groups.map((g, idx) => {
         const b = buildingsById[g.bId];
@@ -1019,15 +1033,19 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       groups.forEach((g, idx) => {
         const building = buildingsById[g.bId];
         const ends = buildingEnds(building?.orientation);
-        const isEW = ends.low === "W";
+        const lowVec = COMPASS_VEC[ends.low];
+        const angle = Math.atan2(-lowVec[0], -lowVec[1]); // turns local -Z to the low end
         const bg = new THREE.Group();
         bg.position.set(centers[idx].x - cx0, 0, centers[idx].z - cz0);
-        bg.rotation.y = isEW ? Math.PI / 2 : 0;
+        bg.rotation.y = angle;
         buildingGroup.add(bg);
         const n = g.to - g.from + 1;
-        // EW buildings: local +X points north after the quarter turn, so
-        // negate to list bays north -> south like they read on a map.
-        const sign = isEW ? -1 : 1;
+        // After the turn, local +X points along compass (-dz, dx). Bays go
+        // first -> last side along the cross axis, so flip when the "first"
+        // side is the +X direction.
+        const plusX = [-lowVec[1], lowVec[0]];
+        const firstVec = COMPASS_VEC[crossEnds(building?.orientation).first];
+        const sign = firstVec[0] * plusX[0] + firstVec[1] * plusX[1] > 0 ? -1 : 1;
         const localCenterX = 0;
         const ce = crossEnds(building?.orientation);
         const rankOf = (k) => { const pos = validBayPosition(bays[k], building); return pos === ce.first ? 0 : pos === ce.last ? 2 : 1; };
@@ -4306,9 +4324,8 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
               </select>
             </Field>
             <Field label="Building runs">
-              <select value={bldgOrientation} onChange={(e) => { setBldgOrientation(e.target.value); setBldgFanSide("none"); }} style={{ ...inputStyle, width: 150 }}>
-                <option value="NS">North – South</option>
-                <option value="EW">East – West</option>
+              <select value={bldgOrientation} onChange={(e) => { setBldgOrientation(e.target.value); setBldgFanSide("none"); }} style={{ ...inputStyle, width: 190 }}>
+                {ORIENTATION_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
             </Field>
             <Field label="Fan house on">
@@ -4531,8 +4548,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                         }}
                         style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
                         <option value="none">Not set</option>
-                        <option value="NS">North – South</option>
-                        <option value="EW">East – West</option>
+                        {ORIENTATION_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                       </select>
                       {b.orientation ? (
                         <>
