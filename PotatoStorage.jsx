@@ -896,10 +896,45 @@ function layoutZoneLabels(zoneLabels) {
   return positioned;
 }
 
+const COMPASS_VEC = { N: [0, -1], S: [0, 1], E: [1, 0], W: [-1, 0] }; // [east, south]
+const COMPASS_NAME = { N: "North", S: "South", E: "East", W: "West" };
+// Which compass ends a building's pipes run between. NS: pipes run north-south
+// (low end = north); EW: pipes run east-west (low end = west).
+function buildingEnds(orientation) {
+  return orientation === "EW" ? { low: "W", high: "E" } : { low: "N", high: "S" };
+}
+// Resolves where a bay's fan house is relative to ITS pipe numbering.
+//   near: 'low' (next to pipe #1) | 'high' (next to the last pipe) | null
+// Uses the building's compass settings when set (fanHouseSide + the bay's
+// pipe1End); otherwise falls back to the older low/high settings.
+function effectiveFanSide(b) {
+  const ends = buildingEnds(b?.orientation);
+  if (b?.fanHouseSide === ends.low || b?.fanHouseSide === ends.high) return b.fanHouseSide;
+  if (b?.fanHouseEnd === "low") return ends.low;
+  if (b?.fanHouseEnd === "high") return ends.high;
+  return null;
+}
+function bayFanHouseInfo(bay, building) {
+  const compassKnown = building?.orientation === "NS" || building?.orientation === "EW";
+  const ends = buildingEnds(building?.orientation);
+  const validEnd = (c) => (c === ends.low || c === ends.high ? c : null);
+  const pipe1End = compassKnown ? (validEnd(bay?.pipe1End) || ends.low) : null;
+  const fanSide = validEnd(building?.fanHouseSide);
+  if (fanSide) {
+    return { compassKnown, ends, pipe1End: pipe1End || (validEnd(bay?.pipe1End) || ends.low), fanSide, near: fanSide === (pipe1End || ends.low) ? "low" : "high" };
+  }
+  const legacy = bay?.fanHousePipeEnd || building?.fanHouseEnd;
+  return { compassKnown, ends, pipe1End, fanSide: null, near: legacy === "low" || legacy === "high" ? legacy : null };
+}
 function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildingsById = {}, locationsById = {}, invFilter }) {
   const mountRef = useRef(null);
   const stateRef = useRef({});
   const [labels, setLabels] = useState([]);
+  const [compassDeg, setCompassDeg] = useState(null);
+  const layoutKey = bays.map((b) => {
+    const bd = buildingsById[b.buildingId] || {};
+    return [b.id, b.pipe1End, b.fanHousePipeEnd, bd.orientation, bd.fanHouseSide, bd.fanHouseEnd, bd.siteCol, bd.siteRow].join(":");
+  }).join(",");
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
@@ -922,134 +957,142 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     ground.receiveShadow = true;
     scene.add(ground);
     const DIMS = { W: 12.5, H: 8.5, L: 24 };
-    // BUILDING_GAP raised substantially (9 -> 36) specifically to leave
-    // real, generous open ground between buildings for field-label columns
-    // to live in without crowding each other — explicitly fine to spend
-    // extra space on, per direct instruction. TIGHT_GAP (bay-to-bay within
-    // one building) is left as-is; those bays are meant to read as one
-    // continuous building with internal bays, not separate structures.
-    const TIGHT_GAP = 14, BUILDING_GAP = 10;
-    let xPositions = [0];
-    if (mode !== "interior") {
-      let x = 0;
-      for (let i = 1; i < bays.length; i++) {
-        const sameBuilding = bays[i].buildingId && bays[i].buildingId === bays[i - 1].buildingId;
-        x += sameBuilding ? TIGHT_GAP : TIGHT_GAP + BUILDING_GAP;
-        xPositions.push(x);
-      }
-      const span = xPositions[xPositions.length - 1];
-      xPositions = xPositions.map((p) => p - span / 2);
-    } else {
-      xPositions = bays.map(() => 0);
-    }
-    // For the yard's field-label columns: real open ground exists between
-    // whole BUILDINGS, not between individual bays within one — bays in
-    // the same building sit only ~1.5 units apart at these dimensions,
-    // nowhere near enough room for a label column on their own. Each
-    // building now gets TWO columns instead of one shared column: the
-    // first half of its bays route to a column in the open ground to the
-    // building's LEFT, the second half to a column to its RIGHT — so a
-    // 2-bay building puts one bay's fields on each side rather than
-    // stacking both into a single crowded list. A building with only one
-    // bay still just gets a single column (right side). In interior mode
-    // there's only ever one bay on screen, so its own flanks are already
-    // open — bayColumnSide/buildingColumnWorldX stay empty there, and the
-    // per-bay fallback further down handles it.
-    const buildingColumnWorldX = {}; // { [buildingId]: { left: worldX, right: worldX } }
-    const bayColumnSide = {}; // { [bayId]: "left" | "right" }
-    const fanHouseWorldPositions = {}; // { [buildingId]: { x, y } }
+    const TIGHT_GAP = 14, CELL_PAD = 14;
+    // Layout model. Every building is built in its OWN local frame (pipes run
+    // along Z, bays side by side along X, "low" end = -Z), then that group is
+    // rotated and placed on a site grid. World axes: -Z = North, +X = East.
+    //  - building.orientation 'NS' | 'EW' says which compass line the pipes run along
+    //    (NS: ends are N/S, low = N; EW: ends are W/E, low = W).
+    //  - building.siteCol / siteRow place the building on a grid (col -> east,
+    //    row -> south). Unset: buildings line up west->east in their list order.
+    //  - bay.pipe1End (compass) says which end pipe #1 is at; a bay whose pipe #1
+    //    is at the building's "high" end is turned around so numbering reads the
+    //    right way round on the map.
+    //  - building.fanHouseSide (compass) puts the fan house on that end.
+    // Buildings with none of this set keep the old look (NS, one row).
+    const buildingLayouts = {}; // { [buildingId]: { x, z, angle, ends, group } }
+    const bayWorld = {}; // { [bayId]: { x, z } } for the selection ring
+    const bayLocalX = {}; // { [bayId]: x within its building }
+    const fanHouseWorldPositions = {}; // { [key]: { x, y, z, spanWidth, local?: group } }
+    const buildingGroup = new THREE.Group();
+    scene.add(buildingGroup);
+    let layoutSpan = 60;
+    // Interior mode never builds a site layout — one bay, centered.
+    const groups = [];
     if (mode !== "interior") {
       let gi = 0;
       while (gi < bays.length) {
         const bId = bays[gi].buildingId;
         let gj = gi;
         while (gj + 1 < bays.length && bays[gj + 1].buildingId === bId) gj++;
-        const groupSize = gj - gi + 1;
-        const leftmostX = Math.min(...xPositions.slice(gi, gj + 1));
-        const rightmostX = Math.max(...xPositions.slice(gi, gj + 1));
-        buildingColumnWorldX[bId] = {
-          left: leftmostX - DIMS.W / 2 - 6,
-          right: rightmostX + DIMS.W / 2 + 6,
-        };
-        if (groupSize === 1) {
-          bayColumnSide[bays[gi].id] = "right";
-        } else {
-          const leftHalfEnd = gi + Math.ceil(groupSize / 2) - 1;
-          for (let k = gi; k <= gj; k++) bayColumnSide[bays[k].id] = k <= leftHalfEnd ? "left" : "right";
-        }
-        // Fan House marker — sits at one end of the building's DEPTH (the
-        // same axis pipe numbering runs along — "low" toward pipe 1, "high"
-        // toward the last pipe), not beside the row of bays. Every bay in a
-        // building shares the same depth/Z range regardless of its position
-        // along the row. A small marker, centered on the building — which
-        // for a multi-bay building lands it right in the seam between bays,
-        // and for a single-bay building centers it on that one bay — rather
-        // than a large marker spanning the whole building's width. Which
-        // specific bay's pipe 1 vs. pipe N actually lines up with
-        // "low"/"high" here is recorded separately per bay (see
-        // fanHousePipeEnd), since numbering direction can still vary bay to
-        // bay even within one physical building.
-        const building = buildingsById[bId];
-        if (building?.fanHouseEnd === "low" || building?.fanHouseEnd === "high") {
-          const z = building.fanHouseEnd === "low" ? -DIMS.L / 2 - 1.5 : DIMS.L / 2 + 1.5;
-          const centerX = (leftmostX + rightmostX) / 2;
-          fanHouseWorldPositions[bId] = { x: centerX, y: DIMS.H * 0.275, z, spanWidth: DIMS.W / 2 };
-        }
+        groups.push({ bId, from: gi, to: gj });
         gi = gj + 1;
       }
+      const exts = groups.map((g) => Math.max((g.to - g.from) * TIGHT_GAP + DIMS.W, DIMS.L + 4));
+      const cell = Math.max(...exts, DIMS.L + 4) + CELL_PAD;
+      const centers = groups.map((g, idx) => {
+        const b = buildingsById[g.bId];
+        const col = Number.isFinite(Number(b?.siteCol)) && b?.siteCol !== "" && b?.siteCol != null ? Number(b.siteCol) : idx;
+        const row = Number.isFinite(Number(b?.siteRow)) && b?.siteRow !== "" && b?.siteRow != null ? Number(b.siteRow) : 0;
+        return { x: col * cell, z: row * cell };
+      });
+      const minX = Math.min(...centers.map((c) => c.x)), maxX = Math.max(...centers.map((c) => c.x));
+      const minZ = Math.min(...centers.map((c) => c.z)), maxZ = Math.max(...centers.map((c) => c.z));
+      const cx0 = (minX + maxX) / 2, cz0 = (minZ + maxZ) / 2;
+      layoutSpan = Math.max(maxX - minX, maxZ - minZ) + cell;
+      groups.forEach((g, idx) => {
+        const building = buildingsById[g.bId];
+        const ends = buildingEnds(building?.orientation);
+        const isEW = ends.low === "W";
+        const bg = new THREE.Group();
+        bg.position.set(centers[idx].x - cx0, 0, centers[idx].z - cz0);
+        bg.rotation.y = isEW ? Math.PI / 2 : 0;
+        buildingGroup.add(bg);
+        const n = g.to - g.from + 1;
+        // EW buildings: local +X points north after the quarter turn, so
+        // negate to list bays north -> south like they read on a map.
+        const sign = isEW ? -1 : 1;
+        const localCenterX = 0;
+        for (let k = g.from; k <= g.to; k++) {
+          bayLocalX[bays[k].id] = (k - g.from - (n - 1) / 2) * TIGHT_GAP * sign;
+        }
+        bg.updateMatrix();
+        buildingLayouts[g.bId] = { x: bg.position.x, z: bg.position.z, angle: bg.rotation.y, ends, group: bg };
+        // Fan house marker: a small square on one END of the building (the
+        // pipe-run axis), centered across the bays.
+        let fhLocal = null;
+        if (building?.fanHouseSide === ends.low) fhLocal = "low";
+        else if (building?.fanHouseSide === ends.high) fhLocal = "high";
+        else if (building?.fanHouseEnd === "low" || building?.fanHouseEnd === "high") fhLocal = building.fanHouseEnd;
+        if (fhLocal) {
+          const z = fhLocal === "low" ? -DIMS.L / 2 - 1.5 : DIMS.L / 2 + 1.5;
+          fanHouseWorldPositions[g.bId] = { x: localCenterX, y: DIMS.H * 0.275, z, spanWidth: DIMS.W / 2, parent: bg };
+        }
+      });
     }
-    const buildingGroup = new THREE.Group();
-    scene.add(buildingGroup);
+    const buildingColumnWorldX = {};
+    const bayColumnSide = {};
     const bayMeshes = {};
     bays.forEach((bay, i) => {
       const built = buildBayGroup(bay, DIMS);
-      built.group.position.x = xPositions[i];
-      buildingGroup.add(built.group);
+      const layout = buildingLayouts[bay.buildingId];
+      const parent = layout ? layout.group : buildingGroup;
+      built.group.position.x = layout ? bayLocalX[bay.id] : 0;
+      if (layout) {
+        // turn the bay around when pipe #1 is at the building's high end
+        const flip = bay.pipe1End && bay.pipe1End === layout.ends.high;
+        built.group.rotation.y = flip ? Math.PI : 0;
+        built.flipped = !!flip;
+        if (buildingsById[bay.buildingId]?.orientation) built.pipe1Compass = flip ? layout.ends.high : layout.ends.low;
+      }
+      parent.add(built.group);
       bayMeshes[bay.id] = built;
+      const wp = new THREE.Vector3(built.group.position.x, 0, 0);
+      if (layout) wp.applyMatrix4(layout.group.matrix);
+      bayWorld[bay.id] = { x: wp.x, z: wp.z };
       const ringMat = new THREE.MeshBasicMaterial({ color: "#f2c14e", transparent: true, opacity: 0.85 });
       const ring = new THREE.Mesh(new THREE.RingGeometry(DIMS.W * 0.7, DIMS.W * 0.78, 32), ringMat);
       ring.rotation.x = -Math.PI / 2;
-      ring.position.set(built.group.position.x, 0.02, 0);
+      ring.position.set(wp.x, 0.02, wp.z);
       ring.visible = mode === "yard" && bay.id === selectedId;
       scene.add(ring);
       bayMeshes[bay.id].ring = ring;
     });
-    // Interior mode's Fan House marker: there's only ever one bay on
-    // screen here, so "left/right across bays" (the yard-mode building
-    // setting) doesn't apply — this instead uses that SAME bay's own
-    // fanHousePipeEnd (which of its own pipe-1/pipe-N ends is near the
-    // fans), positioned along the pipe run itself (Z axis) rather than
-    // across bays (X axis), landing just past whichever end of the actual
-    // pipe layout it is.
-    // Falls back to the BUILDING's fanHouseEnd when this bay hasn't set its
-    // own override — the per-bay field only matters when a bay's numbering
-    // runs opposite the building's default.
+    // Interior mode's Fan House marker: one bay on screen, pipes run along Z
+    // with pipe #1 at the low end, so the marker goes at whichever end is
+    // actually near the fans (compass settings resolve to that; unset falls
+    // back to the older per-bay / per-building low|high setting).
+    let interiorNorth = null; // north direction in the interior's local frame
     if (mode === "interior" && bays[0]) {
       const bay = bays[0];
       const building = buildingsById[bay.buildingId];
-      const effectiveEnd = bay.fanHousePipeEnd || building?.fanHouseEnd;
-      if (effectiveEnd === "low" || effectiveEnd === "high") {
+      const info = bayFanHouseInfo(bay, building);
+      if (info.near === "low" || info.near === "high") {
         const m = bayMeshes[bay.id];
-        const z = effectiveEnd === "low"
+        const z = info.near === "low"
           ? m.zStart - 1.5
           : m.zStart + m.totalPipes * m.pipeWidth + 1.5;
-        fanHouseWorldPositions[bay.id] = { x: 0, y: DIMS.H * 0.275, z, spanWidth: DIMS.W / 2 };
+        fanHouseWorldPositions[bay.id] = { x: 0, y: DIMS.H * 0.275, z, spanWidth: DIMS.W / 2, parent: buildingGroup };
+      }
+      if (info.compassKnown && info.pipe1End) {
+        bayMeshes[bay.id].pipe1Compass = info.pipe1End;
+        const d = COMPASS_VEC[info.pipe1End];
+        const a = Math.atan2(-d[0], -d[1]);
+        interiorNorth = new THREE.Vector3(Math.sin(a), 0, -Math.cos(a));
       }
     }
-    // Build each Fan House marker now that every position (yard-mode,
-    // per-building; interior-mode, per-bay) is known — a simple small
-    // shed, same construction pattern as everything else in this scene
-    // (plain MeshStandardMaterial box), not rebuilt per frame since it
-    // never changes once positioned.
     Object.values(fanHouseWorldPositions).forEach((pos) => {
       const fanHouseMat = new THREE.MeshStandardMaterial({ color: "#8a6a3a", roughness: 0.65, metalness: 0.25 });
       const fanHouseMesh = new THREE.Mesh(new THREE.BoxGeometry(pos.spanWidth ?? 2, pos.y, 2), fanHouseMat);
       fanHouseMesh.position.set(pos.x, pos.y / 2, pos.z);
       fanHouseMesh.castShadow = true;
-      buildingGroup.add(fanHouseMesh);
+      (pos.parent || buildingGroup).add(fanHouseMesh);
+      pos.mesh = fanHouseMesh;
     });
+    const northVec = mode === "interior" ? interiorNorth : new THREE.Vector3(0, 0, -1);
+    scene.fog.far = Math.max(240, layoutSpan * 3);
     const target = new THREE.Vector3(0, mode === "interior" ? 3.5 : 3, 0);
-    let radius = mode === "interior" ? 26 : 58;
+    let radius = mode === "interior" ? 26 : Math.max(58, Math.min(220, layoutSpan * 0.6));
     let theta = mode === "interior" ? 1.15 : Math.PI / 2 - 0.5;
     let phi = mode === "interior" ? 0.85 : 1.02;
     const clampPhi = (p) => Math.max(0.3, Math.min(1.4, p));
@@ -1096,7 +1139,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
     };
     const onWheel = (e) => {
       e.preventDefault();
-      const min = mode === "interior" ? 10 : 20, max = mode === "interior" ? 50 : 130;
+      const min = mode === "interior" ? 10 : 20, max = mode === "interior" ? 50 : Math.max(130, layoutSpan * 1.4);
       radius = Math.max(min, Math.min(max, radius + e.deltaY * 0.03));
       updateCamera();
     };
@@ -1161,17 +1204,17 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
         for (let pn = 1; pn <= m.totalPipes; pn++) {
           if (pn !== 1 && pn !== m.totalPipes && (pn - 1) % step !== 0) continue;
           const worldZ = m.zStart + m.pipeWidth * (pn - 0.5);
-          const pp = new THREE.Vector3(0, 0.02, worldZ).add(m.group.position);
+          const pp = m.group.localToWorld(new THREE.Vector3(0, 0.02, worldZ));
           pp.project(camera);
           newLabels.push({
-            key: `pipe:${bay.id}:${pn}`, bayId: bay.id, isPipeLabel: true, pipeNumber: pn,
+            key: `pipe:${bay.id}:${pn}`, bayId: bay.id, isPipeLabel: true, pipeNumber: pn, pipeEnd: pn === 1 ? m.pipe1Compass : null,
             x: (pp.x * 0.5 + 0.5) * mount.clientWidth,
             y: (-pp.y * 0.5 + 0.5) * mount.clientHeight,
             visible: pp.z < 1,
           });
         }
         if (mode === "yard") {
-          const p2 = new THREE.Vector3(0, m.maxH + 3.4, 0).add(m.group.position);
+          const p2 = m.group.localToWorld(new THREE.Vector3(0, m.maxH + 3.4, 0));
           p2.project(camera);
           newLabels.push({
             key: `bay:${bay.id}`, bayId: bay.id, isBayLabel: true,
@@ -1189,10 +1232,8 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
           const bId = bays[gi].buildingId;
           let gj = gi;
           while (gj + 1 < bays.length && bays[gj + 1].buildingId === bId) gj++;
-          const xs = [];
-          for (let k = gi; k <= gj; k++) xs.push(bayMeshes[bays[k].id].group.position.x);
-          const xAvg = xs.reduce((s, v) => s + v, 0) / xs.length;
-          const p3 = new THREE.Vector3(xAvg, DIMS.H + 5.4, 0);
+          const bl = buildingLayouts[bId];
+          const p3 = new THREE.Vector3(bl ? bl.x : 0, DIMS.H + 5.4, bl ? bl.z : 0);
           p3.project(camera);
           const building = buildingsById[bId];
           newLabels.push({
@@ -1208,7 +1249,8 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       // across bays; interior: per-bay, along the pipe run), since
       // fanHouseWorldPositions is populated accordingly either way.
       Object.entries(fanHouseWorldPositions).forEach(([key, pos]) => {
-        const fhVec = new THREE.Vector3(pos.x, pos.y + 1.6, pos.z ?? 0);
+        const fhVec = pos.mesh ? pos.mesh.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3(pos.x, 0, pos.z ?? 0);
+        fhVec.y = pos.y + 1.6;
         fhVec.project(camera);
         newLabels.push({
           key: `fanhouse:${key}`, isFanHouseLabel: true,
@@ -1217,6 +1259,13 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
           visible: fhVec.z < 1,
         });
       });
+      if (northVec) {
+        const w = mount.clientWidth, h = mount.clientHeight;
+        const o = target.clone().project(camera);
+        const nn = target.clone().addScaledVector(northVec, 10).project(camera);
+        const dx = (nn.x - o.x) * w * 0.5, dy = -(nn.y - o.y) * h * 0.5;
+        setCompassDeg(Math.round((Math.atan2(dx, -dy) * 180) / Math.PI));
+      }
       const zoneLabels = newLabels.filter((l) => l.zoneId != null);
       const otherLabels = newLabels.filter((l) => l.zoneId == null);
       setLabels([
@@ -1243,7 +1292,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bays.map((b) => b.id).join(","), mode]);
+  }, [bays.map((b) => b.id).join(","), mode, layoutKey]);
   useEffect(() => {
     if (stateRef.current.onSelectRef) stateRef.current.onSelectRef.current = onSelect;
   }, [onSelect]);
@@ -1260,6 +1309,19 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
   }, [bays, statsById, selectedId, mode, invFilter, buildingsById, locationsById]);
   return (
     <div ref={mountRef} style={{ position: "relative", width: "100%", height: "100%", cursor: "grab" }}>
+      {compassDeg != null && (
+        <svg width="64" height="64" viewBox="-32 -32 64 64" style={{ position: "absolute", left: 12, bottom: 12, pointerEvents: "none" }}>
+          <circle r="29" fill="rgba(14,20,32,0.72)" stroke="#3a4457" />
+          <g transform={`rotate(${compassDeg})`} fontFamily="'JetBrains Mono', monospace" fontSize="9" textAnchor="middle" fontWeight="700">
+            <path d="M0,-21 L4,0 L-4,0 Z" fill="#e5484d" />
+            <path d="M0,21 L4,0 L-4,0 Z" fill="#4a5468" />
+            <text x="0" y="-24.5" fill="#f2c14e" fontSize="9">N</text>
+            <text x="25" y="3" fill="#8790a3">E</text>
+            <text x="0" y="29" fill="#8790a3" fontSize="8">S</text>
+            <text x="-25" y="3" fill="#8790a3">W</text>
+          </g>
+        </svg>
+      )}
       <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
         {labels.map((l) => {
           if (!l.visible || l.zoneId == null) return null;
@@ -1329,7 +1391,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
               pointerEvents: "none", color: "#8790a3", fontFamily: "'JetBrains Mono', monospace",
               fontSize: 9.5, whiteSpace: "nowrap", textShadow: "0 1px 3px rgba(0,0,0,0.9)",
             }}>
-              {l.pipeNumber}
+              {l.pipeNumber === 1 ? `Pipe 1${l.pipeEnd ? ` · ${l.pipeEnd}` : ""}` : l.pipeNumber}
             </div>
           );
         }
@@ -2812,9 +2874,16 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
           </div>
           <div style={{ color: "#8790a3", fontSize: 12.5, marginTop: 6 }}>
             {bay.zones.length} field{bay.zones.length !== 1 ? "s" : ""} · {bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0)} pipes total · {bay.pileHeight || 18}' pile
-            {bay.fanHousePipeEnd && (
-              <> · Fan house near pipe {bay.fanHousePipeEnd === "low" ? "1" : (bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0))}</>
-            )}
+            {(() => {
+              const info = bayFanHouseInfo(bay, buildingsById?.[bay.buildingId]);
+              const total = bay.pipeCount || bay.zones.reduce((s, z) => s + z.pipeCount, 0);
+              return (
+                <>
+                  {info.pipe1End && <> · Pipe 1 at {COMPASS_NAME[info.pipe1End]} end</>}
+                  {info.near && <> · Fan house near pipe {info.near === "low" ? "1" : total}{info.fanSide ? ` (${COMPASS_NAME[info.fanSide]} end)` : ""}</>}
+                </>
+              );
+            })()}
           </div>
         </div>
         {!readOnly && bay.zones.length > 0 && (
@@ -4073,7 +4142,10 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
   // yard) the fan house sits at — purely a real-world orientation marker,
   // independent of pipe numbering (see each bay's own fanHousePipeEnd for
   // that). "none" leaves the building without one.
-  const [bldgFanHouseEnd, setBldgFanHouseEnd] = useState("none");
+  const [bldgOrientation, setBldgOrientation] = useState("NS");
+  const [bldgFanSide, setBldgFanSide] = useState("none"); // compass: N/S or W/E, "none"
+  const [bldgSiteCol, setBldgSiteCol] = useState("");
+  const [bldgSiteRow, setBldgSiteRow] = useState("");
   const [bldgError, setBldgError] = useState("");
   const submitBuilding = () => {
     const trimmed = bldgName.trim();
@@ -4083,10 +4155,13 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
     }
     onAddBuilding({
       id: uid("bldg"), name: trimmed, locationId: bldgLocationId, pileHeight: bldgPileHeight,
-      fanHouseEnd: bldgFanHouseEnd === "none" ? null : bldgFanHouseEnd,
+      orientation: bldgOrientation,
+      fanHouseSide: bldgFanSide === "none" ? null : bldgFanSide,
+      ...(bldgSiteCol !== "" ? { siteCol: Number(bldgSiteCol) } : {}),
+      ...(bldgSiteRow !== "" ? { siteRow: Number(bldgSiteRow) } : {}),
       ...(bldgCwtPerPipe ? { cwtPerPipe: Number(bldgCwtPerPipe) } : {}),
     });
-    setBldgName(""); setBldgCwtPerPipe(""); setBldgPileHeight(18); setBldgFanHouseEnd("none"); setBldgError("");
+    setBldgName(""); setBldgCwtPerPipe(""); setBldgPileHeight(18); setBldgOrientation("NS"); setBldgFanSide("none"); setBldgSiteCol(""); setBldgSiteRow(""); setBldgError("");
   };
   // --- add bay (with zones) ---
   const [bayLocationId, setBayLocationId] = useState(locations[0]?.id || "");
@@ -4207,12 +4282,23 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                 {PILE_HEIGHT_OPTIONS.map((h) => <option key={h} value={h}>{h}'</option>)}
               </select>
             </Field>
-            <Field label="Fan house">
-              <select value={bldgFanHouseEnd} onChange={(e) => setBldgFanHouseEnd(e.target.value)} style={{ ...inputStyle, width: 130 }}>
-                <option value="none">None</option>
-                <option value="low">Low-pipe end</option>
-                <option value="high">High-pipe end</option>
+            <Field label="Building runs">
+              <select value={bldgOrientation} onChange={(e) => { setBldgOrientation(e.target.value); setBldgFanSide("none"); }} style={{ ...inputStyle, width: 150 }}>
+                <option value="NS">North – South</option>
+                <option value="EW">East – West</option>
               </select>
+            </Field>
+            <Field label="Fan house on">
+              <select value={bldgFanSide} onChange={(e) => setBldgFanSide(e.target.value)} style={{ ...inputStyle, width: 150 }}>
+                <option value="none">None</option>
+                {(() => { const en = buildingEnds(bldgOrientation); return [en.low, en.high].map((c) => <option key={c} value={c}>{COMPASS_NAME[c]} end</option>); })()}
+              </select>
+            </Field>
+            <Field label="Site position (east →)">
+              <input type="number" value={bldgSiteCol} onChange={(e) => setBldgSiteCol(e.target.value)} placeholder="auto" style={{ ...inputStyle, width: 80 }} />
+            </Field>
+            <Field label="(south ↓)">
+              <input type="number" value={bldgSiteRow} onChange={(e) => setBldgSiteRow(e.target.value)} placeholder="auto" style={{ ...inputStyle, width: 80 }} />
             </Field>
           </div>
           <div style={{ fontSize: 11, color: "#5b6478", marginBottom: 8 }}>
@@ -4404,13 +4490,44 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                         style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
                         {PILE_HEIGHT_OPTIONS.map((h) => <option key={h} value={h}>{h}'</option>)}
                       </select>
-                      <span style={{ fontSize: 11, color: "#6f7890" }}>fan house</span>
-                      <select value={b.fanHouseEnd || "none"} disabled={readOnly} onChange={(e) => onUpdateBuilding(b.id, { fanHouseEnd: e.target.value === "none" ? null : e.target.value })}
+                      <span style={{ fontSize: 11, color: "#6f7890" }}>building runs</span>
+                      <select value={b.orientation || "none"} disabled={readOnly} onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === "none") { onUpdateBuilding(b.id, { orientation: null }); return; }
+                          const oldEnds = buildingEnds(b.orientation), newEnds = buildingEnds(v);
+                          const remap = (c) => (c === oldEnds.low ? newEnds.low : c === oldEnds.high ? newEnds.high : null);
+                          onUpdateBuilding(b.id, { orientation: v, fanHouseSide: remap(effectiveFanSide(b)) });
+                          baysHere.forEach((bay) => { if (bay.pipe1End) onUpdateBayMeta(bay.id, { pipe1End: remap(bay.pipe1End) }); });
+                        }}
                         style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
-                        <option value="none">None</option>
-                        <option value="low">Low-pipe end</option>
-                        <option value="high">High-pipe end</option>
+                        <option value="none">Not set</option>
+                        <option value="NS">North – South</option>
+                        <option value="EW">East – West</option>
                       </select>
+                      {b.orientation ? (
+                        <>
+                          <span style={{ fontSize: 11, color: "#6f7890" }}>fan house on</span>
+                          <select value={effectiveFanSide(b) || "none"} disabled={readOnly} onChange={(e) => onUpdateBuilding(b.id, { fanHouseSide: e.target.value === "none" ? null : e.target.value, fanHouseEnd: null })}
+                            style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
+                            <option value="none">None</option>
+                            {(() => { const en = buildingEnds(b.orientation); return [en.low, en.high].map((c) => <option key={c} value={c}>{COMPASS_NAME[c]} end</option>); })()}
+                          </select>
+                        </>
+                      ) : (
+                        <>
+                          <span style={{ fontSize: 11, color: "#6f7890" }}>fan house</span>
+                          <select value={b.fanHouseEnd || "none"} disabled={readOnly} onChange={(e) => onUpdateBuilding(b.id, { fanHouseEnd: e.target.value === "none" ? null : e.target.value })}
+                            style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
+                            <option value="none">None</option>
+                            <option value="low">Low-pipe end</option>
+                            <option value="high">High-pipe end</option>
+                          </select>
+                        </>
+                      )}
+                      <span style={{ fontSize: 11, color: "#6f7890" }}>site spot: east →</span>
+                      <EditableInline value={b.siteCol ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { siteCol: v === "" || v == null ? null : Number(v) })} width={60} placeholder="auto" />
+                      <span style={{ fontSize: 11, color: "#6f7890" }}>south ↓</span>
+                      <EditableInline value={b.siteRow ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { siteRow: v === "" || v == null ? null : Number(v) })} width={60} placeholder="auto" />
                       <DeleteButton
                         disabled={readOnly}
                         title="Delete building"
@@ -4420,7 +4537,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
                       {sortByNatural(baysHere, (bay) => bay.name).map((bay) => (
-                        <BayRow key={bay.id} bay={bay} readOnly={readOnly} varieties={varieties} customers={customers}
+                        <BayRow key={bay.id} bay={bay} building={b} readOnly={readOnly} varieties={varieties} customers={customers}
                           onUpdateBayMeta={onUpdateBayMeta} onUpdateZoneMeta={onUpdateZoneMeta} onAddZoneToBay={onAddZoneToBay}
                           onEmptyBay={onEmptyBay} onDeleteBay={onDeleteBay} onDeleteZone={onDeleteZone} />
                       ))}
@@ -4446,7 +4563,7 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
 // A bay in the Manage Sites structure tree. A bay can exist with zero fields
 // — "No product assigned yet" — and product gets attached to it here (or
 // from Bay Detail) whenever it's actually ready to be filled.
-function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdateZoneMeta, onAddZoneToBay, onEmptyBay, onDeleteBay, onDeleteZone }) {
+function BayRow({ bay, building, readOnly, varieties, customers, onUpdateBayMeta, onUpdateZoneMeta, onAddZoneToBay, onEmptyBay, onDeleteBay, onDeleteZone }) {
   const [adding, setAdding] = useState(false);
   return (
     <div style={{ paddingLeft: 16, borderLeft: "2px solid #1a2130" }}>
@@ -4469,13 +4586,25 @@ function BayRow({ bay, readOnly, varieties, customers, onUpdateBayMeta, onUpdate
         <EditableInline value={bay.agristorBinName ?? ""} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { agristorBinName: v || null })} width={140} placeholder="not linked" />
         <span style={{ fontSize: 11, color: "#6f7890" }}>IVI panel ID</span>
         <EditableInline value={bay.iviPanelId ?? ""} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { iviPanelId: v || null })} width={220} placeholder="not linked" />
-        <span style={{ fontSize: 11, color: "#6f7890" }}>fan house near pipe</span>
-        <select value={bay.fanHousePipeEnd || "none"} disabled={readOnly} onChange={(e) => onUpdateBayMeta(bay.id, { fanHousePipeEnd: e.target.value === "none" ? null : e.target.value })}
-          style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
-          <option value="none">Not set</option>
-          <option value="low">#1 end</option>
-          <option value="high">#{bay.pipeCount || "N"} end</option>
-        </select>
+        {building?.orientation ? (
+          <>
+            <span style={{ fontSize: 11, color: "#6f7890" }}>pipe #1 starts at</span>
+            <select value={bay.pipe1End || buildingEnds(building.orientation).low} disabled={readOnly} onChange={(e) => onUpdateBayMeta(bay.id, { pipe1End: e.target.value, fanHousePipeEnd: null })}
+              style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
+              {(() => { const en = buildingEnds(building.orientation); return [en.low, en.high].map((c) => <option key={c} value={c}>{COMPASS_NAME[c]} end (numbers go {COMPASS_NAME[c === en.low ? en.high : en.low].toLowerCase()})</option>); })()}
+            </select>
+          </>
+        ) : (
+          <>
+            <span style={{ fontSize: 11, color: "#6f7890" }}>fan house near pipe</span>
+            <select value={bay.fanHousePipeEnd || "none"} disabled={readOnly} onChange={(e) => onUpdateBayMeta(bay.id, { fanHousePipeEnd: e.target.value === "none" ? null : e.target.value })}
+              style={{ ...inputStyle, width: "auto", padding: "3px 6px", fontSize: 12 }}>
+              <option value="none">Not set</option>
+              <option value="low">#1 end</option>
+              <option value="high">#{bay.pipeCount || "N"} end</option>
+            </select>
+          </>
+        )}
         {!readOnly && bay.zones.length > 0 && (
           <button
             onClick={() => {
