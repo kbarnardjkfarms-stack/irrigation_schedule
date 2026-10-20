@@ -4531,9 +4531,9 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                         </>
                       )}
                       <span style={{ fontSize: 11, color: "#6f7890" }}>$/cwt</span>
-                      <EditableInline value={b.valuePerCwt ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { valuePerCwt: numOrNull(v) })} width={70} placeholder="—" />
+                      <EditableInline value={b.valuePerCwt ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { valuePerCwt: numOrNull(v) })} width={90} placeholder={`${DEFAULT_VALUE_PER_CWT} (default)`} />
                       <span style={{ fontSize: 11, color: "#6f7890" }}>projected shrink %</span>
-                      <EditableInline value={b.projectedShrinkPct ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { projectedShrinkPct: numOrNull(v) })} width={70} placeholder="—" />
+                      <EditableInline value={b.projectedShrinkPct ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { projectedShrinkPct: numOrNull(v) })} width={100} placeholder={`${DEFAULT_PROJECTED_SHRINK_PCT} (default)`} />
                       <span style={{ fontSize: 11, color: "#6f7890" }}>site spot: east →</span>
                       <EditableInline value={b.siteCol ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { siteCol: v === "" || v == null ? null : Number(v) })} width={60} placeholder="auto" />
                       <span style={{ fontSize: 11, color: "#6f7890" }}>south ↓</span>
@@ -4597,9 +4597,9 @@ function BayRow({ bay, building, readOnly, varieties, customers, onUpdateBayMeta
         <span style={{ fontSize: 11, color: "#6f7890" }}>IVI panel ID</span>
         <EditableInline value={bay.iviPanelId ?? ""} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { iviPanelId: v || null })} width={220} placeholder="not linked" />
         <span style={{ fontSize: 11, color: "#6f7890" }}>$/cwt</span>
-        <EditableInline value={bay.valuePerCwt ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { valuePerCwt: numOrNull(v) })} width={70} placeholder={building?.valuePerCwt != null ? `${building.valuePerCwt} (bldg)` : "bldg default"} />
+        <EditableInline value={bay.valuePerCwt ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { valuePerCwt: numOrNull(v) })} width={70} placeholder={`${numOrNull(building?.valuePerCwt) ?? DEFAULT_VALUE_PER_CWT} (${numOrNull(building?.valuePerCwt) != null ? "bldg" : "default"})`} />
         <span style={{ fontSize: 11, color: "#6f7890" }}>proj. shrink %</span>
-        <EditableInline value={bay.projectedShrinkPct ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { projectedShrinkPct: numOrNull(v) })} width={70} placeholder={building?.projectedShrinkPct != null ? `${building.projectedShrinkPct} (bldg)` : "bldg default"} />
+        <EditableInline value={bay.projectedShrinkPct ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { projectedShrinkPct: numOrNull(v) })} width={70} placeholder={`${numOrNull(building?.projectedShrinkPct) ?? DEFAULT_PROJECTED_SHRINK_PCT} (${numOrNull(building?.projectedShrinkPct) != null ? "bldg" : "default"})`} />
         {building?.orientation ? (
           <>
             <span style={{ fontSize: 11, color: "#6f7890" }}>pipe #1 starts at</span>
@@ -4705,10 +4705,12 @@ function sortBaysByBuilding(bays, buildings) {
 // $/cwt and projected shrink % are set per building (default) and can be
 // overridden per bay; blank on both = not set.
 function numOrNull(v) { return v === "" || v == null || !Number.isFinite(Number(v)) ? null : Number(v); }
+const DEFAULT_VALUE_PER_CWT = 10;
+const DEFAULT_PROJECTED_SHRINK_PCT = 6.77;
 function bayEconomics(bay, building) {
   return {
-    valuePerCwt: numOrNull(bay?.valuePerCwt) ?? numOrNull(building?.valuePerCwt),
-    projectedShrinkPct: numOrNull(bay?.projectedShrinkPct) ?? numOrNull(building?.projectedShrinkPct),
+    valuePerCwt: numOrNull(bay?.valuePerCwt) ?? numOrNull(building?.valuePerCwt) ?? DEFAULT_VALUE_PER_CWT,
+    projectedShrinkPct: numOrNull(bay?.projectedShrinkPct) ?? numOrNull(building?.projectedShrinkPct) ?? DEFAULT_PROJECTED_SHRINK_PCT,
   };
 }
 function buildLedger(bays, statsById, buildingsById, locationsById) {
@@ -4993,9 +4995,9 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
         <StatBlock label="Actual shrink" value={`${fmt(totals.shrink)} cwt`} sub={totals.initial ? `${((totals.shrink / totals.initial) * 100).toFixed(2)}% of ${fmt(totals.initial)} cwt started` : ""} accent="#e08787" />
       </div>
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
-        <StatBlock label="Projected shrink" value={totals.projRated ? `${fmt(totals.projShrink)} cwt` : "—"} sub={totals.projRated ? `${((totals.projShrink / totals.projRated) * 100).toFixed(2)}% projected` : "set in Manage Sites"} accent="#e0a63e" />
+        <StatBlock label="Projected shrink" value={totals.projRated ? `${fmt(totals.projShrink)} cwt` : "—"} sub={totals.projRated ? `${((totals.projShrink / totals.projRated) * 100).toFixed(2)}% projected` : "default · change in Manage Sites"} accent="#e0a63e" />
         <StatBlock label="Actual vs projected" value={totals.projRated ? `${totals.shrink - totals.projShrink > 0 ? "+" : ""}${fmt(totals.shrink - totals.projShrink)} cwt` : "—"} sub={totals.projRated ? (totals.shrink > totals.projShrink ? "running over projection" : "under projection") : ""} accent={totals.shrink > totals.projShrink ? "#e08787" : "#8fd19e"} />
-        <StatBlock label="Pile value (projected shrink)" value={totals.valueSet ? fmtMoney(totals.valueProj) : "—"} sub={totals.valueSet ? "(in storage − projected shrink) × $/cwt" : "set $/cwt in Manage Sites"} accent="#8fd19e" />
+        <StatBlock label="Pile value (projected shrink)" value={totals.valueSet ? fmtMoney(totals.valueProj) : "—"} sub={totals.valueSet ? "(in storage − projected shrink) × $/cwt" : "default · change in Manage Sites"} accent="#8fd19e" />
         <StatBlock label="Value of in storage" value={totals.valueSet ? fmtMoney(totals.valueActual) : "—"} sub={totals.valueSet ? "in storage × $/cwt" : ""} />
       </div>
       {unassignedCapacity > 0 && (
