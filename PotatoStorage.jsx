@@ -2039,9 +2039,10 @@ function DeleteButton({ onConfirm, confirmMessage, title = "Delete", disabled, s
 // Uncontrolled inline-editable field — saves on blur (or Enter), and resets
 // its displayed value whenever the underlying prop changes (e.g. after a
 // successful save round-trip), via the `key`.
-function EditableInline({ value, onSave, type = "text", width, disabled, placeholder }) {
+function EditableInline({ value, onSave, type = "text", width, disabled, placeholder, allowClear }) {
   const commit = (e) => {
     const raw = e.target.value;
+    if (raw === "" && allowClear && value !== "" && value != null) { onSave(null); return; }
     const v = type === "number" ? Number(raw) : raw;
     if (raw === "" || v === value) return;
     onSave(v);
@@ -4529,10 +4530,14 @@ function ManageTab({ locations, buildings, bays, varieties, customers, readOnly,
                           </select>
                         </>
                       )}
+                      <span style={{ fontSize: 11, color: "#6f7890" }}>$/cwt</span>
+                      <EditableInline value={b.valuePerCwt ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { valuePerCwt: numOrNull(v) })} width={70} placeholder="—" />
+                      <span style={{ fontSize: 11, color: "#6f7890" }}>projected shrink %</span>
+                      <EditableInline value={b.projectedShrinkPct ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { projectedShrinkPct: numOrNull(v) })} width={70} placeholder="—" />
                       <span style={{ fontSize: 11, color: "#6f7890" }}>site spot: east →</span>
-                      <EditableInline value={b.siteCol ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { siteCol: v === "" || v == null ? null : Number(v) })} width={60} placeholder="auto" />
+                      <EditableInline value={b.siteCol ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { siteCol: v === "" || v == null ? null : Number(v) })} width={60} placeholder="auto" />
                       <span style={{ fontSize: 11, color: "#6f7890" }}>south ↓</span>
-                      <EditableInline value={b.siteRow ?? ""} type="number" disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { siteRow: v === "" || v == null ? null : Number(v) })} width={60} placeholder="auto" />
+                      <EditableInline value={b.siteRow ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBuilding(b.id, { siteRow: v === "" || v == null ? null : Number(v) })} width={60} placeholder="auto" />
                       <DeleteButton
                         disabled={readOnly}
                         title="Delete building"
@@ -4591,6 +4596,10 @@ function BayRow({ bay, building, readOnly, varieties, customers, onUpdateBayMeta
         <EditableInline value={bay.agristorBinName ?? ""} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { agristorBinName: v || null })} width={140} placeholder="not linked" />
         <span style={{ fontSize: 11, color: "#6f7890" }}>IVI panel ID</span>
         <EditableInline value={bay.iviPanelId ?? ""} disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { iviPanelId: v || null })} width={220} placeholder="not linked" />
+        <span style={{ fontSize: 11, color: "#6f7890" }}>$/cwt</span>
+        <EditableInline value={bay.valuePerCwt ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { valuePerCwt: numOrNull(v) })} width={70} placeholder={building?.valuePerCwt != null ? `${building.valuePerCwt} (bldg)` : "bldg default"} />
+        <span style={{ fontSize: 11, color: "#6f7890" }}>proj. shrink %</span>
+        <EditableInline value={bay.projectedShrinkPct ?? ""} type="number" allowClear disabled={readOnly} onSave={(v) => onUpdateBayMeta(bay.id, { projectedShrinkPct: numOrNull(v) })} width={70} placeholder={building?.projectedShrinkPct != null ? `${building.projectedShrinkPct} (bldg)` : "bldg default"} />
         {building?.orientation ? (
           <>
             <span style={{ fontSize: 11, color: "#6f7890" }}>pipe #1 starts at</span>
@@ -4693,6 +4702,15 @@ function sortBaysByBuilding(bays, buildings) {
   const order = new Map(buildings.map((b, i) => [b.id, i]));
   return [...bays].sort((a, b) => (order.get(a.buildingId) ?? 999) - (order.get(b.buildingId) ?? 999));
 }
+// $/cwt and projected shrink % are set per building (default) and can be
+// overridden per bay; blank on both = not set.
+function numOrNull(v) { return v === "" || v == null || !Number.isFinite(Number(v)) ? null : Number(v); }
+function bayEconomics(bay, building) {
+  return {
+    valuePerCwt: numOrNull(bay?.valuePerCwt) ?? numOrNull(building?.valuePerCwt),
+    projectedShrinkPct: numOrNull(bay?.projectedShrinkPct) ?? numOrNull(building?.projectedShrinkPct),
+  };
+}
 function buildLedger(bays, statsById, buildingsById, locationsById) {
   const rows = [];
   bays.forEach((bay) => {
@@ -4708,6 +4726,17 @@ function buildLedger(bays, statsById, buildingsById, locationsById) {
       rows.push({ ...base, customer: zone.customer, metric: "In Storage", cwt: zs.currentCwt });
       rows.push({ ...base, customer: zone.customer, metric: "Capacity", cwt: zs.capacityCwt });
       rows.push({ ...base, customer: zone.customer, metric: "Shrink", cwt: zs.shrinkCwt });
+      // Started-with cwt, projected shrink, and $ value (see bayEconomics).
+      const eco = bayEconomics(bay, building);
+      const projShrink = eco.projectedShrinkPct != null ? zs.initialCwt * eco.projectedShrinkPct / 100 : 0;
+      rows.push({ ...base, customer: zone.customer, metric: "Initial", cwt: zs.initialCwt });
+      rows.push({ ...base, customer: zone.customer, metric: "Proj Shrink", cwt: projShrink });
+      if (eco.projectedShrinkPct != null) rows.push({ ...base, customer: zone.customer, metric: "Proj Rated", cwt: zs.initialCwt });
+      if (eco.valuePerCwt != null) {
+        rows.push({ ...base, customer: zone.customer, metric: "Value Proj", cwt: (zs.initialCwt - projShrink) * eco.valuePerCwt });
+        rows.push({ ...base, customer: zone.customer, metric: "Value Actual", cwt: (zs.initialCwt - zs.shrinkCwt) * eco.valuePerCwt });
+        rows.push({ ...base, customer: zone.customer, metric: "Value Set", cwt: 1 });
+      }
       // Run out is pipe-based (pipes hauled × cwt/pipe); logged load weights
       // only feed Shrink.
       if (zs.totalRun > 0) rows.push({ ...base, customer: zone.customer, metric: "Shipped", cwt: zs.totalRun });
@@ -4872,20 +4901,29 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
         ? dims.map((d) => (d === "variety" ? (varietyLabels.get(row.variety) || row.variety) : row[d]))
         : ["All"];
       const key = keyParts.join(" · ");
-      if (!map.has(key)) map.set(key, { key, labelParts: keyParts, members: new Set(), capacity: 0, inStorage: 0, shipped: 0, shrink: 0 });
+      if (!map.has(key)) map.set(key, { key, labelParts: keyParts, members: new Set(), capacity: 0, inStorage: 0, shipped: 0, shrink: 0, initial: 0, projShrink: 0, projRated: 0, valueProj: 0, valueActual: 0, valueSet: 0 });
       const g = map.get(key);
       g.members.add(row.variety);
       if (row.metric === "Capacity") g.capacity += row.cwt;
       if (row.metric === "In Storage") g.inStorage += row.cwt;
       if (row.metric === "Shipped") g.shipped += row.cwt;
       if (row.metric === "Shrink") g.shrink += row.cwt;
+      if (row.metric === "Initial") g.initial += row.cwt;
+      if (row.metric === "Proj Shrink") g.projShrink += row.cwt;
+      if (row.metric === "Proj Rated") g.projRated += row.cwt;
+      if (row.metric === "Value Proj") g.valueProj += row.cwt;
+      if (row.metric === "Value Actual") g.valueActual += row.cwt;
+      if (row.metric === "Value Set") g.valueSet += row.cwt;
     });
     return Array.from(map.values()).sort((a, b) => b.capacity - a.capacity);
   }, [filteredLedger, dims, varietyLabels]);
   const totals = grouped.reduce((acc, g) => ({
     capacity: acc.capacity + g.capacity, inStorage: acc.inStorage + g.inStorage,
     shipped: acc.shipped + g.shipped, shrink: acc.shrink + g.shrink,
-  }), { capacity: unassignedCapacity, inStorage: 0, shipped: 0, shrink: 0 });
+    initial: acc.initial + g.initial, projShrink: acc.projShrink + g.projShrink, projRated: acc.projRated + g.projRated,
+    valueProj: acc.valueProj + g.valueProj, valueActual: acc.valueActual + g.valueActual, valueSet: acc.valueSet + g.valueSet,
+  }), { capacity: unassignedCapacity, inStorage: 0, shipped: 0, shrink: 0, initial: 0, projShrink: 0, projRated: 0, valueProj: 0, valueActual: 0, valueSet: 0 });
+  const fmtMoney = (v) => `$${Math.round(v).toLocaleString()}`;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {onFilterChange && (
@@ -4952,7 +4990,13 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
         <StatBlock label="Total capacity" value={`${fmt(totals.capacity)} cwt`} />
         <StatBlock label="In storage" value={`${fmt(totals.inStorage)} cwt`} accent="#f2c14e" />
         <StatBlock label="Run out" value={`${fmt(totals.shipped)} cwt`} />
-        <StatBlock label="Shrink" value={`${fmt(totals.shrink)} cwt`} sub={totals.capacity ? `${((totals.shrink / totals.capacity) * 100).toFixed(2)}% of capacity` : ""} accent="#e08787" />
+        <StatBlock label="Actual shrink" value={`${fmt(totals.shrink)} cwt`} sub={totals.initial ? `${((totals.shrink / totals.initial) * 100).toFixed(2)}% of ${fmt(totals.initial)} cwt started` : ""} accent="#e08787" />
+      </div>
+      <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
+        <StatBlock label="Projected shrink" value={totals.projRated ? `${fmt(totals.projShrink)} cwt` : "—"} sub={totals.projRated ? `${((totals.projShrink / totals.projRated) * 100).toFixed(2)}% projected` : "set in Manage Sites"} accent="#e0a63e" />
+        <StatBlock label="Actual vs projected" value={totals.projRated ? `${totals.shrink - totals.projShrink > 0 ? "+" : ""}${fmt(totals.shrink - totals.projShrink)} cwt` : "—"} sub={totals.projRated ? (totals.shrink > totals.projShrink ? "running over projection" : "under projection") : ""} accent={totals.shrink > totals.projShrink ? "#e08787" : "#8fd19e"} />
+        <StatBlock label="Pile value (projected shrink)" value={totals.valueSet ? fmtMoney(totals.valueProj) : "—"} sub={totals.valueSet ? "started cwt − projected shrink, × $/cwt" : "set $/cwt in Manage Sites"} accent="#8fd19e" />
+        <StatBlock label="Value at actual shrink" value={totals.valueSet ? fmtMoney(totals.valueActual) : "—"} sub={totals.valueSet ? "started cwt − actual shrink, × $/cwt" : ""} />
       </div>
       {unassignedCapacity > 0 && (
         <div style={{ fontSize: 11.5, color: "#6f7890", marginTop: -8 }}>
@@ -4968,8 +5012,11 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
               <th style={thStyle}>In Storage (cwt)</th>
               <th style={thStyle}>Fill %</th>
               <th style={thStyle}>Run out (cwt)</th>
-              <th style={thStyle}>Shrink (cwt)</th>
-              <th style={thStyle}>Shrink %</th>
+              <th style={thStyle}>Actual shrink (cwt)</th>
+              <th style={thStyle}>Actual shrink %</th>
+              <th style={thStyle}>Proj. shrink %</th>
+              <th style={thStyle}>Proj. shrink (cwt)</th>
+              <th style={thStyle}>Value ($)</th>
             </tr>
           </thead>
           <tbody>
@@ -4996,12 +5043,15 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
                 <td style={{ ...tdStyle, color: "#f2c14e" }}>{fmt(g.inStorage)}</td>
                 <td style={tdStyle}>{g.capacity ? Math.round((g.inStorage / g.capacity) * 100) : 0}%</td>
                 <td style={tdStyle}>{fmt(g.shipped)}</td>
-                <td style={{ ...tdStyle, color: g.shrink / (g.capacity || 1) > 0.08 ? "#e08787" : "#8fd19e" }}>{fmt(g.shrink)}</td>
-                <td style={tdStyle}>{g.capacity ? ((g.shrink / g.capacity) * 100).toFixed(2) : "0.00"}%</td>
+                <td style={{ ...tdStyle, color: g.initial && g.shrink / g.initial > 0.08 ? "#e08787" : "#8fd19e" }}>{fmt(g.shrink)}</td>
+                <td style={tdStyle}>{g.initial ? ((g.shrink / g.initial) * 100).toFixed(2) : "0.00"}%</td>
+                <td style={tdStyle}>{g.projRated ? `${((g.projShrink / g.projRated) * 100).toFixed(2)}%` : "—"}</td>
+                <td style={tdStyle}>{g.projRated ? fmt(g.projShrink) : "—"}</td>
+                <td style={{ ...tdStyle, color: "#8fd19e" }}>{g.valueSet ? fmtMoney(g.valueProj) : "—"}</td>
               </tr>
             ))}
             {grouped.length === 0 && (
-              <tr><td colSpan={7} style={{ ...tdStyle, color: "#5b6478" }}>No data yet.</td></tr>
+              <tr><td colSpan={10} style={{ ...tdStyle, color: "#5b6478" }}>No data yet.</td></tr>
             )}
           </tbody>
         </table>
