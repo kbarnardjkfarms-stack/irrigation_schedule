@@ -497,25 +497,29 @@ function computeZoneStats(bay, zone, zoneData) {
   const capacityCwt = pipeCount * cwtPerPipe;
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
   const runs = zoneData?.cwtRuns || [];
-  const totalRun = runs.reduce((s, r) => s + Number(r.cwt || 0), 0);
+  // Logged loads (actual weights that left the building) are kept only to
+  // measure shrink. "Run out" itself is pipe-based: pipes hauled out ×
+  // the cwt the building was said to hold per pipe.
+  const loggedRun = runs.reduce((s, r) => s + Number(r.cwt || 0), 0);
+  const totalRun = pipesEmpty * cwtPerPipe;
   const initialCwt = zone.initialFillCwt ?? capacityCwt;
-  const shrinkCwt = initialCwt - (totalRun + currentCwt);
+  const shrinkCwt = initialCwt - (loggedRun + currentCwt);
   const shrinkPct = initialCwt > 0 ? shrinkCwt / initialCwt : 0;
   return {
     pipeCount, pipesEmpty, pipesFilled, fullMap, topFullMap, hasTopRange, cwtPerPipe,
     calculatedCwt, hasOverride, currentCwt, capacityCwt, fillPct,
-    totalRun, initialCwt, shrinkCwt, shrinkPct, runs,
+    totalRun, loggedRun, initialCwt, shrinkCwt, shrinkPct, runs,
     lastCheckDate: pipeLog.length ? pipeLog[pipeLog.length - 1].date : null,
   };
 }
 function computeBayStats(bay, bayData) {
   const zoneStats = {};
-  let currentCwt = 0, zoneCapacityCwt = 0, totalRun = 0, initialCwt = 0, shrinkCwt = 0;
+  let currentCwt = 0, zoneCapacityCwt = 0, totalRun = 0, loggedRun = 0, initialCwt = 0, shrinkCwt = 0;
   bay.zones.forEach((z) => {
     const zs = computeZoneStats(bay, z, bayData?.zones?.[z.id]);
     zoneStats[z.id] = zs;
     currentCwt += zs.currentCwt; zoneCapacityCwt += zs.capacityCwt;
-    totalRun += zs.totalRun; initialCwt += zs.initialCwt; shrinkCwt += zs.shrinkCwt;
+    totalRun += zs.totalRun; loggedRun += zs.loggedRun; initialCwt += zs.initialCwt; shrinkCwt += zs.shrinkCwt;
   });
   // A bay's own declared pipe count + cwt/pipe is its physical capacity —
   // known the moment the bay is created, even before any field is assigned
@@ -527,7 +531,7 @@ function computeBayStats(bay, bayData) {
     : zoneCapacityCwt;
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
   const shrinkPct = initialCwt > 0 ? shrinkCwt / initialCwt : 0;
-  return { zoneStats, currentCwt, capacityCwt, fillPct, totalRun, initialCwt, shrinkCwt, shrinkPct };
+  return { zoneStats, currentCwt, capacityCwt, fillPct, totalRun, loggedRun, initialCwt, shrinkCwt, shrinkPct };
 }
 /* =================================================================
    3D — shared bay-group builder (used by both the yard view and the
@@ -2912,7 +2916,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
       )}
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <StatBlock label="Bay inventory" value={`${fmt(stats.currentCwt)} cwt`} sub={`${Math.round(stats.fillPct * 100)}% of ${fmt(stats.capacityCwt)} cwt`} accent="#f2c14e" />
-        <StatBlock label="Total run out" value={`${fmt(stats.totalRun)} cwt`} />
+        <StatBlock label="Total run out" value={`${fmt(stats.totalRun)} cwt`} sub={`from pipe hauled · ${fmt(stats.loggedRun)} cwt logged loads`} />
         <StatBlock label="Bay shrink" value={`${fmt(stats.shrinkCwt)} cwt`} sub={`${(stats.shrinkPct * 100).toFixed(2)}%`} accent={stats.shrinkPct > 0.08 ? "#e08787" : "#8fd19e"} />
       </div>
       <LiveConditionsCard bay={bay} />
@@ -3022,6 +3026,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
                 {customerOptions(customers, zone.customer).map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
+            <StatBlock label="Field run out" value={`${fmt(zs.totalRun)} cwt`} sub={`${fmt(zs.loggedRun)} cwt logged loads`} />
             <StatBlock label="Field shrink" value={`${fmt(zs.shrinkCwt)} cwt`} sub={`${(zs.shrinkPct * 100).toFixed(2)}%`} accent={zs.shrinkPct > 0.08 ? "#e08787" : "#8fd19e"} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
@@ -4703,9 +4708,9 @@ function buildLedger(bays, statsById, buildingsById, locationsById) {
       rows.push({ ...base, customer: zone.customer, metric: "In Storage", cwt: zs.currentCwt });
       rows.push({ ...base, customer: zone.customer, metric: "Capacity", cwt: zs.capacityCwt });
       rows.push({ ...base, customer: zone.customer, metric: "Shrink", cwt: zs.shrinkCwt });
-      (zs.runs || []).forEach((r) => {
-        rows.push({ ...base, customer: r.dest, metric: "Shipped", cwt: Number(r.cwt || 0) });
-      });
+      // Run out is pipe-based (pipes hauled × cwt/pipe); logged load weights
+      // only feed Shrink.
+      if (zs.totalRun > 0) rows.push({ ...base, customer: zone.customer, metric: "Shipped", cwt: zs.totalRun });
     });
     // A bay's declared capacity (pipe count × cwt/pipe) can be bigger than
     // what's actually assigned to a field yet — a brand-new bay with no
@@ -4946,7 +4951,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <StatBlock label="Total capacity" value={`${fmt(totals.capacity)} cwt`} />
         <StatBlock label="In storage" value={`${fmt(totals.inStorage)} cwt`} accent="#f2c14e" />
-        <StatBlock label="Shipped" value={`${fmt(totals.shipped)} cwt`} />
+        <StatBlock label="Run out" value={`${fmt(totals.shipped)} cwt`} />
         <StatBlock label="Shrink" value={`${fmt(totals.shrink)} cwt`} sub={totals.capacity ? `${((totals.shrink / totals.capacity) * 100).toFixed(2)}% of capacity` : ""} accent="#e08787" />
       </div>
       {unassignedCapacity > 0 && (
@@ -4962,7 +4967,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
               <th style={thStyle}>Capacity (cwt)</th>
               <th style={thStyle}>In Storage (cwt)</th>
               <th style={thStyle}>Fill %</th>
-              <th style={thStyle}>Shipped (cwt)</th>
+              <th style={thStyle}>Run out (cwt)</th>
               <th style={thStyle}>Shrink (cwt)</th>
               <th style={thStyle}>Shrink %</th>
             </tr>
