@@ -1,6 +1,6 @@
 {
   "name": "irrigation-app-functions",
-  "engines": { "node": "20" },
+  "engines": { "node": "22" },
   "main": "index.js",
   "dependencies": {
     "firebase-admin": "^13.10.0",
