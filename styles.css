@@ -435,6 +435,9 @@ thead th.sticky-col { top: 0; z-index: 4; }
    lines in AgronomyByField's Sparkline - same green as the "optimal" status
    badge so the band reads as "the good zone" without a legend. */
 .agronomy-sparkline-band { fill: #3c5a3f; fill-opacity: 0.12; }
+.agronomy-sparkline-range-label { font-size: 7px; fill: #3c5a3f; font-weight: 600; }
+.agronomy-sparkline-week-label { font-size: 7px; fill: #999; }
+.agronomy-sparkline-axis { stroke: #ddd8cc; stroke-width: 1; }
 
 /* Annual-review section (fall soil panel + nematode counts): a snapshot
    card per sample instead of a trend chart, since these are once-a-year
