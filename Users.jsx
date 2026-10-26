@@ -35,7 +35,7 @@ function modulesToSave(role, modules) {
   return allChecked ? null : modules
 }
 
-const EMPTY_FORM = { name: '', email: '', phone: '', receiveTextAlerts: true, role: 'irrigator', farmIds: [], canEditSchedule: false, modules: ALL_MODULE_IDS, customers: [] }
+const EMPTY_FORM = { name: '', email: '', phone: '', receiveTextAlerts: false, role: 'irrigator', farmIds: [], canEditSchedule: false, modules: ALL_MODULE_IDS, customers: [] }
 
 function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabel, onCancel, onSubmit }) {
   const [form, setForm] = useState(initial)
@@ -110,18 +110,26 @@ function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabe
         placeholder="(208) 555-0123"
         style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #ccc', marginBottom: '10px' }}
       />
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '6px' }}>
         <input
           type="checkbox"
           id="receiveTextAlerts"
-          checked={form.receiveTextAlerts}
+          checked={!!form.phone && form.receiveTextAlerts === true}
           onChange={(e) => setForm((f) => ({ ...f, receiveTextAlerts: e.target.checked }))}
           disabled={!form.phone}
-          style={{ margin: 0 }}
+          style={{ margin: '2px 0 0 0', flexShrink: 0 }}
         />
-        <label htmlFor="receiveTextAlerts" style={{ fontSize: '12px', color: form.phone ? '#000' : '#888' }}>
-          Send text alerts to this number{!form.phone && ' (add a phone number first)'}
+        <label htmlFor="receiveTextAlerts" style={{ fontSize: '12px', lineHeight: 1.45, color: form.phone ? '#000' : '#888' }}>
+          I agree to receive recurring text messages (SMS) from Jentzsch-Kearl Farms, a Tree Source company, at this
+          number. The texts are internal irrigation and equipment alerts for farm staff only, for example when a pivot
+          has stopped moving while running. Message frequency varies. Msg &amp; data rates may apply. Reply STOP to opt
+          out, HELP for help. Agreeing is optional.{!form.phone && ' (Add a phone number first.)'}
         </label>
+      </div>
+      <div style={{ fontSize: '11px', color: '#888', margin: '0 0 14px 22px' }}>
+        <a href="https://treesource.com/terms" target="_blank" rel="noopener noreferrer">Terms</a>
+        {' \u00b7 '}
+        <a href="https://treesource.com/privacy-policy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
       </div>
       <div className="editor-label">Role</div>
       <select
@@ -467,7 +475,7 @@ export default function Users() {
                 </td>
                 <td style={{ padding: '8px', color: '#666' }}>
                   {user.phone || '\u2014'}
-                  {user.phone && <div style={{ fontSize: '10px', color: '#888' }}>Texts {user.receiveTextAlerts !== false ? 'on' : 'off'}</div>}
+                  {user.phone && <div style={{ fontSize: '10px', color: '#888' }}>Texts {user.receiveTextAlerts === true ? 'on' : 'off'}</div>}
                 </td>
                 <td style={{ padding: '8px' }}>{ROLE_LABELS[user.role] || user.role}</td>
                 <td style={{ padding: '8px', color: '#666' }}>{farmSummary(user)}</td>
@@ -494,7 +502,7 @@ export default function Users() {
                         name: user.name || '',
                         email: user.email || '',
                         phone: user.phone || '',
-                        receiveTextAlerts: user.receiveTextAlerts !== false,
+                        receiveTextAlerts: user.receiveTextAlerts === true,
                         role: user.role || 'irrigator',
                         farmIds: user.farmIds || [],
                         canEditSchedule: !!user.canEditSchedule,
