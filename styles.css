@@ -427,3 +427,51 @@ thead th.sticky-col { top: 0; z-index: 4; }
   padding: 1px 5px;
   border-radius: 4px;
 }
+
+/* Power BI parity, Phase 1: latest-sample date under each KPI tile. */
+.agronomy-kpi-date { font-size: 10px; color: #aaa; margin: 2px 0 0; }
+
+/* Target-range reference band drawn behind the weekly soil/petiole trend
+   lines in AgronomyByField's Sparkline - same green as the "optimal" status
+   badge so the band reads as "the good zone" without a legend. */
+.agronomy-sparkline-band { fill: #3c5a3f; fill-opacity: 0.12; }
+
+/* Annual-review section (fall soil panel + nematode counts): a snapshot
+   card per sample instead of a trend chart, since these are once-a-year
+   readings rather than weekly in-season data. */
+.agronomy-annual-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 1rem;
+}
+
+.agronomy-annual-card {
+  flex: 1 1 260px;
+  min-width: 220px;
+  border: 0.5px solid #ddd8cc;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.agronomy-annual-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #2b2b26;
+  margin: 0 0 6px;
+}
+
+.agronomy-annual-values {
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.agronomy-annual-value-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  padding: 2px 0;
+  border-bottom: 0.5px solid #eee8db;
+}
+.agronomy-annual-value-row:last-child { border-bottom: none; }
