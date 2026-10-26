@@ -17,6 +17,8 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const [currentSeasonName, setCurrentSeasonName] = useState(null)
   const [acres, setAcres] = useState(null)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
+  const [cornerLengthInput, setCornerLengthInput] = useState('')
+  const [cornerSaved, setCornerSaved] = useState(false)
 
   // One-time lookup, not a live listener — this pivot's combined acreage
   // (across every field it maps to) and which season is "current" don't
@@ -68,6 +70,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
       setProfile(data)
       setGpmInput(data && data.currentGpm != null ? String(data.currentGpm) : '')
       setThresholdInput(data && data.stuckAlertThresholdMinutes != null ? String(data.stuckAlertThresholdMinutes) : '60')
+      setCornerLengthInput(data && data.cornerMachineLengthFt != null ? String(data.cornerMachineLengthFt) : '')
     })
     return () => unsub()
   }, [pivotGuid])
@@ -119,6 +122,24 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     setTimeout(() => setThresholdSaved(false), 1500)
   }
 
+  async function handleSetCornerMachine(hasIt) {
+    setError(null)
+    try {
+      await setDoc(doc(db, 'pivotProfiles', pivotGuid), { hasCornerMachine: hasIt }, { merge: true })
+    } catch (err) {
+      setError(err.message || 'Could not save.')
+    }
+  }
+
+  async function handleSaveCornerLength() {
+    const n = parseFloat(cornerLengthInput)
+    if (!cornerLengthInput || isNaN(n) || n <= 0) { setError('Enter the corner machine length in feet.'); return }
+    setError(null)
+    await setDoc(doc(db, 'pivotProfiles', pivotGuid), { cornerMachineLengthFt: n }, { merge: true })
+    setCornerSaved(true)
+    setTimeout(() => setCornerSaved(false), 1500)
+  }
+
   async function handleResetWetDry() {
     setError(null)
     try {
@@ -147,6 +168,24 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     ? Math.min(100, Math.round((episodeElapsedHours / requiredHours) * 100))
     : null
   const hasDrift = !!(profile && profile.lapTimeDriftFlagged)
+
+  // Corner machine acres. BaseStation's pivot length does NOT include the
+  // corner machine, so the circle the pivot sweeps on its own is
+  // pi * length^2, scaled by how much of the circle it travels (same
+  // reverse-to-forward arc the pivot icon and watcher use). Whatever the
+  // linked AgWorld fields add up to beyond that is the corner machine's.
+  const hasCorner = !!(profile && profile.hasCornerMachine)
+  const pivotLengthFt = profile && profile.machineLengthFt != null ? Number(profile.machineLengthFt) : null
+  let pivotAcres = null
+  if (pivotLengthFt && pivotLengthFt > 0) {
+    const rev = Number(pivot && pivot.reverseAngle) || 0
+    const fwd = Number(pivot && pivot.forwardAngle) || 0
+    let arc = 360
+    if (rev !== fwd) { arc = fwd - rev; if (arc < 0) arc += 360 }
+    pivotAcres = (Math.PI * pivotLengthFt * pivotLengthFt / 43560) * (arc / 360)
+  }
+  const cornerAcres = (acres != null && pivotAcres != null) ? acres - pivotAcres : null
+  const cornerLengthSaved = profile && profile.cornerMachineLengthFt != null ? profile.cornerMachineLengthFt : null
 
   const wetHours = profile && profile.wetHours != null ? profile.wetHours : 0
   const dryHours = profile && profile.dryHours != null ? profile.dryHours : 0
@@ -196,6 +235,74 @@ export default function PivotProfile({ pivotGuid, onBack }) {
           <button onClick={handleSaveGpm}>{gpmSaved ? 'Saved!' : 'Save'}</button>
         </div>
         <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Used for this pivot's scheduled-inches calculation</div>
+      </div>
+
+      <div style={{ marginBottom: '24px' }}>
+        <div className="editor-label" style={{ marginBottom: '8px' }}>Has corner machine?</div>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+          <button
+            onClick={() => handleSetCornerMachine(false)}
+            style={{ fontSize: '13px', padding: '6px 16px', borderRadius: '6px', border: '1px solid #ccc', background: !hasCorner ? '#2b2b26' : '#fff', color: !hasCorner ? '#fff' : '#2b2b26', cursor: 'pointer' }}
+          >No</button>
+          <button
+            onClick={() => handleSetCornerMachine(true)}
+            style={{ fontSize: '13px', padding: '6px 16px', borderRadius: '6px', border: '1px solid #ccc', background: hasCorner ? '#2b2b26' : '#fff', color: hasCorner ? '#fff' : '#2b2b26', cursor: 'pointer' }}
+          >Yes</button>
+        </div>
+        {hasCorner && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+            <input type="number" value={cornerLengthInput} onChange={(e) => setCornerLengthInput(e.target.value)} style={{ width: '100px' }} />
+            <span style={{ fontSize: '13px', color: '#555' }}>ft corner machine</span>
+            <button onClick={handleSaveCornerLength}>{cornerSaved ? 'Saved!' : 'Save'}</button>
+          </div>
+        )}
+        <div style={{ background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px' }}>
+          {pivotAcres == null ? (
+            <div style={{ fontSize: '11px', color: '#888' }}>
+              The pivot length from BaseStation hasn't been loaded for this pivot yet, so the acres breakdown isn't available.
+            </div>
+          ) : acres == null ? (
+            <div style={{ fontSize: '11px', color: '#888' }}>Loading acres&hellip;</div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#555', marginBottom: '4px' }}>
+                <span>Under the pivot ({Math.round(pivotLengthFt)} ft)</span>
+                <span>{pivotAcres.toFixed(1)} ac</span>
+              </div>
+              {hasCorner && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#555', marginBottom: '4px' }}>
+                  <span>Under the corner machine</span>
+                  <span>{cornerAcres.toFixed(1)} ac</span>
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', fontWeight: 600, color: '#2b2b26', borderTop: '1px solid #ddd', paddingTop: '6px', marginTop: '6px' }}>
+                <span>Total (AgWorld{currentSeasonName ? ', ' + currentSeasonName : ''})</span>
+                <span>{acres.toFixed(1)} ac</span>
+              </div>
+              {hasCorner && cornerAcres < 0 && (
+                <div style={{ fontSize: '11px', color: '#A32D2D', marginTop: '8px' }}>
+                  The pivot alone covers more than the AgWorld total. Check the pivot length in BaseStation and the field acres in AgWorld.
+                </div>
+              )}
+              {hasCorner && cornerAcres >= 0 && cornerLengthSaved == null && (
+                <div style={{ fontSize: '11px', color: '#888', marginTop: '8px' }}>Enter the corner machine length above to finish setting this up.</div>
+              )}
+              {!hasCorner && cornerAcres > Math.max(3, acres * 0.12) && (
+                <div style={{ fontSize: '11px', color: '#854F0B', marginTop: '8px' }}>
+                  AgWorld shows {cornerAcres.toFixed(1)} ac more than the pivot circle covers. If this pivot has a corner machine, select Yes.
+                </div>
+              )}
+              {!hasCorner && cornerAcres < -Math.max(3, acres * 0.12) && (
+                <div style={{ fontSize: '11px', color: '#854F0B', marginTop: '8px' }}>
+                  The pivot circle covers {(-cornerAcres).toFixed(1)} ac more than AgWorld shows. Check the pivot length in BaseStation.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>
+          BaseStation's pivot length does not include a corner machine. Corner acres are the AgWorld total minus the acres under the pivot.
+        </div>
       </div>
 
       <div>
