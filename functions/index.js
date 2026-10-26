@@ -421,7 +421,7 @@ async function requireAgronomyAccess(auth) {
 exports.createUser = onCall(async (request) => {
   await requireAdminOrOwner(request.auth);
 
-  const { name, email, role, farmIds, canEditSchedule } = request.data || {};
+  const { name, email, role, farmIds, canEditSchedule, phone, receiveTextAlerts } = request.data || {};
   if (!name || !email || !role) {
     throw new HttpsError('invalid-argument', 'Name, email, and role are required.');
   }
@@ -443,6 +443,10 @@ exports.createUser = onCall(async (request) => {
   }
 
   const profile = { name, email, role };
+  if (phone) {
+    profile.phone = phone;
+    profile.receiveTextAlerts = !!receiveTextAlerts;
+  }
   if (FARM_SCOPED_ROLES.includes(role)) {
     profile.farmIds = farmIds.map(String);
   }
@@ -1760,3 +1764,9 @@ exports.syncIviReadingsNow = onRequest(
     }
   }
 );
+
+// Pivot watcher (stuck-pivot alerts, lap-time audit, wet/dry hours) lives in
+// its own file so edits to this one can't erase it. See pivotWatcher.js.
+const pivotWatcher = require('./pivotWatcher');
+exports.checkStuckPivots = pivotWatcher.checkStuckPivots;
+exports.checkStuckPivotsNow = pivotWatcher.checkStuckPivotsNow;
