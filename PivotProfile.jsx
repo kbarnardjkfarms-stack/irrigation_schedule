@@ -4,6 +4,26 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { db, storage } from './firebase.js'
 import PivotIcon from './PivotIcon.jsx'
 
+// Layout helpers for the profile page: each data section sits in its own
+// white card with a title, and cards are grouped under small headings so
+// the sections don't run together on the cream page background.
+function Group({ title }) {
+  return (
+    <div style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.07em', textTransform: 'uppercase', color: '#8a8780', margin: '26px 0 8px 2px' }}>
+      {title}
+    </div>
+  )
+}
+
+function Section({ title, children }) {
+  return (
+    <div style={{ background: '#fff', border: '1px solid #e4e1d8', borderRadius: '10px', padding: '14px 16px', marginBottom: '12px' }}>
+      <div style={{ fontSize: '13px', fontWeight: 600, color: '#2b2b26', marginBottom: '10px' }}>{title}</div>
+      {children}
+    </div>
+  )
+}
+
 export default function PivotProfile({ pivotGuid, onBack }) {
   const [pivot, setPivot] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -192,10 +212,10 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const wetDryTrackingSince = profile && profile.wetDryTrackingSince
 
   return (
-    <div style={{ padding: '16px 24px', maxWidth: '480px' }}>
+    <div style={{ padding: '16px 24px 40px', maxWidth: '480px' }}>
       <button onClick={onBack} style={{ marginBottom: '16px' }}>&larr; Back</button>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', paddingBottom: '14px', borderBottom: '1px solid #eee' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px', paddingBottom: '14px', borderBottom: '1px solid #e4e1d8' }}>
         <PivotIcon pivot={pivot} size={44} />
         <div>
           <div style={{ fontSize: '16px', fontWeight: 600 }}>{(pivot && pivot.name) || 'Pivot'}</div>
@@ -203,8 +223,9 @@ export default function PivotProfile({ pivotGuid, onBack }) {
         </div>
       </div>
 
-      <div style={{ marginBottom: '24px' }}>
-        <div className="editor-label" style={{ marginBottom: '8px' }}>Sprinkler package</div>
+      <Group title="Setup" />
+
+      <Section title="Sprinkler package">
         {pkg ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px' }}>
             <div style={{ flex: 1 }}>
@@ -225,21 +246,20 @@ export default function PivotProfile({ pivotGuid, onBack }) {
         {historyCount > 0 && (
           <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>{historyCount} older version{historyCount > 1 ? 's' : ''} kept for reference</div>
         )}
-      </div>
+      </Section>
 
-      <div style={{ marginBottom: '24px' }}>
-        <div className="editor-label" style={{ marginBottom: '8px' }}>Current GPM</div>
+      <Section title="Current GPM">
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <input type="number" value={gpmInput} onChange={(e) => setGpmInput(e.target.value)} style={{ width: '100px' }} />
           <span style={{ fontSize: '13px', color: '#555' }}>GPM</span>
           <button onClick={handleSaveGpm}>{gpmSaved ? 'Saved!' : 'Save'}</button>
         </div>
         <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Used for this pivot's scheduled-inches calculation</div>
-      </div>
+      </Section>
 
-      <div style={{ marginBottom: '24px' }}>
-        <div className="editor-label" style={{ marginBottom: '8px' }}>Has corner machine?</div>
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+      <Section title="Corner machine">
+        <div style={{ fontSize: '12px', color: '#555', marginBottom: '6px' }}>Has corner machine?</div>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
           <button
             onClick={() => handleSetCornerMachine(false)}
             style={{ fontSize: '13px', padding: '6px 16px', borderRadius: '6px', border: '1px solid #ccc', background: !hasCorner ? '#2b2b26' : '#fff', color: !hasCorner ? '#fff' : '#2b2b26', cursor: 'pointer' }}
@@ -250,7 +270,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
           >Yes</button>
         </div>
         {hasCorner && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
             <input type="number" value={cornerLengthInput} onChange={(e) => setCornerLengthInput(e.target.value)} style={{ width: '100px' }} />
             <span style={{ fontSize: '13px', color: '#555' }}>ft corner machine</span>
             <button onClick={handleSaveCornerLength}>{cornerSaved ? 'Saved!' : 'Save'}</button>
@@ -303,20 +323,22 @@ export default function PivotProfile({ pivotGuid, onBack }) {
         <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>
           BaseStation's pivot length does not include a corner machine. Corner acres are the AgWorld total minus the acres under the pivot.
         </div>
-      </div>
+      </Section>
 
-      <div>
-        <div className="editor-label" style={{ marginBottom: '8px' }}>Stuck-pivot alert</div>
+      <Group title="Alerts" />
+
+      <Section title="Stuck-pivot alert">
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <input type="number" value={thresholdInput} onChange={(e) => setThresholdInput(e.target.value)} style={{ width: '100px' }} />
           <span style={{ fontSize: '13px', color: '#555' }}>min</span>
           <button onClick={handleSaveThreshold}>{thresholdSaved ? 'Saved!' : 'Save'}</button>
         </div>
         <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Alert if running wet with no movement for this long (45&ndash;120 min)</div>
-      </div>
+      </Section>
 
-      <div style={{ marginTop: '24px', marginBottom: '24px' }}>
-        <div className="editor-label" style={{ marginBottom: '8px' }}>Full audit &mdash; {currentSeasonName || '\u2014'}</div>
+      <Group title="Audits" />
+
+      <Section title={`Full audit \u2014 ${currentSeasonName || '\u2014'}`}>
         {baseline ? (
           <div style={{ background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px' }}>
             <div style={{ fontSize: '13px', fontWeight: 600, color: '#2b2b26' }}>{baseline.lapTimeHours} hr baseline set</div>
@@ -342,10 +364,9 @@ export default function PivotProfile({ pivotGuid, onBack }) {
             )}
           </div>
         )}
-      </div>
+      </Section>
 
-      <div style={{ marginBottom: '24px' }}>
-        <div className="editor-label" style={{ marginBottom: '8px' }}>Live lap-time audit</div>
+      <Section title="Live lap-time audit">
         <div style={{ background: hasDrift ? '#FBF3E2' : '#f4f2ec', border: hasDrift ? '1px solid #F0D9A8' : 'none', borderRadius: '8px', padding: '10px 12px' }}>
           {profile && profile.currentLapTimeHours != null ? (
             <>
@@ -366,10 +387,11 @@ export default function PivotProfile({ pivotGuid, onBack }) {
             <div style={{ fontSize: '11px', color: '#888', marginTop: '8px' }}>Auditing now: {episodeElapsedHours.toFixed(1)} of 3 hrs so far</div>
           )}
         </div>
-      </div>
+      </Section>
 
-      <div style={{ marginBottom: '24px' }}>
-        <div className="editor-label" style={{ marginBottom: '8px' }}>Wet / dry hours</div>
+      <Group title="Water use" />
+
+      <Section title="Wet / dry hours">
         <div style={{ display: 'flex', gap: '10px', marginBottom: '8px' }}>
           <div style={{ flex: 1, background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px' }}>
             <div style={{ fontSize: '10px', color: '#888', marginBottom: '2px' }}>Wet hours</div>
@@ -387,7 +409,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
         <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>
           Counts hours the pivot is running with water on (wet) or running with water off (dry). Time stopped doesn't count toward either.
         </div>
-      </div>
+      </Section>
 
       {error && <p style={{ color: '#A32D2D', fontSize: '13px', marginTop: '16px' }}>{error}</p>}
 
