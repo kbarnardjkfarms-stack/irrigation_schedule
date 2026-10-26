@@ -14,6 +14,12 @@ export const METRICS_BY_TYPE = {
   // Confirmed exact keys via a live SO query (Aug 2026): {"NO3":21,"Salts":1.2}.
   // Case-sensitive - JS object lookups won't match 'no3' against a real
   // key named 'NO3', so this has to be exact, not just readable.
+  //
+  // NOTE: target here is a flat, crop-agnostic fallback only. For potato,
+  // beets, and corn, AgronomyByField now prefers the real week-by-week
+  // target from WEEKLY_CURVES_BY_CROP below (Kent's actual agronomic
+  // curves) and only falls back to this flat range for other crops or
+  // weeks outside the curve's range.
   soil: [
     { key: 'NO3', label: 'NO3', unit: 'ppm', target: [15, 25] },
     { key: 'Salts', label: 'Salts', unit: 'mmhos/cm', target: [0, 2] }
@@ -64,6 +70,92 @@ export const METRICS_BY_TYPE = {
   ],
   compost: [
     { key: 'n', label: 'N', unit: '%', target: [1, 2] }
+  ]
+}
+
+// Week-by-week nitrogen recommendation and nutrient target curves, by crop
+// and week since emergence. Pulled directly from Kent's own
+// CROP_NUTRIENT_CURVES.xlsx (Oct 2026) - this is the real agronomic
+// reference data the flat ranges in METRICS_BY_TYPE above were always a
+// placeholder for.
+//
+// Shape: WEEKLY_CURVES_BY_CROP[cropName] = array of
+//   { week, nRec, soilNO3: [low, high] | null, petioleNO3: [low, high] | null,
+//     petioleP: [low, high] | null, petioleK: [low, high] | null,
+//     petioleS: [low, high] | null, stage?: string }
+// ordered by week ascending.
+//
+// - nRec is lbs N/acre recommended that week (the "N Rec" KPI/curve).
+// - `stage` is an optional growth-stage note carried over from the source
+//   sheet (e.g. a vine-kill stage for potato, or a tasseling/end-of-N-window
+//   marker for corn/beets) - display-only, not used in any calculation.
+// - For potato weeks 13-17, the source sheet has a stage label (DYING /
+//   X% DEAD) in the N-use column instead of a number - confirmed with Kent
+//   this means 0 lbs N/acre recommended (not missing data), since nitrogen
+//   applications stop once vine-kill starts.
+// - Only potato's source sheet tracks %P/%K/Sulfur by week - beets and corn
+//   only track Soil NO3 + Petiole NO3, so petioleP/petioleK/petioleS are
+//   simply absent (undefined) on every beets/corn week.
+// - Cropped to the weeks the source sheet actually defines - a week past a
+//   crop's range (or a crop not in this table at all, e.g. onions) has no
+//   entry, and callers should fall back to METRICS_BY_TYPE's flat target.
+// - Keyed by the exact crop name used in the source workbook's tab names
+//   (POTATO / BEETS / CORN). Confirm this matches the crop badge actually
+//   shown on a beet field in the By Field view - if Agworld's cropName for
+//   sugar beets ever comes through as "SUGAR BEET" instead of "BEETS",
+//   this lookup will silently miss and just fall back to the flat target
+//   rather than crash, but it's worth checking once real beet fields have
+//   current-season samples.
+export const WEEKLY_CURVES_BY_CROP = {
+  POTATO: [
+    { week: 1, nRec: 20, soilNO3: [35, 50] },
+    { week: 2, nRec: 20, soilNO3: [33, 48] },
+    { week: 3, nRec: 40, soilNO3: [32, 47], petioleNO3: [20000, 25000], petioleP: [0.45, 0.5], petioleK: [11.5, 12.5], petioleS: [0.18, 0.2] },
+    { week: 4, nRec: 40, soilNO3: [31, 46], petioleNO3: [19200, 24000], petioleP: [0.45, 0.5], petioleK: [11, 12], petioleS: [0.18, 0.2] },
+    { week: 5, nRec: 54, soilNO3: [25, 40], petioleNO3: [18400, 23000], petioleP: [0.4, 0.45], petioleK: [10.5, 12], petioleS: [0.18, 0.2] },
+    { week: 6, nRec: 54, soilNO3: [20, 35], petioleNO3: [17600, 22000], petioleP: [0.38, 0.4], petioleK: [10.5, 11], petioleS: [0.15, 0.18] },
+    { week: 7, nRec: 40, soilNO3: [15, 30], petioleNO3: [15000, 21000], petioleP: [0.38, 0.4], petioleK: [10, 10.5], petioleS: [0.15, 0.18] },
+    { week: 8, nRec: 40, soilNO3: [10, 25], petioleNO3: [14500, 20000], petioleP: [0.33, 0.35], petioleK: [9.5, 10], petioleS: [0.15, 0.18] },
+    { week: 9, nRec: 20, soilNO3: [10, 20], petioleNO3: [14000, 19000], petioleP: [0.33, 0.35], petioleK: [9.5, 10], petioleS: [0.14, 0.16] },
+    { week: 10, nRec: 20, soilNO3: [5, 15], petioleNO3: [13500, 18000], petioleP: [0.28, 0.3], petioleK: [9, 9.5], petioleS: [0.14, 0.16] },
+    { week: 11, nRec: 27, soilNO3: [5, 10], petioleNO3: [13000, 17300], petioleP: [0.28, 0.3], petioleK: [9, 9.5], petioleS: [0.12, 0.14] },
+    { week: 12, nRec: 27, soilNO3: [5, 10], petioleNO3: [12500, 16600], petioleP: [0.28, 0.3], petioleK: [8.5, 9], petioleS: [0.12, 0.14] },
+    { week: 13, nRec: 0, soilNO3: [5, 9], petioleNO3: [12000, 15800], petioleP: [0.28, 0.3], petioleK: [7.5, 8], petioleS: [0.1, 0.12], stage: 'DYING' },
+    { week: 14, nRec: 0, soilNO3: [5, 8], petioleNO3: [11500, 15000], petioleP: [0.23, 0.25], petioleK: [6.5, 7], petioleS: [0.08, 0.1], stage: '10% DEAD' },
+    { week: 15, nRec: 0, soilNO3: [4, 7], petioleNO3: [10000, 12500], petioleP: [0.2, 0.25], petioleK: [5.5, 6], petioleS: [0.08, 0.1], stage: '20% DEAD' },
+    { week: 16, nRec: 0, soilNO3: [4, 5], petioleNO3: [7500, 10000], petioleP: [0.2, 0.25], petioleK: [5.5, 6], petioleS: [0.06, 0.08], stage: '30% DEAD' },
+    { week: 17, nRec: 0, stage: '40% DEAD' }
+  ],
+  BEETS: [
+    { week: 1, nRec: 0, soilNO3: [20, 35], petioleNO3: [10000, 15000] },
+    { week: 2, nRec: 5, soilNO3: [17, 30], petioleNO3: [10000, 15000] },
+    { week: 3, nRec: 15, soilNO3: [15, 25], petioleNO3: [10000, 15000] },
+    { week: 4, nRec: 25, soilNO3: [13, 20], petioleNO3: [10000, 15000] },
+    { week: 5, nRec: 30, soilNO3: [12, 17], petioleNO3: [10000, 15000] },
+    { week: 6, nRec: 35, soilNO3: [10, 15], petioleNO3: [10000, 14000] },
+    { week: 7, nRec: 35, soilNO3: [8, 13], petioleNO3: [8750, 13000] },
+    { week: 8, nRec: 35, soilNO3: [6, 11], petioleNO3: [7500, 11750] },
+    { week: 9, nRec: 35, soilNO3: [5, 9], petioleNO3: [6250, 10500] },
+    { week: 10, nRec: 35, soilNO3: [5, 7], petioleNO3: [5000, 9250], stage: 'END N' },
+    { week: 11, nRec: 35, soilNO3: [5, 7], petioleNO3: [3750, 8000] },
+    { week: 12, nRec: null, soilNO3: [5, 7], petioleNO3: [2500, 6750] },
+    { week: 13, nRec: null, soilNO3: [5, 7], petioleNO3: [2500, 5500] }
+  ],
+  CORN: [
+    { week: 1, nRec: 0, soilNO3: [20, 35], petioleNO3: [2000, 3000] },
+    { week: 2, nRec: 5, soilNO3: [17, 30], petioleNO3: [1800, 2800] },
+    { week: 3, nRec: 10, soilNO3: [15, 25], petioleNO3: [1600, 2600] },
+    { week: 4, nRec: 20, soilNO3: [13, 20], petioleNO3: [1400, 2400] },
+    { week: 5, nRec: 30, soilNO3: [12, 17], petioleNO3: [1200, 2200] },
+    { week: 6, nRec: 50, soilNO3: [10, 15], petioleNO3: [1000, 2000] },
+    { week: 7, nRec: 50, soilNO3: [8, 13], petioleNO3: [800, 1800] },
+    { week: 8, nRec: 50, soilNO3: [6, 11], petioleNO3: [700, 1600] },
+    { week: 9, nRec: 50, soilNO3: [5, 9], petioleNO3: [600, 1400] },
+    { week: 10, nRec: 15, soilNO3: [5, 7], petioleNO3: [500, 800], stage: 'VT' },
+    { week: 11, nRec: 15, soilNO3: [5, 7], petioleNO3: [400, 600] },
+    { week: 12, nRec: 5, soilNO3: [5, 7], petioleNO3: [300, 400] },
+    { week: 13, nRec: 0, soilNO3: [5, 7], petioleNO3: [200, 200] },
+    { week: 14, nRec: null, soilNO3: [5, 7], petioleNO3: [100, 100] }
   ]
 }
 
