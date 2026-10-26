@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
-import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR, CROP_COLOR } from './AgronomyConfig.js'
+import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR, CROP_COLOR, WEEKLY_CURVES_BY_CROP } from './AgronomyConfig.js'
 
 function fmtDate(ts) {
   if (!ts) return ''
@@ -18,29 +18,37 @@ function weeksBetween(laterDate, earlierDate) {
 // app's approach of hand-rolled SVG/table markup rather than a new dependency
 // for what's usually a handful of points per season.
 //
-// `target` (optional [low, high]) draws a shaded reference band behind the
-// trend line, matching the high/low lines on the Power BI "N Soil Level" /
-// "N Petiole Level" charts, with the band's own numbers labeled on the left
-// so "the range" is legible rather than just a faint tint. The band's
-// bounds are folded into the y-domain so it's always fully visible even when
-// every actual reading sits well above or below it, instead of getting
-// clipped off the chart.
+// `band` (optional array of { x, low, high }, any order) draws a shaded
+// reference corridor behind the trend line, matching the high/low lines on
+// the Power BI "N Soil Level" / "N Petiole Level" charts. Unlike a flat
+// target range, this corridor can shift week to week - the real agronomic
+// targets move a lot over a season (e.g. potato Soil NO3 target starts at
+// 35-50 ppm and tapers to 4-5 ppm by week 16), so a flat box drawn across
+// the whole chart was actively misleading. The band's own bounds are
+// folded into the y-domain so it's always fully visible even when a
+// reading sits well outside it. The low/high numbers are labeled at the
+// corridor's right edge (the most recent week) so "the range" stays
+// legible without a separate legend.
 //
 // The x-axis is weeks since emergence, labeled with a handful of "Wk N"
 // ticks along the bottom - points alone (no axis) made it impossible to
 // tell which week a reading landed in.
-function Sparkline({ points, color, target }) {
+function Sparkline({ points, color, band }) {
   if (points.length < 2) {
     return <div className="agronomy-chart-empty">Not enough samples yet</div>
   }
   const xs = points.map((p) => p.x)
   const ys = points.map((p) => p.y)
-  const allY = target ? [...ys, ...target] : ys
-  const minX = Math.min(...xs), maxX = Math.max(...xs)
-  const minY = Math.min(...allY), maxY = Math.max(...allY)
+  const sortedBand = band && band.length ? [...band].sort((a, b) => a.x - b.x) : null
+  const bandYs = sortedBand ? sortedBand.flatMap((b) => [b.low, b.high]) : []
+  const bandXs = sortedBand ? sortedBand.map((b) => b.x) : []
+  const minX = Math.min(...xs, ...bandXs), maxX = Math.max(...xs, ...bandXs)
+  const minY = Math.min(...ys, ...bandYs), maxY = Math.max(...ys, ...bandYs)
 
   const w = 280, h = 120
-  const padL = 30, padR = 10, padT = 10, padB = 20
+  // padR is wide enough for a 5-digit band label (petiole NO3 targets run
+  // up to ~25000 ppm) sitting just past the plot area's right edge.
+  const padL = 30, padR = 34, padT = 10, padB = 20
   const plotW = w - padL - padR
   const plotH = h - padT - padB
 
@@ -57,22 +65,27 @@ function Sparkline({ points, color, target }) {
     )
   )]
 
+  // A closed polygon tracing the high edge left-to-right then the low edge
+  // back right-to-left, so the shaded fill follows both boundaries exactly
+  // instead of being a single rectangle.
+  const bandPolygon = sortedBand
+    ? [
+        ...sortedBand.map((b) => `${scaleX(b.x)},${scaleY(b.high)}`),
+        ...[...sortedBand].reverse().map((b) => `${scaleX(b.x)},${scaleY(b.low)}`)
+      ].join(' ')
+    : null
+  const bandRightEdge = sortedBand ? sortedBand[sortedBand.length - 1] : null
+
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="agronomy-sparkline">
-      {target && (
+      {bandPolygon && (
         <>
-          <rect
-            x={padL}
-            y={scaleY(target[1])}
-            width={plotW}
-            height={Math.max(0, scaleY(target[0]) - scaleY(target[1]))}
-            className="agronomy-sparkline-band"
-          />
-          <text x={padL - 4} y={scaleY(target[1]) + 3} className="agronomy-sparkline-range-label" textAnchor="end">
-            {target[1]}
+          <polygon points={bandPolygon} className="agronomy-sparkline-band" />
+          <text x={padL + plotW + 2} y={scaleY(bandRightEdge.high) + 3} className="agronomy-sparkline-range-label">
+            {bandRightEdge.high}
           </text>
-          <text x={padL - 4} y={scaleY(target[0]) + 3} className="agronomy-sparkline-range-label" textAnchor="end">
-            {target[0]}
+          <text x={padL + plotW + 2} y={scaleY(bandRightEdge.low) + 3} className="agronomy-sparkline-range-label">
+            {bandRightEdge.low}
           </text>
         </>
       )}
@@ -88,6 +101,39 @@ function Sparkline({ points, color, target }) {
       ))}
     </svg>
   )
+}
+
+// Builds the reference band passed to Sparkline: the real week-by-week
+// curve for this crop when WEEKLY_CURVES_BY_CROP has one (potato, beets,
+// corn, as of Oct 2026), clamped to the curve's own defined range so a
+// season running longer than the sheet covers still gets a band instead of
+// a gap. Falls back to a flat band (the same [low, high] repeated across
+// the chart's x-range) for any crop not yet in that table - onions,
+// alfalfa, etc. - using the placeholder target from METRICS_BY_TYPE.
+function buildBand(points, cropName, curveKey, flatTarget) {
+  if (!points.length) return null
+  const xs = points.map((p) => p.x)
+  const minX = Math.min(...xs), maxX = Math.max(...xs)
+  const curveRows = cropName ? WEEKLY_CURVES_BY_CROP[cropName] : null
+
+  if (curveRows && curveRows.length) {
+    const sorted = [...curveRows].sort((a, b) => a.week - b.week)
+    const band = []
+    for (let week = minX; week <= maxX; week++) {
+      const row =
+        sorted.find((r) => r.week === week) ||
+        (week < sorted[0].week ? sorted[0] : sorted[sorted.length - 1])
+      const range = row[curveKey]
+      if (range) band.push({ x: week, low: range[0], high: range[1] })
+    }
+    return band.length ? band : null
+  }
+
+  if (!flatTarget) return null
+  return [
+    { x: minX, low: flatTarget[0], high: flatTarget[1] },
+    { x: maxX, low: flatTarget[0], high: flatTarget[1] }
+  ]
 }
 
 export default function AgronomyByField({ fields }) {
@@ -155,6 +201,19 @@ export default function AgronomyByField({ fields }) {
 
   const nematodeSample = latestByType['nematode'] || null
 
+  // N Rec is the one Phase 2 nitrogen KPI available right now - a pure
+  // lookup against the field's own crop + current week from
+  // WEEKLY_CURVES_BY_CROP. N Applied / N Use / Total N Applied still need
+  // the Agworld applications sync (in progress separately) before they can
+  // show real numbers, so this tile is left out entirely for a crop with
+  // no curve defined yet rather than showing an empty placeholder for
+  // something that may never exist for that crop.
+  const nRecRow = useMemo(() => {
+    const curveRows = field?.cropName ? WEEKLY_CURVES_BY_CROP[field.cropName] : null
+    if (!curveRows || weeksSinceEmergence == null) return null
+    return curveRows.find((r) => r.week === weeksSinceEmergence) || null
+  }, [field, weeksSinceEmergence])
+
   const cropColor = field?.cropName ? (CROP_COLOR[field.cropName] || { bg: '#D3D1C7', fg: '#2C2C2A' }) : null
 
   return (
@@ -184,6 +243,16 @@ export default function AgronomyByField({ fields }) {
           <p className="agronomy-kpi-label">Weeks since emergence</p>
           <p className="agronomy-kpi-value">{weeksSinceEmergence != null ? weeksSinceEmergence : '—'}</p>
         </div>
+        {nRecRow && (
+          <div className="agronomy-kpi-card">
+            <p className="agronomy-kpi-label">N Rec (this week)</p>
+            <p className="agronomy-kpi-value">
+              {nRecRow.nRec != null ? nRecRow.nRec : '—'}
+              {nRecRow.nRec != null && <span className="agronomy-kpi-unit"> lbs/ac</span>}
+            </p>
+            {nRecRow.stage && <p className="agronomy-kpi-date">{nRecRow.stage}</p>}
+          </div>
+        )}
         {Object.entries(METRICS_BY_TYPE).flatMap(([type, metrics]) =>
           metrics
             .filter((m) => m.target) // no target yet = not "at a glance" actionable; still visible in the sample table below
@@ -224,10 +293,11 @@ export default function AgronomyByField({ fields }) {
               y: s.values[metric.key]
             }))
             .filter((p) => p.x != null)
+          const band = buildBand(points, field?.cropName, type === 'soil' ? 'soilNO3' : 'petioleNO3', metric.target)
           return (
             <div key={type} className="agronomy-chart-card">
               <p className="agronomy-chart-title">{SAMPLE_TYPE_LABEL[type]} {metric.label} vs weeks since emergence</p>
-              <Sparkline points={points} color={type === 'soil' ? '#0F6E56' : '#3B6D11'} target={metric.target} />
+              <Sparkline points={points} color={type === 'soil' ? '#0F6E56' : '#3B6D11'} band={band} />
             </div>
           )
         })}
