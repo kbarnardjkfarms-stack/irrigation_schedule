@@ -55,7 +55,87 @@ async function agworldGet(path, params, token) {
   if (!res.ok) throw new Error(`Agworld API error ${res.status} on ${path}: ${await res.text()}`);
   return res.json();
 }
+// =============================================================================
+// TEMPORARY - Agworld N-application endpoint discovery (Phase 2, Oct 2026)
+// =============================================================================
+// Paste this into functions/index.js, anywhere after the agworldGet() helper
+// is defined (it reuses that function and the existing AGWORLD_TOKEN secret -
+// don't duplicate either one).
+//
+// Same situation we were in with Stukenholtz before confirming its real
+// sample-type keys: the fields/seasons endpoints are confirmed working, but
+// there's no confirmed endpoint for nitrogen application/input records. This
+// probes several plausible endpoint names against one real field+season and
+// reports back what each actually returns, so the real sync can be built
+// against whichever one comes back with real data instead of a 404.
+//
+// Usage: open (while logged into the Firebase project)
+//   https://<your-region>-irrigation-schedule-f8b69.cloudfunctions.net/testAgworldApplicationEndpoints?fieldId=XXXX&seasonId=YYYY
+// where fieldId/seasonId are the Agworld field + season you already know has
+// nitrogen applications logged this year. Both are easy to find without
+// touching Agworld itself - they're already synced 1:1 as Firestore document
+// IDs: open the `fields` collection in the Firestore console, find the field
+// by name, and its document ID is the Agworld field ID; open `seasons` and
+// match the season name (e.g. "2026") the same way.
+//
+// Once you've got a result, send me the JSON it prints - I'll use whichever
+// endpoint actually returned nitrogen/application data to build the real
+// sync, the same way we built syncStukenholtzSamplesHourly once we knew the
+// real SO/PL/NEMA/CM response shapes. Remove this function once that's done;
+// it's a one-time discovery tool, not something that should stay deployed.
+exports.testAgworldApplicationEndpoints = onRequest(
+  { secrets: [AGWORLD_TOKEN], timeoutSeconds: 120 },
+  async (req, res) => {
+    const token = AGWORLD_TOKEN.value();
+    const fieldId = req.query.fieldId;
+    const seasonId = req.query.seasonId;
+    if (!fieldId || !seasonId) {
+      res
+        .status(400)
+        .send(
+          'Pass ?fieldId=...&seasonId=... — use the Agworld field/season you know has nitrogen ' +
+          'applications logged this year. Both IDs match the Firestore fields/{id} and seasons/{id} ' +
+          'document IDs already synced by syncAgworldFields.'
+        );
+      return;
+    }
 
+    // Candidate endpoint names - Agworld's user_api/v1 almost certainly
+    // exposes applied inputs somewhere under one of these, based on common
+    // ag-software naming, but none of these are confirmed against real
+    // Agworld docs, so several are tried rather than guessing just one.
+    const candidates = [
+      ['/user_api/v1/activities', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }],
+      ['/user_api/v1/field_activities', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }],
+      ['/user_api/v1/applications', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }],
+      ['/user_api/v1/jobs', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }],
+      ['/user_api/v1/recommendations', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }],
+      ['/user_api/v1/products', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }],
+      ['/user_api/v1/inputs', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }]
+    ];
+
+    const results = {};
+    for (const [path, paramsObj] of candidates) {
+      try {
+        const params = new URLSearchParams(paramsObj);
+        const json = await agworldGet(path, params, token);
+        const data = json.data || [];
+        results[path] = {
+          ok: true,
+          count: data.length,
+          // Just the first record's raw shape - enough to tell at a glance
+          // whether this is nitrogen/application data or something else
+          // entirely (e.g. irrigation events, scouting notes).
+          sample: data[0] || null
+        };
+      } catch (err) {
+        results[path] = { ok: false, error: err.message };
+      }
+    }
+
+    res.json(results);
+  }
+);
 // Only sync seasons from this year onward — older seasons are historical
 // noise the irrigation program doesn't need. Raise this in a future year
 // only if you actually want to re-pull older history; otherwise leave it.
