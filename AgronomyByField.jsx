@@ -20,9 +20,15 @@ function weeksBetween(laterDate, earlierDate) {
 //
 // `target` (optional [low, high]) draws a shaded reference band behind the
 // trend line, matching the high/low lines on the Power BI "N Soil Level" /
-// "N Petiole Level" charts. The band's own bounds are folded into the
-// y-domain so it's always fully visible even when every actual reading sits
-// well above or below it, instead of getting clipped off the chart.
+// "N Petiole Level" charts, with the band's own numbers labeled on the left
+// so "the range" is legible rather than just a faint tint. The band's
+// bounds are folded into the y-domain so it's always fully visible even when
+// every actual reading sits well above or below it, instead of getting
+// clipped off the chart.
+//
+// The x-axis is weeks since emergence, labeled with a handful of "Wk N"
+// ticks along the bottom - points alone (no axis) made it impossible to
+// tell which week a reading landed in.
 function Sparkline({ points, color, target }) {
   if (points.length < 2) {
     return <div className="agronomy-chart-empty">Not enough samples yet</div>
@@ -32,22 +38,54 @@ function Sparkline({ points, color, target }) {
   const allY = target ? [...ys, ...target] : ys
   const minX = Math.min(...xs), maxX = Math.max(...xs)
   const minY = Math.min(...allY), maxY = Math.max(...allY)
-  const w = 260, h = 90, pad = 8
-  const scaleX = (x) => pad + ((x - minX) / (maxX - minX || 1)) * (w - pad * 2)
-  const scaleY = (y) => h - pad - ((y - minY) / (maxY - minY || 1)) * (h - pad * 2)
+
+  const w = 280, h = 120
+  const padL = 30, padR = 10, padT = 10, padB = 20
+  const plotW = w - padL - padR
+  const plotH = h - padT - padB
+
+  const scaleX = (x) => padL + ((x - minX) / (maxX - minX || 1)) * plotW
+  const scaleY = (y) => padT + plotH - ((y - minY) / (maxY - minY || 1)) * plotH
   const path = points.map((p) => `${scaleX(p.x)},${scaleY(p.y)}`).join(' ')
+
+  // Up to 5 week ticks, spread evenly across the actual sample range and
+  // rounded to whole weeks, de-duped in case the range is short.
+  const tickCount = Math.max(2, Math.min(5, maxX - minX + 1))
+  const xTicks = [...new Set(
+    Array.from({ length: tickCount }, (_, i) =>
+      Math.round(minX + ((maxX - minX) * i) / (tickCount - 1))
+    )
+  )]
+
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="agronomy-sparkline">
       {target && (
-        <rect
-          x={pad}
-          y={scaleY(target[1])}
-          width={w - pad * 2}
-          height={Math.max(0, scaleY(target[0]) - scaleY(target[1]))}
-          className="agronomy-sparkline-band"
-        />
+        <>
+          <rect
+            x={padL}
+            y={scaleY(target[1])}
+            width={plotW}
+            height={Math.max(0, scaleY(target[0]) - scaleY(target[1]))}
+            className="agronomy-sparkline-band"
+          />
+          <text x={padL - 4} y={scaleY(target[1]) + 3} className="agronomy-sparkline-range-label" textAnchor="end">
+            {target[1]}
+          </text>
+          <text x={padL - 4} y={scaleY(target[0]) + 3} className="agronomy-sparkline-range-label" textAnchor="end">
+            {target[0]}
+          </text>
+        </>
       )}
+      <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} className="agronomy-sparkline-axis" />
+      {xTicks.map((t) => (
+        <text key={t} x={scaleX(t)} y={h - 4} className="agronomy-sparkline-week-label" textAnchor="middle">
+          Wk {t}
+        </text>
+      ))}
       <polyline points={path} fill="none" stroke={color} strokeWidth="2" />
+      {points.map((p, i) => (
+        <circle key={i} cx={scaleX(p.x)} cy={scaleY(p.y)} r="2.5" fill={color} />
+      ))}
     </svg>
   )
 }
