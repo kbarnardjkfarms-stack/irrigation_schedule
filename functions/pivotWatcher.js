@@ -52,6 +52,31 @@ const MIN_STUCK_THRESHOLD_MINUTES = 45;
 // double the normal 10-minute cadence.
 const WET_DRY_MAX_TICK_HOURS = 20 / 60;
 
+// Twilio only accepts E.164 numbers (+12085550123). Phones are typed in free
+// text on the Team page ("(208) 555-0123"), so clean them up here. Returns
+// null when it can't be made into a valid US number, so a bad number is
+// skipped instead of failing at Twilio.
+function normalizePhone(raw) {
+  if (!raw) return null;
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return null;
+}
+
+// Only people who deliberately ticked the text-alert box on the Team page
+// (and have a usable phone number) ever get texted.
+function optedInTextUsers(users) {
+  return users
+    .filter((u) => u.receiveTextAlerts === true)
+    .map((u) => ({ ...u, e164: normalizePhone(u.phone) }))
+    .filter((u) => u.e164);
+}
+
+function maskPhone(e164) {
+  return `***-***-${e164.slice(-4)}`;
+}
+
 async function sendSms(to, body, accountSid, authToken, fromNumber) {
   const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
   const auth = Buffer.from(`${accountSid}:${authToken}`).toString('base64');
@@ -328,8 +353,7 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
     const fieldIds = fieldIdsByPivotGuid[guid] || [];
     const farmIds = [...new Set(fieldIds.map((fid) => farmIdByFieldId[fid]).filter((f) => f != null).map(String))];
 
-    const recipients = users.filter((u) => {
-      if (!u.phone || u.receiveTextAlerts === false) return false;
+    const recipients = optedInTextUsers(users).filter((u) => {
       if (u.role === 'admin' || u.role === 'owner') return true;
       if ((u.role === 'farm_manager' || u.role === 'irrigation_manager') && Array.isArray(u.farmIds)) {
         return u.farmIds.some((fid) => farmIds.includes(String(fid)));
@@ -342,7 +366,7 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
 
     for (const recipient of recipients) {
       try {
-        await sendSms(recipient.phone, message, accountSid, authToken, fromNumber);
+        await sendSms(recipient.e164, message, accountSid, authToken, fromNumber);
         texted++;
       } catch (err) {
         console.error(`Failed to text ${recipient.email || recipient.uid} about pivot ${guid}:`, err.message);
@@ -380,10 +404,65 @@ exports.checkStuckPivots = onSchedule(
 
 // Manual trigger for testing right after deploy, without waiting for the
 // next scheduled run.
+//
+//   .../checkStuckPivotsNow                    -> runs one normal watcher pass
+//   .../checkStuckPivotsNow?testText=1         -> lists who is opted in (numbers
+//                                                 masked); sends nothing
+//   .../checkStuckPivotsNow?testText=1&to=NUMBER
+//                                              -> sends one fixed test text, but
+//                                                 only if NUMBER belongs to a
+//                                                 team member who opted in
+//
+// A test text never goes to an arbitrary number, never carries custom text,
+// and each number can only be tested once every 5 minutes.
+const TEST_TEXT_MESSAGE = 'AIO test: text alerts are working. You are receiving this because text alerts are turned on for your account. Reply STOP to opt out.';
+const TEST_TEXT_COOLDOWN_MS = 5 * 60 * 1000;
+
 exports.checkStuckPivotsNow = onRequest(
   { secrets: [TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER], timeoutSeconds: 120, memory: '256MiB' },
   async (req, res) => {
     try {
+      if (req.query.testText) {
+        const db = admin.firestore();
+        const usersSnap = await db.collection('users').get();
+        const users = [];
+        usersSnap.forEach((d) => users.push({ uid: d.id, ...d.data() }));
+        const optedIn = optedInTextUsers(users);
+
+        if (!req.query.to) {
+          if (optedIn.length === 0) {
+            res.status(200).send('Nobody is opted in to text alerts with a valid phone number yet. Tick the box on the Team page and save.');
+            return;
+          }
+          res.status(200).send(
+            `Opted in (${optedIn.length}):\n` +
+            optedIn.map((u) => `- ${u.name || u.email || u.uid} (${u.role}) ${maskPhone(u.e164)}`).join('\n') +
+            '\n\nTo send a test, add &to=PHONENUMBER to the address.'
+          );
+          return;
+        }
+
+        const target = normalizePhone(req.query.to);
+        const match = target && optedIn.find((u) => u.e164 === target);
+        if (!match) {
+          res.status(403).send('That number does not belong to a team member who is opted in to text alerts. Nothing sent.');
+          return;
+        }
+
+        const logRef = db.collection('smsTestLog').doc(target.replace('+', ''));
+        const logSnap = await logRef.get();
+        const lastAt = logSnap.exists ? logSnap.data().lastTestAt : 0;
+        if (Date.now() - lastAt < TEST_TEXT_COOLDOWN_MS) {
+          res.status(429).send('A test text was sent to that number less than 5 minutes ago. Wait a few minutes and try again.');
+          return;
+        }
+        await logRef.set({ lastTestAt: Date.now() });
+
+        await sendSms(target, TEST_TEXT_MESSAGE, TWILIO_ACCOUNT_SID.value(), TWILIO_AUTH_TOKEN.value(), TWILIO_FROM_NUMBER.value());
+        res.status(200).send(`Test text sent to ${match.name || match.email || match.uid} (${maskPhone(target)}).`);
+        return;
+      }
+
       const result = await checkStuckPivotsOnce(
         TWILIO_ACCOUNT_SID.value(),
         TWILIO_AUTH_TOKEN.value(),
