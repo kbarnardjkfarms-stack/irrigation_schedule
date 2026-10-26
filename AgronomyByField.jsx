@@ -14,6 +14,19 @@ function weeksBetween(laterDate, earlierDate) {
   return Math.floor(ms / (7 * 24 * 60 * 60 * 1000))
 }
 
+// Sample documents only carry fieldId + receivedDt, not a season/year -
+// the full-history Stukenholtz backfill pulled years of samples per field,
+// so without a bound here the "vs weeks since emergence" charts plot every
+// sample ever recorded for this field against the CURRENT season's plant
+// date, producing nonsense like "342 weeks before emergence" for a sample
+// from a prior year. This clamps to a sane in-season window - 6 weeks
+// before planting (covers a pre-plant baseline soil test) through 35 weeks
+// after (comfortably past the longest curve in WEEKLY_CURVES_BY_CROP,
+// potato's 17 weeks) - rather than the real fix of tagging each sample
+// with its season at sync time, which needs a backend change.
+const IN_SEASON_WEEK_MIN = -6
+const IN_SEASON_WEEK_MAX = 35
+
 // Compact hand-rolled line chart, no chart library - matches the rest of the
 // app's approach of hand-rolled SVG/table markup rather than a new dependency
 // for what's usually a handful of points per season.
@@ -292,7 +305,7 @@ export default function AgronomyByField({ fields }) {
               x: weeksBetween(s.receivedDt.toDate(), plantDate),
               y: s.values[metric.key]
             }))
-            .filter((p) => p.x != null)
+            .filter((p) => p.x != null && p.x >= IN_SEASON_WEEK_MIN && p.x <= IN_SEASON_WEEK_MAX)
           const band = buildBand(points, field?.cropName, type === 'soil' ? 'soilNO3' : 'petioleNO3', metric.target)
           return (
             <div key={type} className="agronomy-chart-card">
