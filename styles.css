@@ -412,6 +412,16 @@ thead th.sticky-col { top: 0; z-index: 4; }
   border-bottom: 0.5px solid #ddd8cc;
 }
 
+/* "Load more" button under each paginated Cleanup list - keeps the page
+   from ever rendering more than PAGE_SIZE rows at once no matter how big
+   the unmapped/fuzzy backlog gets. */
+.agronomy-load-more {
+  display: block;
+  margin: 8px 0 20px;
+  font-size: 11px;
+  padding: 5px 10px;
+}
+
 .agronomy-cleanup-actions {
   display: flex;
   gap: 6px;
