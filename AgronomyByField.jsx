@@ -17,20 +17,36 @@ function weeksBetween(laterDate, earlierDate) {
 // Compact hand-rolled line chart, no chart library - matches the rest of the
 // app's approach of hand-rolled SVG/table markup rather than a new dependency
 // for what's usually a handful of points per season.
-function Sparkline({ points, color }) {
+//
+// `target` (optional [low, high]) draws a shaded reference band behind the
+// trend line, matching the high/low lines on the Power BI "N Soil Level" /
+// "N Petiole Level" charts. The band's own bounds are folded into the
+// y-domain so it's always fully visible even when every actual reading sits
+// well above or below it, instead of getting clipped off the chart.
+function Sparkline({ points, color, target }) {
   if (points.length < 2) {
     return <div className="agronomy-chart-empty">Not enough samples yet</div>
   }
   const xs = points.map((p) => p.x)
   const ys = points.map((p) => p.y)
+  const allY = target ? [...ys, ...target] : ys
   const minX = Math.min(...xs), maxX = Math.max(...xs)
-  const minY = Math.min(...ys), maxY = Math.max(...ys)
+  const minY = Math.min(...allY), maxY = Math.max(...allY)
   const w = 260, h = 90, pad = 8
   const scaleX = (x) => pad + ((x - minX) / (maxX - minX || 1)) * (w - pad * 2)
   const scaleY = (y) => h - pad - ((y - minY) / (maxY - minY || 1)) * (h - pad * 2)
   const path = points.map((p) => `${scaleX(p.x)},${scaleY(p.y)}`).join(' ')
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="agronomy-sparkline">
+      {target && (
+        <rect
+          x={pad}
+          y={scaleY(target[1])}
+          width={w - pad * 2}
+          height={Math.max(0, scaleY(target[0]) - scaleY(target[1]))}
+          className="agronomy-sparkline-band"
+        />
+      )}
       <polyline points={path} fill="none" stroke={color} strokeWidth="2" />
     </svg>
   )
@@ -71,8 +87,8 @@ export default function AgronomyByField({ fields }) {
 
   const field = fields.find((f) => f.id === fieldId)
 
-  // plantDate/cropName/acres now come straight from the season- and
-  // farm-aware fields list built in Agronomy.jsx, instead of this
+  // plantDate/cropName/varietyName/acres all come straight from the season-
+  // and farm-aware fields list built in Agronomy.jsx, instead of this
   // component fetching its own season data - keeps the season-selection
   // logic in one place rather than duplicated per tab.
   const plantDate = useMemo(() => (field?.plantDate ? new Date(field.plantDate) : null), [field])
@@ -83,6 +99,23 @@ export default function AgronomyByField({ fields }) {
     samples.forEach((s) => { next[s.type] = s })
     return next
   }, [samples])
+
+  // Soil sampling covers two different things that happen to share the same
+  // `type: 'soil'`: the quick in-season test (just NO3 + Salts, confirmed
+  // exact keys) and a fuller fall/annual panel (~20 values, keys not yet
+  // confirmed the way NO3/Salts are). Rather than hardcode the fall panel's
+  // key names, any soil sample with more than the 2 known quick-test keys is
+  // treated as an annual panel - a shape check, not a date check, so it
+  // still works if the fall sampling window shifts year to year. Per Kent
+  // (Oct 26): full soil panels and nematode counts are yearly review data,
+  // not weekly trend data, so they get a snapshot card here instead of a
+  // "vs weeks since emergence" line like the weekly soil/petiole pair below.
+  const annualSoilSample = useMemo(() => {
+    const fullPanel = samples.filter((s) => s.type === 'soil' && Object.keys(s.values || {}).length > 2)
+    return fullPanel.length ? fullPanel[fullPanel.length - 1] : null
+  }, [samples])
+
+  const nematodeSample = latestByType['nematode'] || null
 
   const cropColor = field?.cropName ? (CROP_COLOR[field.cropName] || { bg: '#D3D1C7', fg: '#2C2C2A' }) : null
 
@@ -97,7 +130,8 @@ export default function AgronomyByField({ fields }) {
             {field.cropName}
           </span>
         )}
-        {field?.acres != null && <span className="acres-tag"> {'\u00b7'} {field.acres.toFixed(1)} ac</span>}
+        {field?.varietyName && <span className="acres-tag"> {'·'} {field.varietyName}</span>}
+        {field?.acres != null && <span className="acres-tag"> {'·'} {field.acres.toFixed(1)} ac</span>}
       </div>
 
       {samplesError && (
@@ -110,7 +144,7 @@ export default function AgronomyByField({ fields }) {
       <div className="agronomy-kpi-grid">
         <div className="agronomy-kpi-card">
           <p className="agronomy-kpi-label">Weeks since emergence</p>
-          <p className="agronomy-kpi-value">{weeksSinceEmergence != null ? weeksSinceEmergence : '\u2014'}</p>
+          <p className="agronomy-kpi-value">{weeksSinceEmergence != null ? weeksSinceEmergence : '—'}</p>
         </div>
         {Object.entries(METRICS_BY_TYPE).flatMap(([type, metrics]) =>
           metrics
@@ -124,9 +158,12 @@ export default function AgronomyByField({ fields }) {
                 <div key={type + m.key} className="agronomy-kpi-card">
                   <p className="agronomy-kpi-label">{SAMPLE_TYPE_LABEL[type]} {m.label}</p>
                   <p className="agronomy-kpi-value">
-                    {value != null ? value : '\u2014'}
+                    {value != null ? value : '—'}
                     {value != null && <span className="agronomy-kpi-unit"> {m.unit}</span>}
                   </p>
+                  {value != null && sample?.receivedDt && (
+                    <p className="agronomy-kpi-date">{fmtDate(sample.receivedDt)}</p>
+                  )}
                   {status && (
                     <span className="agronomy-status-badge" style={{ background: color.bg, color: color.fg }}>
                       {status}
@@ -152,13 +189,52 @@ export default function AgronomyByField({ fields }) {
           return (
             <div key={type} className="agronomy-chart-card">
               <p className="agronomy-chart-title">{SAMPLE_TYPE_LABEL[type]} {metric.label} vs weeks since emergence</p>
-              <Sparkline points={points} color={type === 'soil' ? '#0F6E56' : '#3B6D11'} />
+              <Sparkline points={points} color={type === 'soil' ? '#0F6E56' : '#3B6D11'} target={metric.target} />
             </div>
           )
         })}
       </div>
 
-      <p className="agronomy-section-label">All samples {field ? `\u2014 ${field.name}` : ''}</p>
+      {(annualSoilSample || nematodeSample) && (
+        <>
+          <p className="agronomy-section-label">Annual review</p>
+          <div className="agronomy-annual-cards">
+            {annualSoilSample && (
+              <div className="agronomy-annual-card">
+                <p className="agronomy-annual-card-title">
+                  Fall soil panel {'—'} {fmtDate(annualSoilSample.receivedDt)}
+                </p>
+                <div className="agronomy-annual-values">
+                  {Object.entries(annualSoilSample.values || {}).map(([k, v]) => (
+                    <div key={k} className="agronomy-annual-value-row">
+                      <span>{k}</span><span>{v}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {nematodeSample && (
+              <div className="agronomy-annual-card">
+                <p className="agronomy-annual-card-title">
+                  Nematode counts {'—'} {fmtDate(nematodeSample.receivedDt)}
+                </p>
+                <div className="agronomy-annual-values">
+                  {METRICS_BY_TYPE.nematode
+                    .filter((m) => nematodeSample.values?.[m.key] != null)
+                    .map((m) => (
+                      <div key={m.key} className="agronomy-annual-value-row">
+                        <span>{m.label}</span>
+                        <span>{nematodeSample.values[m.key]}{m.unit ? ` ${m.unit}` : ''}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      <p className="agronomy-section-label">All samples {field ? `— ${field.name}` : ''}</p>
       <table className="agronomy-sample-table">
         <thead>
           <tr><th>Date</th><th>Type</th><th>Values</th></tr>
@@ -178,7 +254,7 @@ export default function AgronomyByField({ fields }) {
                   {SAMPLE_TYPE_LABEL[s.type]}
                 </span>
               </td>
-              <td>{Object.entries(s.values || {}).map(([k, v]) => `${k}: ${v}`).join(' \u00b7 ')}</td>
+              <td>{Object.entries(s.values || {}).map(([k, v]) => `${k}: ${v}`).join(' · ')}</td>
             </tr>
           ))}
         </tbody>
