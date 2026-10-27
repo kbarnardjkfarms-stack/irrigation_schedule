@@ -20,6 +20,15 @@ const BLOCKS = { am: { start: 0, end: 12, len: 12 }, pm: { start: 12, end: 24, l
 const DAY_TINTS = ['#C8CCD0', '#B9CCDF']
 function dayTint(dayIdx) { return DAY_TINTS[dayIdx % 2] }
 
+// AgWorld sometimes sends the same crop under a different name (e.g. "Lucerne"
+// for alfalfa, "Maize" for corn). Fold those into the one name AIO uses so the
+// badge colour, crop filter and agronomy curves all treat them the same.
+const CROP_ALIASES = { LUCERNE: 'ALFALFA', MAIZE: 'CORN' }
+function normalizeCrop(name) {
+  const up = (name || '').toUpperCase().trim()
+  return CROP_ALIASES[up] || up
+}
+
 const CROP_COLOR = {
   POTATO: { bg: '#D6B48C', fg: '#4A2E12' }, POTATOES: { bg: '#D6B48C', fg: '#4A2E12' },
   CORN: { bg: '#FCE9A8', fg: '#7A5C02' }, 'SWEET CORN': { bg: '#FCE9A8', fg: '#7A5C02' },
@@ -300,7 +309,7 @@ export default function PublicScheduleView({ slug }) {
         return {
           id,
           fieldName: base.name,
-          crop: (seasonData.cropName || '').toUpperCase(),
+          crop: normalizeCrop(seasonData.cropName),
           acres: seasonData.acres || null,
           pivot,
           flagged
