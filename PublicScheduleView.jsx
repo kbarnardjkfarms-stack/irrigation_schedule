@@ -36,7 +36,8 @@ const CROP_COLOR = {
   'SUGAR BEET': { bg: '#E0D6F5', fg: '#3D2B6B' }, BEETS: { bg: '#E0D6F5', fg: '#3D2B6B' },
   FALLOW: { bg: '#E4E1D8', fg: '#5A574C' }, ONIONS: { bg: '#F4C0D1', fg: '#4B1528' },
   MINT: { bg: '#9FE1CB', fg: '#04342C' }, CARROTS: { bg: '#FAD9BB', fg: '#7A3E0A' },
-  SQUASH: { bg: '#F5C98A', fg: '#6B3D02' }
+  SQUASH: { bg: '#F5C98A', fg: '#6B3D02' },
+  BARLEY: { bg: '#B5D4F4', fg: '#0C447C' }, 'BARLEY - WINTER': { bg: '#B5D4F4', fg: '#0C447C' }, 'BARLEY - SPRING': { bg: '#B5D4F4', fg: '#0C447C' }
 }
 
 function slugifyFarmName(name) {
