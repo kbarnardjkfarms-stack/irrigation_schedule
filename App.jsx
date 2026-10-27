@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, Fragment } from 'react'
 
 import { createPortal } from 'react-dom'
 
@@ -233,6 +233,23 @@ function styleForState(state, additive) {
   return { background: base, color: '#fff' }
 }
 
+// Works out where the pivot popup should sit so it is never cut off.
+// anchor.top is just under the pivot icon, anchor.iconTop is the icon's top
+// edge. Prefer under the icon; if that runs off the bottom of the screen,
+// open above the icon; if neither fits, slide it up to stay fully visible.
+// Also keeps it inside the left and right edges.
+function placePivotPanel(anchor, size, viewport) {
+  const margin = 8
+  let top = anchor.top
+  if (top + size.height > viewport.height - margin) {
+    const above = anchor.iconTop - 4 - size.height
+    top = above >= margin ? above : Math.max(margin, viewport.height - margin - size.height)
+  }
+  let left = Math.min(anchor.left, viewport.width - size.width - margin)
+  left = Math.max(margin, left)
+  return { top, left }
+}
+
 export default function App() {
   // Keep the service worker registration so new deploys are noticed quickly
   // (see the polling effect below) instead of only on the next full page load.
@@ -401,7 +418,8 @@ export default function App() {
   const [pivotGuidByFieldId, setPivotGuidByFieldId] = useState({})
   const [pivotsByGuid, setPivotsByGuid] = useState({})
   const [expandedPivotFieldId, setExpandedPivotFieldId] = useState(null)
-  const [pivotPanelPos, setPivotPanelPos] = useState({ top: 0, left: 0 })
+  const [pivotPanelPos, setPivotPanelPos] = useState({ top: 0, left: 0, iconTop: 0 })
+  const [pivotPanelPlace, setPivotPanelPlace] = useState(null)
   const pivotDetailRef = useRef(null)
   const [pivotProfileGuid, setPivotProfileGuid] = useState(null)
   const [pivotProfilesByGuid, setPivotProfilesByGuid] = useState({})
@@ -428,7 +446,10 @@ export default function App() {
     // The panel is positioned at a fixed screen coordinate captured at click
     // time. If the page scrolls afterward, that coordinate no longer lines up
     // with the icon, so just close it rather than let it drift out of place.
-    function handleScroll() {
+    function handleScroll(e) {
+      // Scrolling inside the popup itself (when it is taller than the
+      // screen) shouldn't close it.
+      if (pivotDetailRef.current && e.target instanceof Node && pivotDetailRef.current.contains(e.target)) return
       setExpandedPivotFieldId(null)
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -438,6 +459,21 @@ export default function App() {
       window.removeEventListener('scroll', handleScroll, true)
     }
   }, [expandedPivotFieldId])
+
+  // After the pivot popup renders, measure it and move it if it would run off
+  // the screen. Runs before the browser paints, so it never visibly jumps.
+  useLayoutEffect(() => {
+    const el = pivotDetailRef.current
+    if (!expandedPivotFieldId || !el) return
+    const next = placePivotPanel(
+      pivotPanelPos,
+      { width: el.offsetWidth, height: el.offsetHeight },
+      { width: window.innerWidth, height: window.innerHeight }
+    )
+    setPivotPanelPlace((prev) => (
+      prev && Math.abs(prev.top - next.top) < 0.5 && Math.abs(prev.left - next.left) < 0.5 ? prev : next
+    ))
+  })
 
   useEffect(() => {
     if (!sortMenuOpen) return
@@ -1230,7 +1266,8 @@ export default function App() {
                                   setExpandedPivotFieldId(null)
                                 } else {
                                   const rect = e.currentTarget.getBoundingClientRect()
-                                  setPivotPanelPos({ top: rect.bottom + 4, left: rect.left })
+                                  setPivotPanelPos({ top: rect.bottom + 4, left: rect.left, iconTop: rect.top })
+                                  setPivotPanelPlace(null)
                                   setExpandedPivotFieldId(field.id)
                                 }
                               }}
@@ -1291,7 +1328,7 @@ export default function App() {
         <div
           ref={pivotDetailRef}
           onClick={(e) => e.stopPropagation()}
-          style={{ position: 'fixed', top: pivotPanelPos.top, left: pivotPanelPos.left, zIndex: 1000, boxShadow: '0 6px 16px rgba(0,0,0,0.12)' }}
+          style={{ position: 'fixed', top: (pivotPanelPlace || pivotPanelPos).top, left: (pivotPanelPlace || pivotPanelPos).left, zIndex: 1000, boxShadow: '0 6px 16px rgba(0,0,0,0.12)', maxHeight: 'calc(100vh - 16px)', maxWidth: 'calc(100vw - 16px)', overflowY: 'auto' }}
         >
           {expandedPivotIsStuck && (
             <div style={{ padding: '10px 14px', background: '#FBEAEA', border: '1px solid #E8B4B4', borderRadius: '8px 8px 0 0' }}>
