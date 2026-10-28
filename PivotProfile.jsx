@@ -160,6 +160,36 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     setTimeout(() => setCornerSaved(false), 1500)
   }
 
+  // "This is expected" on the amber acres warnings: remembers the two
+  // acres figures at the moment of the click. The warning stays hidden
+  // only while both figures stay within ACK_TOLERANCE_AC of what was
+  // acknowledged, so a changed pivot length or changed AgWorld acres
+  // brings it back instead of hiding a real mistake forever.
+  async function handleAckMismatch() {
+    if (pivotAcres == null || acres == null) return
+    setError(null)
+    try {
+      await setDoc(doc(db, 'pivotProfiles', pivotGuid), {
+        acresMismatchAck: {
+          pivotAcres: Math.round(pivotAcres * 10) / 10,
+          fieldAcres: Math.round(acres * 10) / 10,
+          at: new Date().toISOString()
+        }
+      }, { merge: true })
+    } catch (err) {
+      setError(err.message || 'Could not save.')
+    }
+  }
+
+  async function handleUndoAckMismatch() {
+    setError(null)
+    try {
+      await setDoc(doc(db, 'pivotProfiles', pivotGuid), { acresMismatchAck: null }, { merge: true })
+    } catch (err) {
+      setError(err.message || 'Could not save.')
+    }
+  }
+
   async function handleResetWetDry() {
     setError(null)
     try {
@@ -206,6 +236,20 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   }
   const cornerAcres = (acres != null && pivotAcres != null) ? acres - pivotAcres : null
   const cornerLengthSaved = profile && profile.cornerMachineLengthFt != null ? profile.cornerMachineLengthFt : null
+
+  // Amber acres warnings (no corner machine, but the numbers differ a lot).
+  // Unfarmed ground under the circle (rock patches, etc.) is normal, so the
+  // user can mark the difference as expected.
+  const ACK_TOLERANCE_AC = 3
+  const acresThreshold = acres != null ? Math.max(3, acres * 0.12) : null
+  const moreUnderPivot = !hasCorner && cornerAcres != null && cornerAcres < -acresThreshold
+  const moreInAgworld = !hasCorner && cornerAcres != null && cornerAcres > acresThreshold
+  const mismatchAck = profile && profile.acresMismatchAck ? profile.acresMismatchAck : null
+  const mismatchAckValid = !!(
+    mismatchAck && pivotAcres != null && acres != null &&
+    Math.abs(pivotAcres - mismatchAck.pivotAcres) <= ACK_TOLERANCE_AC &&
+    Math.abs(acres - mismatchAck.fieldAcres) <= ACK_TOLERANCE_AC
+  )
 
   const wetHours = profile && profile.wetHours != null ? profile.wetHours : 0
   const dryHours = profile && profile.dryHours != null ? profile.dryHours : 0
@@ -307,14 +351,29 @@ export default function PivotProfile({ pivotGuid, onBack }) {
               {hasCorner && cornerAcres >= 0 && cornerLengthSaved == null && (
                 <div style={{ fontSize: '11px', color: '#888', marginTop: '8px' }}>Enter the corner machine length above to finish setting this up.</div>
               )}
-              {!hasCorner && cornerAcres > Math.max(3, acres * 0.12) && (
-                <div style={{ fontSize: '11px', color: '#854F0B', marginTop: '8px' }}>
-                  AgWorld shows {cornerAcres.toFixed(1)} ac more than the pivot circle covers. If this pivot has a corner machine, select Yes.
+              {(moreInAgworld || moreUnderPivot) && mismatchAckValid && (
+                <div style={{ fontSize: '11px', color: '#888', marginTop: '8px' }}>
+                  {moreUnderPivot
+                    ? `${(-cornerAcres).toFixed(1)} ac of the pivot circle is unfarmed ground (not in the AgWorld total). Marked as expected.`
+                    : `AgWorld shows ${cornerAcres.toFixed(1)} ac more than the pivot circle covers. Marked as expected.`}
+                  {' '}
+                  <a href="#" onClick={(e) => { e.preventDefault(); handleUndoAckMismatch() }} style={{ color: '#185FA5' }}>Undo</a>
                 </div>
               )}
-              {!hasCorner && cornerAcres < -Math.max(3, acres * 0.12) && (
+              {moreInAgworld && !mismatchAckValid && (
+                <div style={{ fontSize: '11px', color: '#854F0B', marginTop: '8px' }}>
+                  AgWorld shows {cornerAcres.toFixed(1)} ac more than the pivot circle covers. If this pivot has a corner machine, select Yes.
+                  <div style={{ marginTop: '6px' }}>
+                    <button onClick={handleAckMismatch}>This is expected</button>
+                  </div>
+                </div>
+              )}
+              {moreUnderPivot && !mismatchAckValid && (
                 <div style={{ fontSize: '11px', color: '#854F0B', marginTop: '8px' }}>
                   The pivot circle covers {(-cornerAcres).toFixed(1)} ac more than AgWorld shows. Check the pivot length in BaseStation.
+                  <div style={{ marginTop: '6px' }}>
+                    <button onClick={handleAckMismatch}>This is expected (unfarmed ground under the pivot)</button>
+                  </div>
                 </div>
               )}
             </>
