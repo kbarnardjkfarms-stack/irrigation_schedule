@@ -147,6 +147,23 @@ service cloud.firestore {
       allow read: if signedIn() && canViewAgronomy() && hasModule('agronomy');
       allow write: if false;
     }
+    // Agronomy "Targets" tab reference data - the flat fallback ranges
+    // (agronomyCriteria/flatTargets) and the per-crop/variety weekly N Rec
+    // + target curves (agronomyCurves/{cropKey}, cropKey either "POTATO" or
+    // "POTATO::VARIETY NAME" for a variety-specific override). Same read
+    // gate as samples/syncState above. Writes always go through the
+    // updateAgronomyCriteria Cloud Function (requireAdminOrOwner, using an
+    // Admin key that bypasses these rules), never directly from the
+    // browser - that's what lets editing be restricted to Admin/Owner
+    // without duplicating a stricter role check here.
+    match /agronomyCriteria/{document} {
+      allow read: if signedIn() && canViewAgronomy() && hasModule('agronomy');
+      allow write: if false;
+    }
+    match /agronomyCurves/{cropKey} {
+      allow read: if signedIn() && canViewAgronomy() && hasModule('agronomy');
+      allow write: if false;
+    }
     // Pivot profiles: sprinkler package reference (metadata only — the PDF
     // itself lives in Storage, see storage.rules), current GPM, and the
     // stuck-pivot alert threshold. Deliberately NOT farm-scoped like
