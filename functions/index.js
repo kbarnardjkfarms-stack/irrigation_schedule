@@ -888,10 +888,19 @@ function fieldMatchTokens(normalized) {
   fieldMatchTokenCache.set(normalized, tokens);
   return tokens;
 }
-
 function fieldMatchSimilarity(a, b) {
   const longest = Math.max(a.length, b.length);
-  return longest === 0 ? 1 : 1 - levenshteinDistance(a, b) / longest;
+  const edit = longest === 0 ? 1 : 1 - levenshteinDistance(a, b) / longest;
+  // Abbreviations: the shorter word is the longer one with letters left out
+  // (WPR for WIPER, MDL for MIDDLE) - same first letter, letters in order,
+  // and at least half of the longer word's length.
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (short.length >= 3 && long.length > short.length && short[0] === long[0]) {
+    let i = 0;
+    for (const ch of long) if (i < short.length && ch === short[i]) i++;
+    if (i === short.length && short.length / long.length >= 0.5) return Math.max(edit, 0.9);
+  }
+  return edit;
 }
 
 // 0..1 how alike two normalized names are. Numbers and 1-2 letter tokens
