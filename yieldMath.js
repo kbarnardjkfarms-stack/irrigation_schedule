@@ -159,10 +159,12 @@ export function parseYieldRows(rows) {
 // Analysis helpers
 // ---------------------------------------------------------------------------
 
-// The yield a record shows: the adjusted yield entered in AIO or imported
-// from the workbook when there is one, otherwise what Agworld reported.
+// The yield a record shows, best source first: entered in AIO or imported
+// from the workbook (settlement numbers), then Potato Storage's measured cwt
+// less tare, then what Agworld reported at harvest.
 export function effectiveYield(rec) {
   if (rec.yieldPerAcre > 0) return { value: rec.yieldPerAcre, source: rec.yieldSource === 'manual' ? 'manual' : 'spreadsheet' }
+  if (rec.storage && rec.storage.yieldPerAcre > 0) return { value: rec.storage.yieldPerAcre, source: 'storage' }
   if (rec.agworld && rec.agworld.yieldPerAcre > 0) return { value: rec.agworld.yieldPerAcre, source: 'agworld' }
   return { value: null, source: null }
 }

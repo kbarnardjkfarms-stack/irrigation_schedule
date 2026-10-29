@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { collection, onSnapshot } from 'firebase/firestore'
+import { collection, doc, onSnapshot, setDoc, writeBatch, arrayUnion, deleteField } from 'firebase/firestore'
 import {
   Area, Bar, BarChart, CartesianGrid, ComposedChart, Legend, Line, ReferenceLine,
   ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis, Cell, LabelList
 } from 'recharts'
-import { db } from './firebase.js'
+import { auth, db } from './firebase.js'
 import YieldImport from './YieldImport.jsx'
 import YieldEntry from './YieldEntry.jsx'
+import StorageLink from './StorageLink.jsx'
 import { MAX_SERIES, SERIES, dayOfYear, doyLabel, effectiveYield, fmt, groupBy, summarize, unitFor } from './yieldMath.js'
 
 // Yield History module. History comes from the team's yield workbook
@@ -187,17 +188,22 @@ export default function Yields({ userRole }) {
 
   // One shape for every record, whether it came from the workbook, Agworld,
   // or both (workbook values win; Agworld fills gaps).
-  const records = useMemo(() => (docs || []).map((d) => {
+  // Deleted records stay in Firestore as hidden "tombstones" so the nightly
+  // Agworld / Potato Storage syncs can't quietly re-create them.
+  const deletedDocs = useMemo(() => (docs || []).filter((d) => d.deleted), [docs])
+  const records = useMemo(() => (docs || []).filter((d) => !d.deleted).map((d) => {
     const ag = d.agworld || {}
+    const st = d.storage || {}
     const c = d.crop || ag.crop || null
     const ey = effectiveYield(d)
-    const harvestDate = d.harvestDate || ag.harvestDate || null
+    const harvestDate = d.harvestDate || ag.harvestDate || st.fillDate || null
     return {
       ...d,
       crop: c,
       fieldName: d.fieldName || ag.fieldName || d.fieldKey,
-      variety: d.variety || ag.variety || null,
-      acres: d.acres != null ? d.acres : (ag.harvestedArea != null ? ag.harvestedArea : null),
+      variety: d.variety || (st.varieties && st.varieties[0]) || ag.variety || null,
+      acres: d.acres != null ? d.acres : (st.acres != null ? st.acres : (ag.harvestedArea != null ? ag.harvestedArea : null)),
+      customer: d.customer || (st.customers && st.customers.length ? st.customers.join(', ') : null),
       area: d.area || ag.farmName || null,
       harvestDate,
       harvestDoy: d.harvestDoy != null ? d.harvestDoy : dayOfYear(harvestDate),
@@ -261,7 +267,7 @@ export default function Yields({ userRole }) {
   }
 
   const existingById = useMemo(() => Object.fromEntries((docs || []).map((d) => [d.id, true])), [docs])
-  const docsById = useMemo(() => Object.fromEntries((docs || []).map((d) => [d.id, d])), [docs])
+  const docsById = useMemo(() => Object.fromEntries((docs || []).filter((d) => !d.deleted).map((d) => [d.id, d])), [docs])
 
   if (docs === null && !error) return <div className="agronomy"><p className="contracts-empty">Loading yield history…</p></div>
 
@@ -274,12 +280,13 @@ export default function Yields({ userRole }) {
           <button key={k} className={view === k ? 'active' : ''} onClick={() => setView(k)} disabled={empty}>{l}</button>
         ))}
         {canImport && <button className={view === 'enter' ? 'active' : ''} onClick={() => setView('enter')}>Enter yields</button>}
+        {canImport && <button className={view === 'storage' ? 'active' : ''} onClick={() => setView('storage')}>Storage link</button>}
         {canImport && <button className={view === 'import' ? 'active' : ''} onClick={() => setView('import')}>Import</button>}
       </div>
 
       {error && <div className="agronomy-error-banner">{error}</div>}
 
-      {empty && view !== 'import' && view !== 'enter' && (
+      {empty && view !== 'import' && view !== 'enter' && view !== 'storage' && (
         <div className="editor-panel">
           <div className="editor-field-name">No yield history yet</div>
           <p className="contracts-sub">{canImport ? 'Open the Import tab and upload THE Yield Database workbook to load the history. New harvests will then arrive from Agworld automatically.' : 'An Admin or Owner needs to import the yield workbook first.'}</p>
@@ -289,8 +296,9 @@ export default function Yields({ userRole }) {
 
       {view === 'import' && canImport && <YieldImport existingById={existingById} />}
       {view === 'enter' && canImport && <YieldEntry docsById={docsById} />}
+      {view === 'storage' && canImport && <StorageLink docsById={docsById} />}
 
-      {!empty && view !== 'import' && view !== 'enter' && view !== 'field' && (
+      {!empty && view !== 'import' && view !== 'enter' && view !== 'storage' && view !== 'field' && (
         <div className="yields-filters">
           <select value={crop} onChange={(e) => { setCrop(e.target.value); setSelFields([]); setDims({ variety: [], area: [], manager: [], previousCrop: [], irrigation: [] }) }}>
             {cropOptions.map(([c, n]) => <option key={c} value={c}>{c.charAt(0) + c.slice(1).toLowerCase()} ({n})</option>)}
@@ -315,7 +323,7 @@ export default function Yields({ userRole }) {
         </div>
       )}
 
-      {!empty && selFields.length > 0 && view !== 'import' && view !== 'enter' && view !== 'field' && (
+      {!empty && selFields.length > 0 && view !== 'import' && view !== 'enter' && view !== 'storage' && view !== 'field' && (
         <div className="yields-chips">
           {selFields.map((k, i) => (
             <span key={k} className="yields-chip">
@@ -330,7 +338,7 @@ export default function Yields({ userRole }) {
       {!empty && view === 'trends' && <TrendsView base={base} focus={focus} selFields={selFields} fieldNameByKey={fieldNameByKey} unit={unit} crop={crop} yFrom={yFrom} yTo={yTo} />}
       {!empty && view === 'field' && <FieldHistoryView records={records} fieldNameByKey={fieldNameByKey} initialKey={selFields[0]} includeLeased={includeLeased} preferCrop={crop} />}
       {!empty && view === 'compare' && <CompareView base={base} focus={focus} selFields={selFields} fieldNameByKey={fieldNameByKey} unit={unit} />}
-      {!empty && view === 'records' && <RecordsView rows={focus} />}
+      {!empty && view === 'records' && <RecordsView rows={focus} canDelete={canImport} deletedDocs={deletedDocs} />}
     </div>
   )
 }
@@ -583,7 +591,7 @@ function FieldHistoryView({ records, fieldNameByKey, initialKey, includeLeased, 
                         <td><CropBadge crop={r.crop} /></td>
                         <td className="hide-sm">{r.variety || '—'}</td>
                         <td className="num">{fmt(r.acres, 1)}</td>
-                        <td className="num">{r._yield > 0 ? <><strong>{fmt(r._yield)}</strong> <span className="contracts-sub">{r.unit}</span>{r._source === 'agworld' && <span className="yields-src" title="From Agworld harvest record">AW</span>}{r._source === 'manual' && <span className="yields-src entered" title={r.entryGroup && r.entryGroup.combined ? `Entered, combined with ${r.entryGroup.fields.filter((n) => n !== r.fieldName).join(', ')}` : 'Entered in AIO'}>{r.entryGroup && r.entryGroup.combined ? 'COMB' : 'ENT'}</span>}</> : '—'}</td>
+                        <td className="num">{r._yield > 0 ? <><strong>{fmt(r._yield)}</strong> <span className="contracts-sub">{r.unit}</span>{r._source === 'agworld' && <span className="yields-src" title="From Agworld harvest record">AW</span>}{r._source === 'storage' && <span className="yields-src storage" title={`From Potato Storage measured cwt less ${fmt(((r.storage && r.storage.tareFactor) || 0) * 100, 1)}% tare${r.storage && r.storage.bays ? ' · ' + r.storage.bays.join(', ') : ''}`}>STO</span>}{r._source === 'manual' && <span className="yields-src entered" title={r.entryGroup && r.entryGroup.combined ? `Entered, combined with ${r.entryGroup.fields.filter((n) => n !== r.fieldName).join(', ')}` : 'Entered in AIO'}>{r.entryGroup && r.entryGroup.combined ? 'COMB' : 'ENT'}</span>}</> : '—'}</td>
                         <td className="num" style={{ color: idx == null ? MUTED : idx >= 100 ? '#3B6D11' : '#A32D2D' }}>{idx == null ? '—' : fmt(idx) + '%'}</td>
                         <td className="hide-sm">{r.previousCrop || '—'}</td>
                         <td className="hide-sm">{r.plantDate ? doyLabel(dayOfYear(r.plantDate)) : '—'}</td>
@@ -744,6 +752,7 @@ const RECORD_COLS = [
   { key: 'area', label: 'Area', sm: true },
   { key: 'crop', label: 'Crop' },
   { key: 'variety', label: 'Variety', sm: true },
+  { key: 'customer', label: 'Customer', sm: true },
   { key: 'acres', label: 'Acres', num: true, f: (v) => fmt(v, 1) },
   { key: '_yield', label: 'Yield/ac', num: true, f: (v) => fmt(v), csv: (r) => (r._yield != null ? r._yield.toFixed(1) : '') },
   { key: 'unit', label: 'Unit', sm: true },
@@ -755,13 +764,22 @@ const RECORD_COLS = [
   { key: '_source', label: 'Source', sm: true }
 ]
 
-function RecordsView({ rows }) {
+function who() {
+  const u = auth.currentUser
+  return u ? (u.email || u.uid) : null
+}
+
+function RecordsView({ rows, canDelete, deletedDocs }) {
   const [sort, setSort] = useState({ key: 'year', dir: -1 })
   const [q, setQ] = useState('')
   const [limit, setLimit] = useState(100)
+  const [picked, setPicked] = useState(new Set())
+  const [showDeleted, setShowDeleted] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(null)
   const sorted = useMemo(() => {
     const s = q.trim().toLowerCase()
-    const list = rows.filter((r) => !s || `${r.fieldName} ${r.area || ''} ${r.variety || ''} ${r.manager || ''} ${r.year}`.toLowerCase().includes(s))
+    const list = rows.filter((r) => !s || `${r.fieldName} ${r.area || ''} ${r.variety || ''} ${r.manager || ''} ${r.customer || ''} ${r.year}`.toLowerCase().includes(s))
     return list.sort((a, b) => {
       const x = a[sort.key], y = b[sort.key]
       if (x == null && y == null) return 0
@@ -771,36 +789,102 @@ function RecordsView({ rows }) {
     })
   }, [rows, sort, q])
   const s = summarize(sorted)
+  const page = sorted.slice(0, limit)
+  const allPicked = page.length > 0 && page.every((r) => picked.has(r.id))
+
+  async function run(fn) {
+    setBusy(true); setErr(null)
+    try { await fn() } catch (e) { setErr(e.code === 'permission-denied' ? 'Only an Admin or Owner can delete yield records.' : (e.message || String(e))) } finally { setBusy(false) }
+  }
+
+  // "Delete" hides the record (a tombstone), so nothing re-creates it.
+  function hide(ids) {
+    const names = ids.map((id) => (rows.find((r) => r.id === id) || {}).fieldName).filter(Boolean)
+    if (!window.confirm(`Delete ${ids.length === 1 ? `${names[0]} (${(rows.find((r) => r.id === ids[0]) || {}).year})` : `${ids.length} yield records`}? You can restore ${ids.length === 1 ? 'it' : 'them'} from “Deleted” below.`)) return
+    run(async () => {
+      for (let i = 0; i < ids.length; i += 400) {
+        const b = writeBatch(db)
+        ids.slice(i, i + 400).forEach((id) => b.set(doc(db, 'yieldHistory', id), { deleted: true, deletedAt: Date.now(), deletedBy: who() }, { merge: true }))
+        await b.commit()
+      }
+      setPicked(new Set())
+    })
+  }
+  function restore(id) {
+    run(() => setDoc(doc(db, 'yieldHistory', id), { deleted: deleteField(), deletedAt: deleteField(), deletedBy: deleteField() }, { merge: true }))
+  }
+  function purge(d) {
+    if (!window.confirm(`Permanently erase ${d.fieldName} (${d.year})? This can’t be undone. If Agworld still reports a harvest for this field-year it may come back on the next nightly sync — leave it deleted (hidden) if you want it gone for good.`)) return
+    run(async () => {
+      const b = writeBatch(db)
+      const piles = Object.keys((d.storage && d.storage.piles) || {})
+      if (piles.length) b.set(doc(db, 'yieldSettings', 'storage'), { ignored: arrayUnion(...piles.map((z) => `${d.id}|${z}`)) }, { merge: true })
+      b.delete(doc(db, 'yieldHistory', d.id))
+      await b.commit()
+    })
+  }
 
   return (
     <>
       <div className="agronomy-filter-bar">
-        <input className="agronomy-search-input" placeholder="Search field, area, variety, manager…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="agronomy-search-input" placeholder="Search field, area, variety, customer…" value={q} onChange={(e) => setQ(e.target.value)} />
         <span className="contracts-sub">{fmt(sorted.length)} records · {fmt(s.acres)} ac with yield · avg {fmt(s.avg)}</span>
         <button onClick={() => download('yield-history.csv', toCsv(sorted, RECORD_COLS))}>Export CSV</button>
+        {canDelete && picked.size > 0 && <button className="yields-danger" disabled={busy} onClick={() => hide([...picked])}>Delete {picked.size} selected</button>}
+        {canDelete && deletedDocs.length > 0 && <button className={showDeleted ? 'active' : ''} onClick={() => setShowDeleted((v) => !v)}>Deleted ({deletedDocs.length})</button>}
       </div>
+      {err && <div className="agronomy-error-banner">{err}</div>}
+
+      {canDelete && showDeleted && (
+        <div className="yields-card">
+          <div className="yields-card-title">Deleted records</div>
+          <p className="contracts-sub">Hidden from every chart and table, and kept hidden even if Agworld or Potato Storage sync data for them again. Restore puts a record back exactly as it was.</p>
+          <div className="table-scroll" style={{ maxHeight: 300, marginTop: 8 }}>
+            <table className="contracts-table contracts-table-auto">
+              <thead><tr><th>Field</th><th>Year</th><th>Crop</th><th className="hide-sm">Deleted</th><th /></tr></thead>
+              <tbody>
+                {[...deletedDocs].sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0)).map((d) => (
+                  <tr key={d.id}>
+                    <td><strong>{d.fieldName || d.fieldKey}</strong></td><td>{d.year}</td><td><CropBadge crop={d.crop || (d.agworld && d.agworld.crop)} /></td>
+                    <td className="hide-sm contracts-sub">{d.deletedBy || '—'}{d.deletedAt ? ` · ${new Date(d.deletedAt).toLocaleDateString()}` : ''}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <button className="clear-sort-btn" disabled={busy} onClick={() => restore(d.id)}>Restore</button>{' '}
+                      <button className="clear-sort-btn yields-danger-text" disabled={busy} onClick={() => purge(d)}>Erase</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div className="table-scroll" style={{ maxHeight: '70vh' }}>
         <table className="contracts-table contracts-table-auto">
           <thead>
             <tr>
+              {canDelete && <th style={{ width: 30 }}><input type="checkbox" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(page.map((r) => r.id)))} aria-label="Select all shown" /></th>}
               {RECORD_COLS.map((c) => (
                 <th key={c.key} className={`agronomy-sortable ${c.num ? 'num' : ''} ${c.sm ? 'hide-sm' : ''}`}
                   onClick={() => setSort((p) => ({ key: c.key, dir: p.key === c.key ? -p.dir : (c.num ? -1 : 1) }))}>
                   {c.label}{sort.key === c.key ? (sort.dir > 0 ? ' ▲' : ' ▼') : ''}
                 </th>
               ))}
+              {canDelete && <th />}
             </tr>
           </thead>
           <tbody>
-            {sorted.slice(0, limit).map((r) => (
-              <tr key={r.id}>
+            {page.map((r) => (
+              <tr key={r.id} className={picked.has(r.id) ? 'contracts-row-selected' : ''}>
+                {canDelete && <td><input type="checkbox" checked={picked.has(r.id)} onChange={() => setPicked((p) => { const n = new Set(p); n.has(r.id) ? n.delete(r.id) : n.add(r.id); return n })} /></td>}
                 {RECORD_COLS.map((c) => (
                   <td key={c.key} className={`${c.num ? 'num' : ''} ${c.sm ? 'hide-sm' : ''}`}>
                     {c.key === 'crop' ? <CropBadge crop={r.crop} />
-                      : c.key === '_source' ? (r._source === 'agworld' ? 'Agworld' : r._source === 'spreadsheet' ? 'Workbook' : r._source === 'manual' ? (r.entryGroup && r.entryGroup.combined ? 'Entered (combined)' : 'Entered') : '—')
+                      : c.key === '_source' ? (r._source === 'agworld' ? 'Agworld' : r._source === 'spreadsheet' ? 'Workbook' : r._source === 'manual' ? (r.entryGroup && r.entryGroup.combined ? 'Entered (combined)' : 'Entered') : r._source === 'storage' ? 'Potato Storage' : '—')
                         : c.f ? c.f(r[c.key]) : (r[c.key] ?? '—')}
                   </td>
                 ))}
+                {canDelete && <td><button className="yields-row-del" title="Delete this record" aria-label={`Delete ${r.fieldName} ${r.year}`} disabled={busy} onClick={() => hide([r.id])}>×</button></td>}
               </tr>
             ))}
           </tbody>

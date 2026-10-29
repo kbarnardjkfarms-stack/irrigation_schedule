@@ -280,6 +280,13 @@ service cloud.firestore {
       allow read: if signedIn() && canViewContracts() && hasModule('yields');
       allow write: if signedIn() && isAdminOrOwner();
     }
+    // Yields module settings: storage (tare %, ignored storage piles) and
+    // storageStatus (last Potato Storage -> yield sync, written by the
+    // storageYields Cloud Functions with an Admin key).
+    match /yieldSettings/{settingId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('yields');
+      allow write: if signedIn() && isAdminOrOwner();
+    }
     match /potatoStorage/{document} {
       allow read, write: if signedIn() && hasModule('potato-storage');
     }

@@ -166,6 +166,8 @@ export default function YieldEntry({ docsById }) {
         harvestDate: entry.harvestDate || null,
         harvestDoy: dayOfYear(entry.harvestDate),
         yieldSource: 'manual',
+        // Entering a yield for a field-year that was deleted brings it back.
+        deleted: deleteField(), deletedAt: deleteField(), deletedBy: deleteField(),
         entryNotes: entry.notes.trim() || null,
         agworldFieldId: r.id,
         entryGroup: {

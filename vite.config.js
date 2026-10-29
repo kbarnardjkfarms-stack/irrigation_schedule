@@ -40,6 +40,10 @@ export default defineConfig({
         ]
       },
       workbox: {
+        // The app is one bundle of a little over 2 MB, and Workbox's default
+        // precache limit is exactly 2 MiB — past it the build FAILS (and the
+        // deploy with it). Raised so the whole app keeps loading offline.
+        maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
         // Cache the app shell aggressively so it loads with zero signal.
         // Firestore's own SDK handles offline data caching separately.
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],

@@ -755,3 +755,10 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .yields-src.entered { color: #3B6D11; border-color: #3B6D11; }
 .yields-combined { font-size: 9px; font-weight: 700; color: #854F0B; background: #FAEEDA; border-radius: 3px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; text-transform: uppercase; }
 @media (max-width: 860px) { .yields-entry-layout { grid-template-columns: 1fr; } }
+
+/* Storage link tab + record deletion (StorageLink.jsx, Yields.jsx Records) */
+.yields-src.storage { color: #854F0B; border-color: #854F0B; }
+.yields-danger { background: #A32D2D; border-color: #A32D2D; color: #fff; font-weight: 600; }
+.yields-danger-text { color: #A32D2D; }
+.yields-row-del { border: none; background: none; color: #bbb; font-size: 16px; line-height: 1; padding: 0 4px; }
+.yields-row-del:hover { color: #A32D2D; }
