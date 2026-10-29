@@ -840,26 +840,15 @@ function levenshteinDistance(a, b) {
 }
 
 // =============================================================================
-// Smarter field matching for Stukenholtz samples - TWO paste-in changes to
-// functions/index.js (Oct 2026). Do NOT replace the whole file.
+// Smarter field matching for Stukenholtz samples (Oct 2026)
 // =============================================================================
-//
-// PART 1 - REPLACE one existing function.
-//   In functions/index.js, find the comment starting
-//       // Fallback for when the exact normalized match fails. Deliberately
-//   followed by `function findFuzzyFieldMatch(normalizedLabel, byNormalizedName) {`
-//   Delete from that comment through the function's closing `}` (about 25
-//   lines), and paste everything between the PART 1 markers below in its
-//   place. Leave levenshteinDistance(), normalizeFieldLabel(),
-//   buildFieldLookup() and mapResultToSample() exactly as they are - the new
-//   findFuzzyFieldMatch has the same name and arguments, so nothing else
-//   needs to change.
-//
-// PART 2 - ADD one new function.
-//   Paste everything between the PART 2 markers anywhere near the bottom of
-//   index.js (after requireAgronomyAccess is defined, which it already is).
-//
-// ----------------------------- PART 1: START ---------------------------------
+// Scores how alike a lab label is to each field name (ignoring words like
+// "soil" and years, treating SOUTH/S the same, forgiving typos and
+// abbreviations, and never linking when a direction or number differs).
+// findFuzzyFieldMatch is used by mapResultToSample at sync time;
+// rematchUnmappedSamples is what the Cleanup tab's "Smart auto-match" panel
+// calls to preview/link the existing backlog.
+
 // Words that show up in lab sample labels but aren't part of a field's name.
 const FIELD_MATCH_NOISE_WORDS = new Set([
   'field', 'fld', 'pivot', 'pvt', 'soil', 'petiole', 'nema', 'nematode', 'sample', 'test', 'tissue'
@@ -882,12 +871,15 @@ const fieldMatchTokenCache = new Map();
 
 function fieldMatchTokens(normalized) {
   if (fieldMatchTokenCache.has(normalized)) return fieldMatchTokenCache.get(normalized);
-  const raw = normalized.split(' ').filter(Boolean).map((t) => FIELD_MATCH_SYNONYMS[t] || t);
+  // Split glued numbers and letters ("17S" -> "17", "S"; "11A" -> "11", "A")
+  // so "VERBREE 17S" and "VERBREE 17 S" read the same.
+  const raw = (normalized.match(/\d+|[a-z]+/g) || []).map((t) => FIELD_MATCH_SYNONYMS[t] || t);
   const kept = raw.filter((t) => !FIELD_MATCH_NOISE_WORDS.has(t) && !/^(19|20)\d{2}$/.test(t));
   const tokens = kept.length ? kept : raw;
   fieldMatchTokenCache.set(normalized, tokens);
   return tokens;
 }
+
 function fieldMatchSimilarity(a, b) {
   const longest = Math.max(a.length, b.length);
   const edit = longest === 0 ? 1 : 1 - levenshteinDistance(a, b) / longest;
@@ -919,6 +911,9 @@ function scoreFieldMatch(normalizedLabel, normalizedName) {
 
   const softA = a.filter((t) => !isHard(t));
   const softB = b.filter((t) => !isHard(t));
+  // Nothing but numbers/short codes on both sides ("11A" vs "11 A"): they
+  // already matched exactly above, so that is a full match.
+  if (!softA.length && !softB.length) return hardA.length ? 1 : 0;
   if (!softA.length || !softB.length) return 0;
 
   const pairs = [];
@@ -958,10 +953,6 @@ function findFuzzyFieldMatch(normalizedLabel, byNormalizedName, minScore = FUZZY
   return best.fieldId;
 }
 
-// ------------------------------ PART 1: END ----------------------------------
-
-
-// ----------------------------- PART 2: START ---------------------------------
 // Re-runs the matcher over every sample that has no field yet, which is what
 // finally fixes the backlog (the sync only matches a sample once, at the
 // moment it's first pulled in). Called from the Cleanup tab's "Smart
@@ -1027,6 +1018,15 @@ exports.rematchUnmappedSamples = onCall({ timeoutSeconds: 540, memory: '1GiB' },
   });
 
   const linkable = rows.filter((r) => r.willLink);
+  // The biggest labels that did NOT link, by sample count - these are what
+  // is actually worth looking at (a label with no candidate at all usually
+  // means there is no such field in the app).
+  const biggestUnmatched = rows
+    .filter((r) => !r.willLink)
+    .sort((a, b) => b.sampleCount - a.sampleCount)
+    .slice(0, 40)
+    .map(({ _refs, ...rest }) => rest);
+  const noCandidateLabels = rows.filter((r) => r.fieldId === null).length;
   const linkableSamples = linkable.reduce((n, r) => n + r.sampleCount, 0);
 
   let linked = 0;
@@ -1057,13 +1057,15 @@ exports.rematchUnmappedSamples = onCall({ timeoutSeconds: 540, memory: '1GiB' },
     threshold,
     totalUnmappedSamples: totalUnmapped,
     uniqueLabels: rows.length,
+    fieldCount: fieldSnap.size,
+    noCandidateLabels,
+    biggestUnmatched,
     linkableLabels: linkable.length,
     linkableSamples,
     linkedSamples: linked,
     rows: rows.slice(0, 300).map(({ _refs, ...rest }) => rest)
   };
 });
-// ------------------------------ PART 2: END ----------------------------------
 // Best-guess extraction of a usable sample doc from one raw Stukenholtz
 // result - see the file-level note above. Candidate property names are
 // checked in order; adjust once you've seen a real response.
