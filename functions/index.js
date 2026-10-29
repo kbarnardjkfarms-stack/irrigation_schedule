@@ -25,9 +25,18 @@ const AGWORLD_BASE_URL = 'https://us.agworld.co';
 // automatically the next time this runs (as a natural side effect of the
 // general stale-field cleanup below, since excluded-farm fields never
 // appear in the current valid set either).
-const EXCLUDED_FARM_IDS = new Set(['175660', '211414', '219606']);
-// 175660 = SUBLEASED AND ROTATION LEASE FIELDS
+// Still skipped entirely - never synced anywhere in AIO.
+const EXCLUDED_FARM_IDS = new Set(['211414']);
 // 211414 = TETON TREES
+
+// Synced like any other farm so Agronomy (and Potato Storage) can see their
+// fields, but every such field is stamped hiddenFromIrrigation: true on its
+// fields/{id} doc. The irrigation schedule, the public watch page and
+// Contracts leave those fields out; Agronomy and Potato Storage do not.
+// No farms/{id} doc is written for these farms either, so farm pickers
+// elsewhere don't list them.
+const HIDDEN_FROM_IRRIGATION_FARM_IDS = new Set(['175660', '219606']);
+// 175660 = SUBLEASED AND ROTATION LEASE FIELDS
 // 219606 = ZARCHIVE
 
 // Agworld returns measurements as strings with units attached, e.g.
@@ -319,9 +328,11 @@ async function syncFields() {
           skippedFieldIds.add(f.id);
           return; // skip fields under junk farms
         }
+        const hiddenFromIrrigation = HIDDEN_FROM_IRRIGATION_FARM_IDS.has(String(f.attributes.farm_id));
         fieldNamesById[f.id] = {
           name: f.attributes.name,
-          farmId: f.attributes.farm_id
+          farmId: f.attributes.farm_id,
+          hiddenFromIrrigation
         };
         // crops comes back as an array (a field can carry more than one
         // crop or blend for a given season) — take the primary entry
@@ -365,6 +376,8 @@ async function syncFields() {
         const crop = canonCrop(primaryCrop ? primaryCrop.crop_name : null);
         const weight = parseHarvestWeight(f.attributes.harvested_weight, crop);
         const key = yieldFieldKey(f.attributes.name);
+        // Subleased / archive fields get yield records too (Yield History
+        // shows them; only the irrigation screens hide those fields).
         if (weight && key && Number.isFinite(year)) {
           const harvestedAcres = parseAreaToAcres(f.attributes.harvested_area);
           const fieldAcres = parseAreaToAcres(f.attributes.area);
@@ -416,7 +429,7 @@ async function syncFields() {
   // untouched, since Agworld has no concept of those.
   const farmsBatch = db.batch();
   Object.entries(allFarmsById).forEach(([farmId, farmName]) => {
-    if (EXCLUDED_FARM_IDS.has(String(farmId))) return; // skip junk farms
+    if (EXCLUDED_FARM_IDS.has(String(farmId)) || HIDDEN_FROM_IRRIGATION_FARM_IDS.has(String(farmId))) return; // no farm docs for these
     const ref = db.collection('farms').doc(String(farmId));
     farmsBatch.set(ref, { agworldId: farmId, name: farmName }, { merge: true });
   });
@@ -427,7 +440,7 @@ async function syncFields() {
     const chunkIds = fieldIds.slice(i, i + 400);
     const batch = db.batch();
     chunkIds.forEach((fieldId) => {
-      const { name, farmId } = fieldNamesById[fieldId];
+      const { name, farmId, hiddenFromIrrigation } = fieldNamesById[fieldId];
       const ref = db.collection('fields').doc(String(fieldId));
       batch.set(
         ref,
@@ -436,6 +449,7 @@ async function syncFields() {
           name,
           farmId,
           farmName: allFarmsById[farmId] || null,
+          hiddenFromIrrigation: !!hiddenFromIrrigation,
           syncedFromAgworldAt: admin.firestore.FieldValue.serverTimestamp()
         },
         { merge: true }
@@ -482,7 +496,7 @@ async function syncFields() {
   // aren't part of the field-diffing logic above since a farm can validly
   // have zero currently-synced fields without being stale itself.
   const excludedFarmCleanupBatch = db.batch();
-  EXCLUDED_FARM_IDS.forEach((id) => excludedFarmCleanupBatch.delete(db.collection('farms').doc(id)));
+  [...EXCLUDED_FARM_IDS, ...HIDDEN_FROM_IRRIGATION_FARM_IDS].forEach((id) => excludedFarmCleanupBatch.delete(db.collection('farms').doc(id)));
   await excludedFarmCleanupBatch.commit();
 
   return {
