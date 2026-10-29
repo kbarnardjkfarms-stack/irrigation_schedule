@@ -15,6 +15,15 @@ import AgronomyCompare from './AgronomyCompare.jsx'
 // narrower than canSeeAgronomy itself, which also lets Farm managers in.
 // The updateAgronomyCriteria Cloud Function enforces this independently
 // (requireAdminOrOwner), so this is a UI convenience, not the real gate.
+// AgWorld sometimes sends the same crop under a different name (e.g. "Lucerne"
+// for alfalfa, "Maize" for corn). Fold those into the one name AIO uses so the
+// badge colour, crop filter and agronomy curves all treat them the same.
+const CROP_ALIASES = { LUCERNE: 'ALFALFA', MAIZE: 'CORN' }
+function normalizeCrop(name) {
+  const up = (name || '').toUpperCase().trim()
+  return CROP_ALIASES[up] || up
+}
+
 export default function Agronomy({ userRole }) {
   const canEditTargets = userRole === 'admin' || userRole === 'owner'
   const [view, setView] = useState('field')
@@ -118,7 +127,7 @@ export default function Agronomy({ userRole }) {
           name: base.name,
           farmId: base.farmId,
           farmName: base.farmName,
-          cropName: (seasonData.cropName || '').toUpperCase(),
+          cropName: normalizeCrop(seasonData.cropName),
           varietyName: seasonData.varietyName || null,
           acres: seasonData.acres || null,
           plantDate: seasonData.plantDate || null
