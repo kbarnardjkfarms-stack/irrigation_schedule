@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
 import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR, CROP_COLOR, sortValueKeys } from './AgronomyConfig.js'
-import AgronomySeason3D, { normalizeToRange } from './AgronomySeason3D.jsx'
 import { useLiveAgronomyCriteria, getCurveRows, mergeFlatTargets } from './AgronomyCriteriaData.js'
 
 function fmtDate(ts) {
@@ -10,7 +9,7 @@ function fmtDate(ts) {
   return ts.toDate().toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function weeksBetween(laterDate, earlierDate) {
+export function weeksBetween(laterDate, earlierDate) {
   if (!laterDate || !earlierDate) return null
   const ms = laterDate.getTime() - earlierDate.getTime()
   return Math.floor(ms / (7 * 24 * 60 * 60 * 1000))
@@ -26,13 +25,13 @@ function weeksBetween(laterDate, earlierDate) {
 // after (comfortably past the longest curve in WEEKLY_CURVES_BY_CROP,
 // potato's 17 weeks) - rather than the real fix of tagging each sample
 // with its season at sync time, which needs a backend change.
-const IN_SEASON_WEEK_MIN = -6
-const IN_SEASON_WEEK_MAX = 35
+export const IN_SEASON_WEEK_MIN = -6
+export const IN_SEASON_WEEK_MAX = 35
 
 // Short form for on-chart labels so 5-digit petiole NO3 readings (e.g. 21500)
 // don't collide with neighbouring points; the table under each chart always
 // shows the exact number.
-function fmtChartValue(v) {
+export function fmtChartValue(v) {
   if (v == null) return ''
   if (Math.abs(v) >= 10000) return `${(v / 1000).toFixed(1)}k`
   return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100)
@@ -84,9 +83,9 @@ function fmtObsDate(d) {
 
 // Field moisture % target (Kent, Oct 28): below 71 = red, 71-88 = green,
 // above 88 = orange. Same for every crop and week.
-const MOISTURE_TARGET = [71, 88]
+export const MOISTURE_TARGET = [71, 88]
 
-const STATUS_LABEL = { deficient: 'Below range', optimal: 'In range', excess: 'Above range' }
+export const STATUS_LABEL = { deficient: 'Below range', optimal: 'In range', excess: 'Above range' }
 
 // Looks up a metric's value in a sample's `values`, tolerating the lab
 // spelling a key differently than AgronomyConfig.js does ("NO3-N" vs "no3",
@@ -102,7 +101,7 @@ const VALUE_ALIASES = {
 function simplifyKey(k) {
   return String(k).toLowerCase().replace(/\([^)]*\)|\[[^\]]*\]/g, '').replace(/[^a-z0-9]/g, '').replace(/(ppm|percent|pct)$/, '')
 }
-function metricValue(values, type, metric) {
+export function metricValue(values, type, metric) {
   if (!values) return undefined
   if (values[metric.key] != null) return values[metric.key]
   const wanted = new Set([simplifyKey(metric.key), ...(VALUE_ALIASES[`${type}.${metric.key}`] || [])])
@@ -117,7 +116,7 @@ function metricValue(values, type, metric) {
 // week). Weeks past the end of the sheet - e.g. potato week 17+, which only
 // has a stage note - therefore keep the last known range instead of losing
 // the band and falling back to the flat target.
-function curveRangeForWeek(curveRows, week, curveKey) {
+export function curveRangeForWeek(curveRows, week, curveKey) {
   let best = null
   for (const r of curveRows) {
     if (!r[curveKey]) continue
@@ -156,7 +155,7 @@ const SPLIT_STYLE = {
 // The x-axis is weeks since emergence, labeled with a handful of "Wk N"
 // ticks along the bottom - points alone (no axis) made it impossible to
 // tell which week a reading landed in.
-function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect }) {
+function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, secondary }) {
   if (points.length < 1) {
     return <div className="agronomy-chart-empty">{emptyMessage || 'No readings yet'}</div>
   }
@@ -171,19 +170,28 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect }
   }
   const bandYs = sortedBand ? sortedBand.flatMap((b) => [b.low, b.high]) : []
   const bandXs = sortedBand ? sortedBand.map((b) => b.x) : []
-  const minX = Math.min(...xs, ...bandXs), maxX = Math.max(...xs, ...bandXs)
+  const secPts = secondary && secondary.points ? secondary.points : []
+  const secXs = secPts.map((p) => p.x)
+  const minX = Math.min(...xs, ...bandXs, ...secXs), maxX = Math.max(...xs, ...bandXs, ...secXs)
   const minY = Math.min(...ys, ...bandYs), maxY = Math.max(...ys, ...bandYs)
 
   const w = 280, h = 120
   // padR is wide enough for a 5-digit band label (petiole NO3 targets run
   // up to ~25000 ppm) sitting just past the plot area's right edge.
-  const padL = 30, padR = 34, padT = 10, padB = 20
+  const padL = 34, padR = 36, padT = 10, padB = 20
   const plotW = w - padL - padR
   const plotH = h - padT - padB
 
   const scaleX = (x) => padL + ((x - minX) / (maxX - minX || 1)) * plotW
   const scaleY = (y) => padT + plotH - ((y - minY) / (maxY - minY || 1)) * plotH
   const path = points.map((p) => `${scaleX(p.x)},${scaleY(p.y)}`).join(' ')
+
+  // Secondary (right-hand) axis: its own scale, so a different unit (field
+  // moisture %, lbs of N) can share the chart without distorting the left axis.
+  const sLo = secondary ? secondary.lo : 0
+  const sHi = secondary ? secondary.hi : 1
+  const scaleY2 = (y) => padT + plotH - ((y - sLo) / (sHi - sLo || 1)) * plotH
+  const barW = Math.max(3, Math.min(12, (plotW / (maxX - minX + 1)) * 0.55))
 
   // Up to 5 week ticks, spread evenly across the actual sample range and
   // rounded to whole weeks, de-duped in case the range is short.
@@ -210,14 +218,34 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect }
       {bandPolygon && (
         <>
           <polygon points={bandPolygon} className="agronomy-sparkline-band" />
-          <text x={padL + plotW + 2} y={scaleY(bandRightEdge.high) + 3} className="agronomy-sparkline-range-label">
+          <text x={padL - 3} y={scaleY(bandRightEdge.high) + 3} textAnchor="end" className="agronomy-sparkline-range-label">
             {bandRightEdge.high}
           </text>
-          <text x={padL + plotW + 2} y={scaleY(bandRightEdge.low) + 3} className="agronomy-sparkline-range-label">
+          <text x={padL - 3} y={scaleY(bandRightEdge.low) + 3} textAnchor="end" className="agronomy-sparkline-range-label">
             {bandRightEdge.low}
           </text>
         </>
       )}
+      {secondary && (secondary.refLines || []).map((v) => (
+        <line key={v} x1={padL} y1={scaleY2(v)} x2={padL + plotW} y2={scaleY2(v)}
+          stroke={secondary.color} strokeOpacity="0.5" strokeWidth="1" strokeDasharray="2 3" />
+      ))}
+      {secondary && secondary.kind === 'bars' && secPts.map((p, i) => {
+        const top = scaleY2(p.y), base = scaleY2(Math.max(sLo, 0))
+        return (
+          <g key={`b${i}`} onClick={() => onSelect && onSelect(p.x)} style={{ cursor: onSelect ? 'pointer' : 'default' }}>
+            <rect x={scaleX(p.x) - barW / 2} y={top} width={barW} height={Math.max(1, base - top)}
+              fill={secondary.color} fillOpacity={selectedWeek === p.x ? 0.9 : 0.55} />
+            <text x={scaleX(p.x)} y={top - 2} textAnchor="middle" fontSize="6.5" fontWeight="600" fill={secondary.color}>
+              {fmtChartValue(p.y)}
+            </text>
+            <title>{secondary.name}: {p.y} {secondary.unit || ''} (wk {p.x})</title>
+          </g>
+        )
+      })}
+      {secondary && (secondary.labels || []).map((l) => (
+        <text key={l.text} x={padL + plotW + 3} y={scaleY2(l.v) + 3} fontSize="7" fill={secondary.color}>{l.text}</text>
+      ))}
       <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} className="agronomy-sparkline-axis" />
       {xTicks.map((t) => (
         <text key={t} x={scaleX(t)} y={h - 4} className="agronomy-sparkline-week-label" textAnchor="middle">
@@ -230,6 +258,22 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect }
           stroke="#555" strokeWidth="1" strokeDasharray="3 3"
         />
       )}
+      {secondary && secondary.kind === 'line' && secPts.length > 1 && (
+        <polyline points={secPts.map((p) => `${scaleX(p.x)},${scaleY2(p.y)}`).join(' ')}
+          fill="none" stroke={secondary.color} strokeWidth="1.5" strokeDasharray="4 2" />
+      )}
+      {secondary && secondary.kind === 'line' && secPts.map((p, i) => {
+        const cx = scaleX(p.x), cy = scaleY2(p.y), r = selectedWeek === p.x ? 5 : 3.5
+        const fill = (p.status && STATUS_COLOR[p.status]?.dot) || secondary.color
+        return (
+          <g key={`s${i}`} onClick={() => onSelect && onSelect(p.x)} style={{ cursor: onSelect ? 'pointer' : 'default' }}>
+            <circle cx={cx} cy={cy} r="9" fill="transparent" />
+            <polygon points={`${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`}
+              fill={fill} stroke={selectedWeek === p.x ? '#222' : '#fff'} strokeWidth={selectedWeek === p.x ? 1.5 : 1} />
+            <title>{secondary.name}: {p.y}{secondary.unit || ''} (wk {p.x})</title>
+          </g>
+        )
+      })}
       <polyline points={path} fill="none" stroke={color} strokeWidth="2" />
       {points.map((p, i) => {
         const dot = (p.status && STATUS_COLOR[p.status]?.dot) || color
@@ -362,6 +406,25 @@ export default function AgronomyByField({ fields }) {
     return () => unsub()
   }, [fieldId])
 
+  // Nitrogen applied (lbs N/ac per Agworld activity), written by the
+  // syncNitrogenApplications function. Equality filter only, no index needed.
+  const [nApps, setNApps] = useState([])
+  useEffect(() => {
+    if (!fieldId) return
+    setNApps([])
+    const q = query(collection(db, 'nApplications'), where('fieldId', '==', fieldId))
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = []
+        snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
+        setNApps(list)
+      },
+      (err) => console.error('AgronomyByField nApplications query failed:', err)
+    )
+    return () => unsub()
+  }, [fieldId])
+
   const field = fields.find((f) => f.id === fieldId)
 
   // plantDate/cropName/varietyName/acres all come straight from the season-
@@ -429,6 +492,28 @@ export default function AgronomyByField({ fields }) {
     return curveRows.find((r) => r.week === activeWeek) || null
   }, [curveRows, activeWeek])
 
+  // Pounds of N per acre applied in each week since emergence.
+  const nWeekly = useMemo(() => {
+    if (!plantDate) return []
+    const byWeek = {}
+    nApps.forEach((a) => {
+      const d = a.date && a.date.toDate ? a.date.toDate() : null
+      if (!d || !(a.nLbsPerAc > 0)) return
+      const wk = weeksBetween(d, plantDate)
+      if (wk == null || wk < IN_SEASON_WEEK_MIN || wk > IN_SEASON_WEEK_MAX) return
+      byWeek[wk] = (byWeek[wk] || 0) + a.nLbsPerAc
+    })
+    return Object.entries(byWeek)
+      .map(([x, y]) => ({ x: Number(x), y: Math.round(y * 10) / 10 }))
+      .sort((p, q) => p.x - q.x)
+  }, [nApps, plantDate])
+  const nSum = (pred) => Math.round(nWeekly.filter(pred).reduce((t, p) => t + p.y, 0) * 10) / 10
+  // "Last week" = the week before the one being shown (this week's own
+  // applications are noted separately so they're never hidden).
+  const nLastWeek = activeWeek != null ? nSum((p) => p.x === activeWeek - 1) : null
+  const nThisWeek = activeWeek != null ? nSum((p) => p.x === activeWeek) : null
+  const nTotal = activeWeek != null ? nSum((p) => p.x <= activeWeek) : nSum(() => true)
+
   // Field moisture % from the scouting reports, placed on the same weeks-
   // since-emergence axis (and the same in-season window) as the other charts.
   const moisturePoints = useMemo(() => {
@@ -444,7 +529,6 @@ export default function AgronomyByField({ fields }) {
     moisturePoints.forEach((p) => { if (selectedWeek == null || p.x <= selectedWeek) found = p })
     return found
   }, [moisturePoints, selectedWeek])
-  const moistureBand = useMemo(() => buildBand(moisturePoints, null, null, MOISTURE_TARGET), [moisturePoints])
   const moistureJudged = useMemo(
     () => moisturePoints.map((p) => ({ ...p, status: statusFor(p.y, MOISTURE_TARGET) })),
     [moisturePoints]
@@ -521,7 +605,41 @@ export default function AgronomyByField({ fields }) {
     } else if (withValue.length > 0 && points.length === 0) {
       emptyMessage = `${withValue.length} reading(s), all outside this season (more than ${-IN_SEASON_WEEK_MIN} weeks before or ${IN_SEASON_WEEK_MAX} weeks after planting). Check the season selected above.`
     }
-    const band = buildBand(points, curveRows, type === 'soil' ? 'soilNO3' : 'petioleNO3', metric.target)
+    // Right-hand axis: field moisture on the soil chart, N applied (bars) on
+    // the petiole chart. Its weeks widen the chart so the band, ticks and
+    // selected-week line cover them too.
+    let secondary = null
+    let secondaryNote = null
+    if (type === 'soil') {
+      const mv = moistureJudged.map((p) => p.y)
+      if (mv.length) {
+        secondary = {
+          kind: 'line', color: '#1F6FB2', name: 'Field moisture', unit: '%',
+          points: moistureJudged,
+          lo: Math.floor(Math.min(MOISTURE_TARGET[0], ...mv) - 4),
+          hi: Math.ceil(Math.max(MOISTURE_TARGET[1], ...mv) + 4),
+          refLines: MOISTURE_TARGET,
+          labels: MOISTURE_TARGET.map((v) => ({ v, text: `${v}%` }))
+        }
+      }
+      secondaryNote = secondary
+        ? <><span style={{ color: '#1F6FB2' }}>{'◆'} Field moisture % (right axis, dashed lines {MOISTURE_TARGET[0]}{'–'}{MOISTURE_TARGET[1]})</span></>
+        : <span style={{ color: '#888' }}>Field moisture: no scouting data for this season yet (Scouting tab)</span>
+    } else if (type === 'petiole') {
+      const mx = nWeekly.length ? Math.max(...nWeekly.map((p) => p.y)) : 0
+      if (nWeekly.length) {
+        secondary = {
+          kind: 'bars', color: '#C77D0A', name: 'N applied', unit: 'lbs N/ac',
+          points: nWeekly, lo: 0, hi: Math.max(10, Math.ceil(mx * 1.25)),
+          labels: [{ v: 0, text: '0' }, { v: Math.max(10, Math.ceil(mx * 1.25)), text: `${Math.max(10, Math.ceil(mx * 1.25))} N` }]
+        }
+      }
+      secondaryNote = secondary
+        ? <span style={{ color: '#C77D0A' }}>{'▮'} N applied each week, lbs N/ac (right axis)</span>
+        : <span style={{ color: '#888' }}>N applied: nothing synced from Agworld for this field yet</span>
+    }
+    const domainPts = secondary ? [...points, ...secondary.points.map((p) => ({ x: p.x }))] : points
+    const band = buildBand(domainPts, curveRows, type === 'soil' ? 'soilNO3' : 'petioleNO3', metric.target)
     // Each reading is judged against the range for ITS week, not
     // today's: red = below range, green = in range, orange = above.
     const judged = points.map((p) => {
@@ -540,7 +658,9 @@ export default function AgronomyByField({ fields }) {
           emptyMessage={emptyMessage}
           selectedWeek={selectedWeek}
           onSelect={toggleWeek}
+          secondary={secondary}
         />
+        {secondaryNote && <p style={{ fontSize: 10, margin: '2px 0 6px' }}>{secondaryNote}</p>}
         {judged.length > 0 && (
           <table className="agronomy-chart-readings" style={{ minWidth: 0, width: '100%', fontSize: 10 }}>
             <thead>
@@ -576,35 +696,6 @@ export default function AgronomyByField({ fields }) {
     )
   }
 
-  // In-season readings of a weekly measure, each judged against the target
-  // for its own week - same logic as renderChartCard, used for the 3D view.
-  function judgedFor(type) {
-    const metric = metricsByType[type][0]
-    if (!plantDate) return { metric, judged: [] }
-    const pts = samples
-      .filter((s) => s.type === type && s.receivedDt)
-      .map((s) => ({ s, y: metricValue(s.values, type, metric) }))
-      .filter(({ y }) => y != null)
-      .map(({ s, y }) => ({ x: weeksBetween(s.receivedDt.toDate(), plantDate), y, date: s.receivedDt }))
-      .filter((p) => p.x != null && p.x >= IN_SEASON_WEEK_MIN && p.x <= IN_SEASON_WEEK_MAX)
-    const band = buildBand(pts, curveRows, type === 'soil' ? 'soilNO3' : 'petioleNO3', metric.target)
-    const judged = pts.map((p) => {
-      const range = rangeAt(band, p.x)
-      return { ...p, range, status: range ? statusFor(p.y, range) : null, norm: normalizeToRange(p.y, range) }
-    })
-    return { metric, judged }
-  }
-  const soil3d = judgedFor('soil')
-  const petiole3d = judgedFor('petiole')
-  const season3dSeries = [
-    { key: 'soil', label: 'Soil NO3', unit: soil3d.metric.unit, color: '#0F6E56', points: soil3d.judged },
-    { key: 'petiole', label: 'Petiole NO3', unit: petiole3d.metric.unit, color: '#3B6D11', points: petiole3d.judged },
-    {
-      key: 'moisture', label: 'Field moisture', unit: '%', color: '#1F6FB2',
-      points: moistureJudged.map((p) => ({ ...p, range: MOISTURE_TARGET, norm: normalizeToRange(p.y, MOISTURE_TARGET) }))
-    }
-  ]
-
   return (
     <div className="agronomy-by-field">
       <div className="agronomy-field-picker">
@@ -639,6 +730,30 @@ export default function AgronomyByField({ fields }) {
             <button className="agronomy-link-btn" onClick={() => setSelectedWeek(null)}>Back to latest</button>
           )}
         </div>
+        {nApps.length > 0 && (
+          <>
+            <div className="agronomy-kpi-card" style={{ borderTop: '3px solid #C77D0A' }}>
+              <p className="agronomy-kpi-label">N applied last week</p>
+              <p className="agronomy-kpi-value">
+                {nLastWeek != null ? nLastWeek : '—'}
+                <span className="agronomy-kpi-unit"> lbs N/ac</span>
+              </p>
+              <p className="agronomy-kpi-date">
+                Wk {activeWeek != null ? activeWeek - 1 : '—'}
+                {nThisWeek > 0 ? ` · +${nThisWeek} this week` : ''}
+              </p>
+            </div>
+            <div className="agronomy-kpi-card" style={{ borderTop: '3px solid #C77D0A' }}>
+              <p className="agronomy-kpi-label">Total N applied</p>
+              <p className="agronomy-kpi-value">
+                {nTotal}<span className="agronomy-kpi-unit"> lbs N/ac</span>
+              </p>
+              <p className="agronomy-kpi-date">
+                {selectedWeek != null ? `through week ${selectedWeek}` : 'season to date'}
+              </p>
+            </div>
+          </>
+        )}
         {moistureAsOf && (
           <div
             className="agronomy-kpi-card"
@@ -687,51 +802,8 @@ export default function AgronomyByField({ fields }) {
         ))}
       </div>
 
-      <div className="agronomy-split" style={SPLIT_STYLE}>
-        <div className="agronomy-split-col" style={{ minWidth: 0 }}>
-          <div className="agronomy-chart-card">
-            <p className="agronomy-chart-title">
-              Field moisture % vs weeks since emergence {'·'} click a point to see that week above
-            </p>
-            <Sparkline
-              points={moistureJudged}
-              color="#1F6FB2"
-              band={moistureBand}
-              emptyMessage={
-                observations.length === 0
-                  ? 'No scouting reports for this field yet - upload one on the Scouting tab'
-                  : !plantDate
-                    ? 'This field has no plant date for the selected season, so readings can’t be placed on the weekly chart'
-                    : 'No field moisture readings in this season'
-              }
-              selectedWeek={selectedWeek}
-              onSelect={toggleWeek}
-            />
-            {moisturePoints.length > 0 && (
-              <table className="agronomy-chart-readings" style={{ minWidth: 0, width: '100%', fontSize: 10 }}>
-                <thead><tr><th>Date</th><th>Wk</th><th>Moisture %</th><th>Target</th></tr></thead>
-                <tbody>
-                  {[...moistureJudged].reverse().map((p, i) => (
-                    <tr
-                      key={i}
-                      className={`agronomy-chart-reading-row${selectedWeek === p.x ? ' selected' : ''}`}
-                      onClick={() => toggleWeek(p.x)}
-                    >
-                      <td>{fmtObsDate(p.date)}</td><td>{p.x}</td>
-                      <td>
-                        <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 4, fontWeight: 600, background: STATUS_COLOR[p.status].bg, color: STATUS_COLOR[p.status].fg }}>
-                          {p.y}
-                        </span>
-                      </td>
-                      <td>{MOISTURE_TARGET[0]}{'–'}{MOISTURE_TARGET[1]}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-        <div className="agronomy-split-col" style={{ minWidth: 0 }}>
+      <div style={{ marginBottom: 16 }}>
+        <div>
           {digLog.length > 0 && (
             <div className="agronomy-chart-card" style={{ overflowX: 'auto' }}>
               <p className="agronomy-chart-title">Scouting log (Agworld)</p>
@@ -772,18 +844,6 @@ export default function AgronomyByField({ fields }) {
             </div>
           )}
         </div>
-      </div>
-
-      <div className="agronomy-chart-card" style={{ marginBottom: 16 }}>
-        <p className="agronomy-chart-title">
-          Season 3D view {'·'} soil NO3, petiole NO3 and field moisture by week {'·'} drag to rotate, click a dot to pick that week
-        </p>
-        <AgronomySeason3D
-          series={season3dSeries}
-          selectedWeek={selectedWeek}
-          onSelect={toggleWeek}
-          fmtDate={(d) => (d && d.toDate ? fmtDate(d) : fmtObsDate(d))}
-        />
       </div>
 
       {(annualSoilSample || nematodeSample) && (

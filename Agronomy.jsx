@@ -8,6 +8,7 @@ import AgronomyCompostSources from './AgronomyCompostSources.jsx'
 import AgronomyCleanup from './AgronomyCleanup.jsx'
 import AgronomyTargets from './AgronomyTargets.jsx'
 import AgronomyScouting from './AgronomyScouting.jsx'
+import AgronomyCompare from './AgronomyCompare.jsx'
 
 // Targets tab (editing the agronomyCriteria/agronomyCurves config that used
 // to be hardcoded in AgronomyConfig.js) is Admin/Owner only, per Kent -
@@ -133,6 +134,9 @@ export default function Agronomy({ userRole }) {
         <button className={view === 'criteria' ? 'active' : ''} onClick={() => setView('criteria')}>
           By criteria
         </button>
+        <button className={view === 'compare' ? 'active' : ''} onClick={() => setView('compare')}>
+          Compare fields
+        </button>
         <button className={view === 'database' ? 'active' : ''} onClick={() => setView('database')}>
           All samples
         </button>
@@ -154,6 +158,7 @@ export default function Agronomy({ userRole }) {
 
       {view === 'field' && <AgronomyByField fields={fields} />}
       {view === 'criteria' && <AgronomyByCriteria fields={fields} />}
+      {view === 'compare' && <AgronomyCompare fields={fields} />}
       {view === 'database' && <AgronomySampleDatabase fields={fields} />}
       {view === 'compost' && <AgronomyCompostSources />}
       {view === 'cleanup' && <AgronomyCleanup fields={allFields} />}

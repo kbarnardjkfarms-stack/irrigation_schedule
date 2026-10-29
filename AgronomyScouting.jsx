@@ -7,6 +7,8 @@ import { parseScoutingReport } from './scoutingCsv.js'
 const importScoutingReport = httpsCallable(functions, 'importScoutingReport', { timeout: 300000 })
 const assignScoutingLocation = httpsCallable(functions, 'assignScoutingLocation', { timeout: 120000 })
 
+const syncNitrogenApplications = httpsCallable(functions, 'syncNitrogenApplications', { timeout: 540000 })
+
 const CHUNK = 500
 
 function fmtDay(iso) {
@@ -26,6 +28,24 @@ export default function AgronomyScouting({ fields }) {
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
   const [assigningLabel, setAssigningLabel] = useState(null)
+  const [nSyncing, setNSyncing] = useState(false)
+  const [nResult, setNResult] = useState(null)
+  const [nError, setNError] = useState(null)
+
+  async function runNitrogenSync() {
+    setNSyncing(true)
+    setNError(null)
+    setNResult(null)
+    try {
+      const res = await syncNitrogenApplications({})
+      setNResult(res.data)
+    } catch (err) {
+      console.error('syncNitrogenApplications failed:', err)
+      setNError(err.message || 'Nitrogen sync failed.')
+    } finally {
+      setNSyncing(false)
+    }
+  }
 
   // Observations that still have no field - the persistent "to assign" list.
   const [unassigned, setUnassigned] = useState([])
@@ -145,6 +165,51 @@ export default function AgronomyScouting({ fields }) {
             Done: {result.saved} rows saved ({result.newRows} new, {result.updatedRows} already there).{' '}
             {result.matchedRows} matched a field; {result.unmatchedRows} still need a field (below).
           </p>
+        )}
+      </div>
+
+      <p className="agronomy-section-label">Nitrogen applied (from Agworld)</p>
+      <div className="agronomy-automatch">
+        <p className="agronomy-targets-hint">
+          Pulls the fertilizer applications logged in Agworld and works out pounds of N per acre for each field and
+          week. It also runs by itself every night; use the button after logging a new application. These feed the N
+          bars on the petiole chart and the N applied cards on the By field tab.
+        </p>
+        <div className="agronomy-automatch-controls">
+          <button disabled={nSyncing} onClick={runNitrogenSync}>
+            {nSyncing ? 'Syncing from Agworld (can take a minute)...' : 'Sync nitrogen from Agworld now'}
+          </button>
+        </div>
+        {nError && <p className="agronomy-error-banner">{nError}</p>}
+        {nResult && (
+          <>
+            <p className="agronomy-automatch-summary">
+              Scanned {nResult.activitiesScanned} Agworld activities: {nResult.activitiesWithNitrogen} applied nitrogen,
+              {' '}{nResult.docsWritten} field records saved{nResult.staleRemoved ? `, ${nResult.staleRemoved} removed (changed in Agworld)` : ''}.
+              {nResult.truncated ? ' Stopped early - there are more activities than one sync reads.' : ''}
+            </p>
+            {nResult.activitiesWithNitrogen === 0 && nResult.sample && (
+              <p className="agronomy-error-banner">
+                No nitrogen found. Agworld's activity fields here: {(nResult.sample.attributeKeys || []).join(', ')}.
+                Send that line to Claude so the sync can be matched to it.
+              </p>
+            )}
+            {nResult.unresolved && nResult.unresolved.length > 0 && (
+              <div className="agronomy-automatch-table-wrap">
+                <p className="agronomy-targets-hint">
+                  Fertilizer products it could not turn into pounds of N (not counted yet):
+                </p>
+                <table className="agronomy-cleanup-table">
+                  <thead><tr><th>Product | problem</th><th>Times</th></tr></thead>
+                  <tbody>
+                    {nResult.unresolved.map((u) => (
+                      <tr key={u.item}><td>{u.item}</td><td>{u.count}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )}
       </div>
 
