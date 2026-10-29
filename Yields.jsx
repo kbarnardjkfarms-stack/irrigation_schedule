@@ -761,7 +761,7 @@ const RECORD_COLS = [
   { key: 'harvestDate', label: 'Harvested', sm: true },
   { key: 'irrigation', label: 'Irrigation', sm: true },
   { key: 'manager', label: 'Manager', sm: true },
-  { key: '_source', label: 'Source', sm: true }
+  { key: '_source', label: 'Source', sm: true, csv: (r) => sourceLabel(r) }
 ]
 
 function who() {
@@ -769,17 +769,27 @@ function who() {
   return u ? (u.email || u.uid) : null
 }
 
+const SOURCE_LABEL = { spreadsheet: 'Workbook', manual: 'Entered', storage: 'Potato Storage', agworld: 'Agworld' }
+function sourceLabel(r) {
+  if (r._source === 'manual' && r.entryGroup && r.entryGroup.combined) return 'Entered (combined)'
+  return SOURCE_LABEL[r._source] || '—'
+}
+
 function RecordsView({ rows, canDelete, deletedDocs }) {
   const [sort, setSort] = useState({ key: 'year', dir: -1 })
   const [q, setQ] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('all')
   const [limit, setLimit] = useState(100)
   const [picked, setPicked] = useState(new Set())
   const [showDeleted, setShowDeleted] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState(null) // { label, done, total }
   const [err, setErr] = useState(null)
+  const [done, setDone] = useState(null)
   const sorted = useMemo(() => {
     const s = q.trim().toLowerCase()
-    const list = rows.filter((r) => !s || `${r.fieldName} ${r.area || ''} ${r.variety || ''} ${r.manager || ''} ${r.customer || ''} ${r.year}`.toLowerCase().includes(s))
+    const list = rows.filter((r) => (sourceFilter === 'all' || (sourceFilter === 'none' ? !r._source : r._source === sourceFilter))
+      && (!s || `${r.fieldName} ${r.area || ''} ${r.variety || ''} ${r.manager || ''} ${r.customer || ''} ${r.year}`.toLowerCase().includes(s)))
     return list.sort((a, b) => {
       const x = a[sort.key], y = b[sort.key]
       if (x == null && y == null) return 0
@@ -787,75 +797,163 @@ function RecordsView({ rows, canDelete, deletedDocs }) {
       if (y == null) return -1
       return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true })) * sort.dir
     })
-  }, [rows, sort, q])
+  }, [rows, sort, q, sourceFilter])
+
+  // Selection only ever holds records that are still in the filtered list,
+  // so changing a filter can't leave hidden records selected for deletion.
+  useEffect(() => {
+    setPicked((prev) => {
+      if (!prev.size) return prev
+      const ids = new Set(sorted.map((r) => r.id))
+      const next = new Set([...prev].filter((id) => ids.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [sorted])
+
   const s = summarize(sorted)
   const page = sorted.slice(0, limit)
-  const allPicked = page.length > 0 && page.every((r) => picked.has(r.id))
+  const pagePicked = page.length > 0 && page.every((r) => picked.has(r.id))
+  const allMatchingPicked = sorted.length > 0 && picked.size === sorted.length
 
   async function run(fn) {
-    setBusy(true); setErr(null)
-    try { await fn() } catch (e) { setErr(e.code === 'permission-denied' ? 'Only an Admin or Owner can delete yield records.' : (e.message || String(e))) } finally { setBusy(false) }
+    setBusy(true); setErr(null); setDone(null)
+    try { await fn() } catch (e) { setErr(e.code === 'permission-denied' ? 'Only an Admin or Owner can delete yield records.' : (e.message || String(e))) } finally { setBusy(false); setProgress(null) }
   }
 
-  // "Delete" hides the record (a tombstone), so nothing re-creates it.
-  function hide(ids) {
-    const names = ids.map((id) => (rows.find((r) => r.id === id) || {}).fieldName).filter(Boolean)
-    if (!window.confirm(`Delete ${ids.length === 1 ? `${names[0]} (${(rows.find((r) => r.id === ids[0]) || {}).year})` : `${ids.length} yield records`}? You can restore ${ids.length === 1 ? 'it' : 'them'} from “Deleted” below.`)) return
-    run(async () => {
-      for (let i = 0; i < ids.length; i += 400) {
-        const b = writeBatch(db)
-        ids.slice(i, i + 400).forEach((id) => b.set(doc(db, 'yieldHistory', id), { deleted: true, deletedAt: Date.now(), deletedBy: who() }, { merge: true }))
-        await b.commit()
-      }
-      setPicked(new Set())
-    })
-  }
-  function restore(id) {
-    run(() => setDoc(doc(db, 'yieldHistory', id), { deleted: deleteField(), deletedAt: deleteField(), deletedBy: deleteField() }, { merge: true }))
-  }
-  function purge(d) {
-    if (!window.confirm(`Permanently erase ${d.fieldName} (${d.year})? This can’t be undone. If Agworld still reports a harvest for this field-year it may come back on the next nightly sync — leave it deleted (hidden) if you want it gone for good.`)) return
-    run(async () => {
+  // Writes in chunks of 400 (Firestore's batch limit is 500) with a running count.
+  async function inChunks(label, items, apply) {
+    setProgress({ label, done: 0, total: items.length })
+    for (let i = 0; i < items.length; i += 400) {
       const b = writeBatch(db)
-      const piles = Object.keys((d.storage && d.storage.piles) || {})
-      if (piles.length) b.set(doc(db, 'yieldSettings', 'storage'), { ignored: arrayUnion(...piles.map((z) => `${d.id}|${z}`)) }, { merge: true })
-      b.delete(doc(db, 'yieldHistory', d.id))
+      items.slice(i, i + 400).forEach((it) => apply(b, it))
       await b.commit()
+      setProgress({ label, done: Math.min(i + 400, items.length), total: items.length })
+    }
+  }
+
+  const describe = (ids) => {
+    if (ids.length === 1) { const r = rows.find((x) => x.id === ids[0]) || {}; return `${r.fieldName} (${r.year})` }
+    return `${fmt(ids.length)} yield records`
+  }
+
+  // "Delete" hides the record (a tombstone), so no sync re-creates it.
+  function hide(ids) {
+    if (!ids.length) return
+    if (!window.confirm(`Delete ${describe(ids)}? ${ids.length === 1 ? 'It' : 'They'} can be restored from “Deleted”.`)) return
+    run(async () => {
+      const stamp = { deleted: true, deletedAt: Date.now(), deletedBy: who() }
+      await inChunks('Deleting', ids, (b, id) => b.set(doc(db, 'yieldHistory', id), stamp, { merge: true }))
+      setPicked(new Set())
+      setDone(`Deleted ${describe(ids)}.`)
     })
   }
+
+  // "Erase" removes the documents for good. Storage-based piles go on the
+  // ignore list first so the Potato Storage sync doesn't rebuild them.
+  function erase(docs, { confirmTyped = docs.length > 1 } = {}) {
+    if (!docs.length) return
+    const what = docs.length === 1 ? `${docs[0].fieldName || docs[0].fieldKey} (${docs[0].year})` : `${fmt(docs.length)} yield records`
+    if (confirmTyped) {
+      const typed = window.prompt(`Permanently erase ${what}? This can’t be undone.\n\nRecords Agworld still reports a harvest for may come back on its nightly sync — Delete (hide) them instead if you want them gone for good.\n\nType ERASE to confirm.`)
+      if (!typed || typed.trim().toUpperCase() !== 'ERASE') return
+    } else if (!window.confirm(`Permanently erase ${what}? This can’t be undone. If Agworld still reports a harvest for it, it may come back on the next nightly sync.`)) return
+    run(async () => {
+      const ignores = docs.flatMap((d) => Object.keys((d.storage && d.storage.piles) || {}).map((z) => `${d.id}|${z}`))
+      if (ignores.length) await setDoc(doc(db, 'yieldSettings', 'storage'), { ignored: arrayUnion(...ignores) }, { merge: true })
+      await inChunks('Erasing', docs, (b, d) => b.delete(doc(db, 'yieldHistory', d.id)))
+      setPicked(new Set())
+      setDone(`Erased ${what}.`)
+    })
+  }
+
+  function restore(ids) {
+    if (!ids.length) return
+    run(async () => {
+      const clear = { deleted: deleteField(), deletedAt: deleteField(), deletedBy: deleteField() }
+      await inChunks('Restoring', ids, (b, id) => b.set(doc(db, 'yieldHistory', id), clear, { merge: true }))
+      setDone(`Restored ${fmt(ids.length)} record${ids.length === 1 ? '' : 's'}.`)
+    })
+  }
+
+  const pickedDocs = () => sorted.filter((r) => picked.has(r.id))
 
   return (
     <>
       <div className="agronomy-filter-bar">
         <input className="agronomy-search-input" placeholder="Search field, area, variety, customer…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <select className="yields-source-select" value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
+          <option value="all">Any source</option>
+          <option value="spreadsheet">Workbook</option>
+          <option value="manual">Entered</option>
+          <option value="storage">Potato Storage</option>
+          <option value="agworld">Agworld</option>
+          <option value="none">No yield</option>
+        </select>
         <span className="contracts-sub">{fmt(sorted.length)} records · {fmt(s.acres)} ac with yield · avg {fmt(s.avg)}</span>
         <button onClick={() => download('yield-history.csv', toCsv(sorted, RECORD_COLS))}>Export CSV</button>
-        {canDelete && picked.size > 0 && <button className="yields-danger" disabled={busy} onClick={() => hide([...picked])}>Delete {picked.size} selected</button>}
-        {canDelete && deletedDocs.length > 0 && <button className={showDeleted ? 'active' : ''} onClick={() => setShowDeleted((v) => !v)}>Deleted ({deletedDocs.length})</button>}
+        {canDelete && deletedDocs.length > 0 && <button className={showDeleted ? 'active' : ''} onClick={() => setShowDeleted((v) => !v)}>Deleted ({fmt(deletedDocs.length)})</button>}
       </div>
+
+      {canDelete && sorted.length > 0 && (
+        <div className={`yields-bulk ${picked.size ? 'on' : ''}`}>
+          {picked.size === 0 ? (
+            <>
+              <span>Tick rows to delete them, or</span>
+              <button disabled={busy} onClick={() => setPicked(new Set(sorted.map((r) => r.id)))}>Select all {fmt(sorted.length)} matching</button>
+              <span className="contracts-sub" style={{ margin: 0 }}>Use the filters above (crop, years, fields, source…) to narrow what “matching” means.</span>
+            </>
+          ) : (
+            <>
+              <strong>{fmt(picked.size)} selected</strong>
+              {!allMatchingPicked && pagePicked && sorted.length > page.length && (
+                <button className="clear-sort-btn" disabled={busy} onClick={() => setPicked(new Set(sorted.map((r) => r.id)))}>Select all {fmt(sorted.length)} matching</button>
+              )}
+              <button className="yields-danger" disabled={busy} onClick={() => hide([...picked])}>Delete {fmt(picked.size)}</button>
+              <button className="yields-danger-outline" disabled={busy} onClick={() => erase(pickedDocs(), { confirmTyped: true })}>Erase permanently…</button>
+              <button className="clear-sort-btn" disabled={busy} onClick={() => setPicked(new Set())}>Clear selection</button>
+            </>
+          )}
+          {progress && (
+            <div className="yields-progress" role="status">
+              <span>{progress.label} {fmt(progress.done)} / {fmt(progress.total)}…</span>
+              <div className="contracts-bar"><div className="contracts-bar-fill" style={{ width: `${(progress.done / progress.total) * 100}%`, background: '#A32D2D' }} /></div>
+            </div>
+          )}
+        </div>
+      )}
       {err && <div className="agronomy-error-banner">{err}</div>}
+      {done && !progress && <div className="yields-ok" style={{ marginTop: 0, marginBottom: 10 }}>{done}</div>}
 
       {canDelete && showDeleted && (
         <div className="yields-card">
-          <div className="yields-card-title">Deleted records</div>
-          <p className="contracts-sub">Hidden from every chart and table, and kept hidden even if Agworld or Potato Storage sync data for them again. Restore puts a record back exactly as it was.</p>
+          <div className="yields-card-head">
+            <div>
+              <div className="yields-card-title">Deleted records ({fmt(deletedDocs.length)})</div>
+              <p className="contracts-sub" style={{ marginTop: 2 }}>Hidden from every chart and table, and kept hidden even if Agworld or Potato Storage sync data for them again. Restore puts a record back exactly as it was.</p>
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button disabled={busy} onClick={() => restore(deletedDocs.map((d) => d.id))}>Restore all</button>
+              <button className="yields-danger-outline" disabled={busy} onClick={() => erase(deletedDocs, { confirmTyped: true })}>Erase all…</button>
+            </div>
+          </div>
           <div className="table-scroll" style={{ maxHeight: 300, marginTop: 8 }}>
             <table className="contracts-table contracts-table-auto">
               <thead><tr><th>Field</th><th>Year</th><th>Crop</th><th className="hide-sm">Deleted</th><th /></tr></thead>
               <tbody>
-                {[...deletedDocs].sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0)).map((d) => (
+                {[...deletedDocs].sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0)).slice(0, 300).map((d) => (
                   <tr key={d.id}>
                     <td><strong>{d.fieldName || d.fieldKey}</strong></td><td>{d.year}</td><td><CropBadge crop={d.crop || (d.agworld && d.agworld.crop)} /></td>
                     <td className="hide-sm contracts-sub">{d.deletedBy || '—'}{d.deletedAt ? ` · ${new Date(d.deletedAt).toLocaleDateString()}` : ''}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      <button className="clear-sort-btn" disabled={busy} onClick={() => restore(d.id)}>Restore</button>{' '}
-                      <button className="clear-sort-btn yields-danger-text" disabled={busy} onClick={() => purge(d)}>Erase</button>
+                      <button className="clear-sort-btn" disabled={busy} onClick={() => restore([d.id])}>Restore</button>{' '}
+                      <button className="clear-sort-btn yields-danger-text" disabled={busy} onClick={() => erase([d], { confirmTyped: false })}>Erase</button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {deletedDocs.length > 300 && <p className="contracts-sub">Showing the 300 most recent. Restore all / Erase all cover all {fmt(deletedDocs.length)}.</p>}
         </div>
       )}
 
@@ -863,7 +961,7 @@ function RecordsView({ rows, canDelete, deletedDocs }) {
         <table className="contracts-table contracts-table-auto">
           <thead>
             <tr>
-              {canDelete && <th style={{ width: 30 }}><input type="checkbox" checked={allPicked} onChange={() => setPicked(allPicked ? new Set() : new Set(page.map((r) => r.id)))} aria-label="Select all shown" /></th>}
+              {canDelete && <th style={{ width: 30 }}><input type="checkbox" checked={pagePicked} onChange={() => setPicked((p) => { const n = new Set(p); page.forEach((r) => (pagePicked ? n.delete(r.id) : n.add(r.id))); return n })} aria-label="Select all shown" /></th>}
               {RECORD_COLS.map((c) => (
                 <th key={c.key} className={`agronomy-sortable ${c.num ? 'num' : ''} ${c.sm ? 'hide-sm' : ''}`}
                   onClick={() => setSort((p) => ({ key: c.key, dir: p.key === c.key ? -p.dir : (c.num ? -1 : 1) }))}>
@@ -880,7 +978,7 @@ function RecordsView({ rows, canDelete, deletedDocs }) {
                 {RECORD_COLS.map((c) => (
                   <td key={c.key} className={`${c.num ? 'num' : ''} ${c.sm ? 'hide-sm' : ''}`}>
                     {c.key === 'crop' ? <CropBadge crop={r.crop} />
-                      : c.key === '_source' ? (r._source === 'agworld' ? 'Agworld' : r._source === 'spreadsheet' ? 'Workbook' : r._source === 'manual' ? (r.entryGroup && r.entryGroup.combined ? 'Entered (combined)' : 'Entered') : r._source === 'storage' ? 'Potato Storage' : '—')
+                      : c.key === '_source' ? sourceLabel(r)
                         : c.f ? c.f(r[c.key]) : (r[c.key] ?? '—')}
                   </td>
                 ))}

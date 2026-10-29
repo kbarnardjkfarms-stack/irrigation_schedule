@@ -762,3 +762,12 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .yields-danger-text { color: #A32D2D; }
 .yields-row-del { border: none; background: none; color: #bbb; font-size: 16px; line-height: 1; padding: 0 4px; }
 .yields-row-del:hover { color: #A32D2D; }
+
+/* Mass delete bar on the Yields Records tab */
+.yields-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; background: #fff; border: 0.5px solid #ddd8cc; border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; color: #52514e; }
+.yields-bulk.on { background: #FBEDED; border-color: #E8B4B4; color: #2b2b26; }
+.yields-danger-outline { border-color: #A32D2D; color: #A32D2D; background: #fff; font-weight: 600; }
+.yields-progress { flex-basis: 100%; display: flex; align-items: center; gap: 10px; }
+.yields-progress span { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.yields-progress .contracts-bar { flex: 1; }
+.yields-source-select { font-family: inherit; font-size: 12px; padding: 5px 6px; border: 0.5px solid #ddd8cc; border-radius: 6px; background: #fff; }
