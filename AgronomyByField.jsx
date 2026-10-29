@@ -69,11 +69,7 @@ function targetForReading(type, metric, curveRows, sampleDate, plantDate) {
   if (!curveKey || !curveRows || !curveRows.length || !sampleDate || !plantDate) return metric.target
   const week = weeksBetween(sampleDate.toDate(), plantDate)
   if (week == null) return metric.target
-  const sorted = [...curveRows].sort((a, b) => a.week - b.week)
-  const row =
-    sorted.find((r) => r.week === week) ||
-    (week < sorted[0].week ? sorted[0] : sorted[sorted.length - 1])
-  return row[curveKey] || metric.target
+  return curveRangeForWeek(curveRows, week, curveKey) || metric.target
 }
 
 const STATUS_LABEL = { deficient: 'Below range', optimal: 'In range', excess: 'Above range' }
@@ -102,6 +98,21 @@ function metricValue(values, type, metric) {
   return undefined
 }
 
+// Range for a given week from a crop curve: that week's own entry when it
+// has one, otherwise the nearest week that does (ties go to the earlier
+// week). Weeks past the end of the sheet - e.g. potato week 17+, which only
+// has a stage note - therefore keep the last known range instead of losing
+// the band and falling back to the flat target.
+function curveRangeForWeek(curveRows, week, curveKey) {
+  let best = null
+  for (const r of curveRows) {
+    if (!r[curveKey]) continue
+    const d = Math.abs(r.week - week)
+    if (!best || d < best.d || (d === best.d && r.week < best.week)) best = { d, week: r.week, range: r[curveKey] }
+  }
+  return best ? best.range : null
+}
+
 // Compact hand-rolled line chart, no chart library - matches the rest of the
 // app's approach of hand-rolled SVG/table markup rather than a new dependency
 // for what's usually a handful of points per season.
@@ -121,7 +132,7 @@ function metricValue(values, type, metric) {
 // The x-axis is weeks since emergence, labeled with a handful of "Wk N"
 // ticks along the bottom - points alone (no axis) made it impossible to
 // tell which week a reading landed in.
-function Sparkline({ points, color, band, emptyMessage }) {
+function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect }) {
   if (points.length < 1) {
     return <div className="agronomy-chart-empty">{emptyMessage || 'No readings yet'}</div>
   }
@@ -189,15 +200,26 @@ function Sparkline({ points, color, band, emptyMessage }) {
           Wk {t}
         </text>
       ))}
+      {selectedWeek != null && selectedWeek >= minX && selectedWeek <= maxX && (
+        <line
+          x1={scaleX(selectedWeek)} y1={padT} x2={scaleX(selectedWeek)} y2={padT + plotH}
+          stroke="#555" strokeWidth="1" strokeDasharray="3 3"
+        />
+      )}
       <polyline points={path} fill="none" stroke={color} strokeWidth="2" />
       {points.map((p, i) => {
         const dot = (p.status && STATUS_COLOR[p.status]?.dot) || color
         const cy = scaleY(p.y)
+        const isSelected = selectedWeek === p.x
         // Label above the point, flipped below when there's no room at the top.
         const labelY = cy < padT + 9 ? cy + 11 : cy - 5
         return (
-          <g key={i}>
-            <circle cx={scaleX(p.x)} cy={cy} r="3.5" fill={dot} stroke="#fff" strokeWidth="1" />
+          <g key={i} onClick={() => onSelect && onSelect(p.x)} style={{ cursor: onSelect ? 'pointer' : 'default' }}>
+            <circle cx={scaleX(p.x)} cy={cy} r="9" fill="transparent" />
+            <circle
+              cx={scaleX(p.x)} cy={cy} r={isSelected ? 5.5 : 3.5} fill={dot}
+              stroke={isSelected ? '#222' : '#fff'} strokeWidth={isSelected ? 2 : 1}
+            />
             <text x={scaleX(p.x)} y={labelY} textAnchor="middle" className="agronomy-sparkline-value-label" fill={dot}>
               {fmtChartValue(p.y)}
             </text>
@@ -223,13 +245,9 @@ function buildBand(points, curveRows, curveKey, flatTarget) {
   const minX = Math.min(...xs), maxX = Math.max(...xs)
 
   if (curveRows && curveRows.length) {
-    const sorted = [...curveRows].sort((a, b) => a.week - b.week)
     const band = []
     for (let week = minX; week <= maxX; week++) {
-      const row =
-        sorted.find((r) => r.week === week) ||
-        (week < sorted[0].week ? sorted[0] : sorted[sorted.length - 1])
-      const range = row[curveKey]
+      const range = curveRangeForWeek(curveRows, week, curveKey)
       if (range) band.push({ x: week, low: range[0], high: range[1] })
     }
     return band.length ? band : null
@@ -307,23 +325,158 @@ export default function AgronomyByField({ fields }) {
 
   const nematodeSample = latestByType['nematode'] || null
 
-  // N Rec is the one Phase 2 nitrogen KPI available right now - a pure
-  // lookup against the field's own crop + current week from
-  // WEEKLY_CURVES_BY_CROP. N Applied / N Use / Total N Applied still need
-  // the Agworld applications sync (in progress separately) before they can
-  // show real numbers, so this tile is left out entirely for a crop with
-  // no curve defined yet rather than showing an empty placeholder for
-  // something that may never exist for that crop.
   const { flatTargets, curvesByKey } = useLiveAgronomyCriteria()
   const metricsByType = useMemo(() => mergeFlatTargets(METRICS_BY_TYPE, flatTargets), [flatTargets])
+  const curveRows = getCurveRows(curvesByKey, field?.cropName, field?.varietyName)
 
+  // Clicking a point on either chart picks a week; the tiles up top then
+  // show the readings as of that week. null = latest (the default view).
+  const [selectedWeek, setSelectedWeek] = useState(null)
+  useEffect(() => { setSelectedWeek(null) }, [fieldId])
+  const toggleWeek = (x) => setSelectedWeek((w) => (w === x ? null : x))
+
+  // The sample a tile shows for a type: the latest overall by default, or
+  // - once a week is picked - the latest one taken on or before that week,
+  // so the tile is never blank just because soil and petiole were sampled
+  // in different weeks (the tile says which date/week it's actually from).
+  function sampleAsOf(type) {
+    if (selectedWeek == null || !plantDate) return latestByType[type] || null
+    let found = null
+    samples.forEach((s) => {
+      if (s.type === type && s.receivedDt && weeksBetween(s.receivedDt.toDate(), plantDate) <= selectedWeek) found = s
+    })
+    return found
+  }
+
+  // N Rec is the one Phase 2 nitrogen KPI available right now - a pure
+  // lookup against the field's own crop/variety curve for the week being
+  // shown. N Applied / N Use / Total N Applied still need the Agworld
+  // applications sync (in progress separately) before they can show real
+  // numbers, so this tile is left out entirely for a crop with no curve
+  // defined yet.
+  const activeWeek = selectedWeek != null ? selectedWeek : weeksSinceEmergence
   const nRecRow = useMemo(() => {
-    const curveRows = getCurveRows(curvesByKey, field?.cropName, field?.varietyName)
-    if (!curveRows || weeksSinceEmergence == null) return null
-    return curveRows.find((r) => r.week === weeksSinceEmergence) || null
-  }, [curvesByKey, field, weeksSinceEmergence])
+    if (!curveRows || activeWeek == null) return null
+    return curveRows.find((r) => r.week === activeWeek) || null
+  }, [curveRows, activeWeek])
 
   const cropColor = field?.cropName ? (CROP_COLOR[field.cropName] || { bg: '#D3D1C7', fg: '#2C2C2A' }) : null
+
+  function renderTile(type, m) {
+    const sample = sampleAsOf(type)
+    const value = metricValue(sample?.values, type, m)
+    const target = targetForReading(type, m, curveRows, sample?.receivedDt, plantDate)
+    const status = statusFor(value, target)
+    const color = status ? STATUS_COLOR[status] : null
+    const sampleWeek = sample?.receivedDt && plantDate ? weeksBetween(sample.receivedDt.toDate(), plantDate) : null
+    return (
+      <div
+        key={type + m.key}
+        className="agronomy-kpi-card"
+        style={color ? { borderTop: `3px solid ${color.dot}` } : undefined}
+      >
+        <p className="agronomy-kpi-label">{SAMPLE_TYPE_LABEL[type]} {m.label}</p>
+        <p className="agronomy-kpi-value" style={color ? { color: color.fg } : undefined}>
+          {value != null ? value : '—'}
+          {value != null && <span className="agronomy-kpi-unit"> {m.unit}</span>}
+        </p>
+        <p className="agronomy-kpi-date">Target {target[0]}{'–'}{target[1]}</p>
+        {value != null && sample?.receivedDt && (
+          <p className="agronomy-kpi-date">
+            {fmtDate(sample.receivedDt)}
+            {sampleWeek != null ? ` · Wk ${sampleWeek}` : ''}
+            {selectedWeek != null && sampleWeek != null && sampleWeek !== selectedWeek ? ` (none in wk ${selectedWeek})` : ''}
+          </p>
+        )}
+        {status && (
+          <span className="agronomy-status-badge" style={{ background: color.bg, color: color.fg }}>
+            {STATUS_LABEL[status] || status}
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  function renderChartCard(type) {
+    const typeSamples = samples.filter((s) => s.type === type)
+    const metric = metricsByType[type][0]
+    const withValue = typeSamples
+      .map((s) => ({ s, y: metricValue(s.values, type, metric) }))
+      .filter(({ s, y }) => y != null && s.receivedDt)
+    const dated = plantDate
+      ? withValue.map(({ s, y }) => ({
+          x: weeksBetween(s.receivedDt.toDate(), plantDate),
+          y,
+          date: s.receivedDt
+        }))
+      : []
+    const points = dated.filter((p) => p.x != null && p.x >= IN_SEASON_WEEK_MIN && p.x <= IN_SEASON_WEEK_MAX)
+    // Say WHY a chart is empty instead of just "not enough samples".
+    let emptyMessage = `No ${SAMPLE_TYPE_LABEL[type].toLowerCase()} samples for this field yet`
+    if (typeSamples.length > 0 && withValue.length === 0) {
+      const keys = [...new Set(typeSamples.flatMap((s) => Object.keys(s.values || {})))]
+      emptyMessage = keys.length
+        ? `${typeSamples.length} sample(s), but none has a ${metric.label} value. Value names found: ${keys.join(', ')}`
+        : `${typeSamples.length} sample(s), but the lab sent no values yet`
+    } else if (withValue.length > 0 && !plantDate) {
+      emptyMessage = 'This field has no plant date for the selected season, so readings can’t be placed on the weekly chart'
+    } else if (withValue.length > 0 && points.length === 0) {
+      emptyMessage = `${withValue.length} reading(s), all outside this season (more than ${-IN_SEASON_WEEK_MIN} weeks before or ${IN_SEASON_WEEK_MAX} weeks after planting). Check the season selected above.`
+    }
+    const band = buildBand(points, curveRows, type === 'soil' ? 'soilNO3' : 'petioleNO3', metric.target)
+    // Each reading is judged against the range for ITS week, not
+    // today's: red = below range, green = in range, orange = above.
+    const judged = points.map((p) => {
+      const range = rangeAt(band, p.x)
+      return { ...p, range, status: range ? statusFor(p.y, range) : null }
+    })
+    return (
+      <div className="agronomy-chart-card">
+        <p className="agronomy-chart-title">
+          {SAMPLE_TYPE_LABEL[type]} {metric.label} vs weeks since emergence {'·'} click a point to see that week above
+        </p>
+        <Sparkline
+          points={judged}
+          color={type === 'soil' ? '#0F6E56' : '#3B6D11'}
+          band={band}
+          emptyMessage={emptyMessage}
+          selectedWeek={selectedWeek}
+          onSelect={toggleWeek}
+        />
+        {judged.length > 0 && (
+          <table className="agronomy-chart-readings">
+            <thead>
+              <tr><th>Date</th><th>Wk</th><th>Reading</th><th>Target</th></tr>
+            </thead>
+            <tbody>
+              {[...judged].reverse().map((p, i) => {
+                const c = p.status ? STATUS_COLOR[p.status] : null
+                return (
+                  <tr
+                    key={i}
+                    className={`agronomy-chart-reading-row${selectedWeek === p.x ? ' selected' : ''}`}
+                    onClick={() => toggleWeek(p.x)}
+                  >
+                    <td>{fmtDate(p.date)}</td>
+                    <td>{p.x}</td>
+                    <td>
+                      <span
+                        className="agronomy-reading-chip"
+                        style={c ? { background: c.bg, color: c.fg } : undefined}
+                      >
+                        {p.y}
+                      </span>
+                    </td>
+                    <td>{p.range ? `${p.range[0]}–${p.range[1]}` : '—'}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="agronomy-by-field">
@@ -349,12 +502,15 @@ export default function AgronomyByField({ fields }) {
 
       <div className="agronomy-kpi-grid">
         <div className="agronomy-kpi-card">
-          <p className="agronomy-kpi-label">Weeks since emergence</p>
-          <p className="agronomy-kpi-value">{weeksSinceEmergence != null ? weeksSinceEmergence : '—'}</p>
+          <p className="agronomy-kpi-label">{selectedWeek != null ? 'Showing week' : 'Weeks since emergence'}</p>
+          <p className="agronomy-kpi-value">{activeWeek != null ? activeWeek : '—'}</p>
+          {selectedWeek != null && (
+            <button className="agronomy-link-btn" onClick={() => setSelectedWeek(null)}>Back to latest</button>
+          )}
         </div>
         {nRecRow && (
           <div className="agronomy-kpi-card">
-            <p className="agronomy-kpi-label">N Rec (this week)</p>
+            <p className="agronomy-kpi-label">N Rec ({selectedWeek != null ? `wk ${selectedWeek}` : 'this week'})</p>
             <p className="agronomy-kpi-value">
               {nRecRow.nRec != null ? nRecRow.nRec : '—'}
               {nRecRow.nRec != null && <span className="agronomy-kpi-unit"> lbs/ac</span>}
@@ -362,112 +518,21 @@ export default function AgronomyByField({ fields }) {
             {nRecRow.stage && <p className="agronomy-kpi-date">{nRecRow.stage}</p>}
           </div>
         )}
-        {Object.entries(metricsByType).flatMap(([type, metrics]) =>
-          metrics
-            .filter((m) => m.target) // no target yet = not "at a glance" actionable; still visible in the sample table below
-            .map((m) => {
-              const sample = latestByType[type]
-              const value = metricValue(sample?.values, type, m)
-              const target = targetForReading(
-                type, m, getCurveRows(curvesByKey, field?.cropName, field?.varietyName), sample?.receivedDt, plantDate
-              )
-              const status = statusFor(value, target)
-              const color = status ? STATUS_COLOR[status] : null
-              return (
-                <div
-                  key={type + m.key}
-                  className="agronomy-kpi-card"
-                  style={color ? { borderTop: `3px solid ${color.dot}` } : undefined}
-                >
-                  <p className="agronomy-kpi-label">{SAMPLE_TYPE_LABEL[type]} {m.label}</p>
-                  <p className="agronomy-kpi-value" style={color ? { color: color.fg } : undefined}>
-                    {value != null ? value : '—'}
-                    {value != null && <span className="agronomy-kpi-unit"> {m.unit}</span>}
-                  </p>
-                  <p className="agronomy-kpi-date">
-                    Target {target[0]}{'\u2013'}{target[1]}
-                    {value != null && sample?.receivedDt ? ` · ${fmtDate(sample.receivedDt)}` : ''}
-                  </p>
-                  {status && (
-                    <span className="agronomy-status-badge" style={{ background: color.bg, color: color.fg }}>
-                      {STATUS_LABEL[status] || status}
-                    </span>
-                  )}
-                </div>
-              )
-            })
-        )}
       </div>
 
-      <div className="agronomy-charts">
-        {['soil', 'petiole'].map((type) => {
-          const typeSamples = samples.filter((s) => s.type === type)
-          const metric = metricsByType[type][0]
-          const withValue = typeSamples
-            .map((s) => ({ s, y: metricValue(s.values, type, metric) }))
-            .filter(({ s, y }) => y != null && s.receivedDt)
-          const dated = plantDate
-            ? withValue.map(({ s, y }) => ({
-                x: weeksBetween(s.receivedDt.toDate(), plantDate),
-                y,
-                date: s.receivedDt
-              }))
-            : []
-          const points = dated.filter((p) => p.x != null && p.x >= IN_SEASON_WEEK_MIN && p.x <= IN_SEASON_WEEK_MAX)
-          // Say WHY a chart is empty instead of just "not enough samples".
-          let emptyMessage = `No ${SAMPLE_TYPE_LABEL[type].toLowerCase()} samples for this field yet`
-          if (typeSamples.length > 0 && withValue.length === 0) {
-            const keys = [...new Set(typeSamples.flatMap((s) => Object.keys(s.values || {})))]
-            emptyMessage = keys.length
-              ? `${typeSamples.length} sample(s), but none has a ${metric.label} value. Value names found: ${keys.join(', ')}`
-              : `${typeSamples.length} sample(s), but the lab sent no values yet`
-          } else if (withValue.length > 0 && !plantDate) {
-            emptyMessage = 'This field has no plant date for the selected season, so readings can\u2019t be placed on the weekly chart'
-          } else if (withValue.length > 0 && points.length === 0) {
-            emptyMessage = `${withValue.length} reading(s), all outside this season (more than ${-IN_SEASON_WEEK_MIN} weeks before or ${IN_SEASON_WEEK_MAX} weeks after planting). Check the season selected above.`
-          }
-          const curveRows = getCurveRows(curvesByKey, field?.cropName, field?.varietyName)
-          const band = buildBand(points, curveRows, type === 'soil' ? 'soilNO3' : 'petioleNO3', metric.target)
-          // Each reading is judged against the range for ITS week, not
-          // today's: red = below range, green = in range, orange = above.
-          const judged = points.map((p) => {
-            const range = rangeAt(band, p.x)
-            return { ...p, range, status: range ? statusFor(p.y, range) : null }
-          })
-          return (
-            <div key={type} className="agronomy-chart-card">
-              <p className="agronomy-chart-title">{SAMPLE_TYPE_LABEL[type]} {metric.label} vs weeks since emergence</p>
-              <Sparkline points={judged} color={type === 'soil' ? '#0F6E56' : '#3B6D11'} band={band} emptyMessage={emptyMessage} />
-              {judged.length > 0 && (
-                <table className="agronomy-chart-readings">
-                  <thead>
-                    <tr><th>Date</th><th>Wk</th><th>Reading</th><th>Target</th></tr>
-                  </thead>
-                  <tbody>
-                    {[...judged].reverse().map((p, i) => {
-                      const c = p.status ? STATUS_COLOR[p.status] : null
-                      return (
-                        <tr key={i}>
-                          <td>{fmtDate(p.date)}</td>
-                          <td>{p.x}</td>
-                          <td>
-                            <span
-                              className="agronomy-reading-chip"
-                              style={c ? { background: c.bg, color: c.fg } : undefined}
-                            >
-                              {p.y}
-                            </span>
-                          </td>
-                          <td>{p.range ? `${p.range[0]}\u2013${p.range[1]}` : '\u2014'}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+      <div className="agronomy-split">
+        {['soil', 'petiole'].map((type) => (
+          <div key={type} className="agronomy-split-col">
+            <div className="agronomy-kpi-grid">
+              {(type === 'soil' ? ['soil', 'compost'] : ['petiole']).flatMap((t) =>
+                metricsByType[t]
+                  .filter((m) => m.target) // no target yet = not "at a glance" actionable; still visible in the sample table below
+                  .map((m) => renderTile(t, m))
               )}
             </div>
-          )
-        })}
+            {renderChartCard(type)}
+          </div>
+        ))}
       </div>
 
       {(annualSoilSample || nematodeSample) && (

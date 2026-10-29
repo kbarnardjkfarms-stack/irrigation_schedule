@@ -217,7 +217,7 @@ export function distanceFromTarget(value, target) {
 }
 
 // Display order for a soil (or petiole) sample's value columns, per Kent:
-// NO3, P, K, pH, excess lime, CEC, B, Zn, Mn first, then the base-saturation
+// NO3, P, K, pH, Salts, excess lime, CEC, B, Zn, Mn first, then the base-saturation
 // keys (anything starting with "BS"), then everything else, with the
 // recommendation keys (anything starting with "R") always last. Used by every
 // place that lists a sample's values so they all read in the same order.
@@ -232,6 +232,7 @@ const FIRST_GROUP_ALIASES = [
   ['p', 'phosphorus', 'olsenp', 'polsen'],
   ['k', 'potassium'],
   ['ph', 'soilph'],
+  ['salts', 'salt', 'solublesalts'],
   ['excesslime', 'lime', 'limeexcess', 'freelime', 'exlime'],
   ['cec'],
   ['b', 'boron'],
