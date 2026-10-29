@@ -11,6 +11,10 @@ import { SAMPLE_TYPE_LABEL, SAMPLE_TYPE_BADGE_COLOR } from './AgronomyConfig.js'
 // add: `export const functions = getFunctions(app)` there, matching
 // however `auth`/`db` are set up.
 const reassignSampleField = httpsCallable(functions, 'reassignSampleField')
+// Scanning every unmapped sample can take a while on a big backlog, so this
+// one gets the full 9 minutes the function itself is allowed instead of the
+// SDK's default 70 seconds.
+const rematchUnmappedSamples = httpsCallable(functions, 'rematchUnmappedSamples', { timeout: 540000 })
 
 function fmtDate(ts) {
   if (!ts) return ''
@@ -124,6 +128,50 @@ export default function AgronomyCleanup({ fields }) {
   const fuzzy = usePaginatedSampleQuery('fieldMatchType', 'fuzzy', false)
   const [savingId, setSavingId] = useState(null)
 
+  // Smart auto-match panel: preview what the matcher would link at a given
+  // confidence, then apply it. Preview never writes anything.
+  const [minScore, setMinScore] = useState('0.9')
+  const [matchBusy, setMatchBusy] = useState(false)
+  const [matchResult, setMatchResult] = useState(null)
+  const [matchError, setMatchError] = useState(null)
+  const [confirmingAll, setConfirmingAll] = useState(false)
+
+  async function runMatch(apply) {
+    setMatchBusy(true)
+    setMatchError(null)
+    try {
+      const res = await rematchUnmappedSamples({ apply, minScore: Number(minScore) })
+      setMatchResult(res.data)
+    } catch (err) {
+      console.error('rematchUnmappedSamples failed:', err)
+      setMatchError(err.message || 'Auto-match failed.')
+    } finally {
+      setMatchBusy(false)
+    }
+  }
+
+  // Confirms every suggested match currently on screen (one page, at most
+  // PAGE_SIZE) - same per-sample call as the individual Confirm button.
+  async function confirmAllShown() {
+    if (!window.confirm(`Confirm all ${fuzzy.items.length} suggested matches shown?`)) return
+    setConfirmingAll(true)
+    const batch = [...fuzzy.items]
+    try {
+      for (let i = 0; i < batch.length; i += 10) {
+        await Promise.all(
+          batch.slice(i, i + 10).map((s) =>
+            reassignSampleField({ sampleId: s.id, fieldId: s.fieldId }).then(() => fuzzy.removeItem(s.id))
+          )
+        )
+      }
+    } catch (err) {
+      console.error('confirm all failed:', err)
+      window.alert('Some matches could not be confirmed - try again.')
+    } finally {
+      setConfirmingAll(false)
+    }
+  }
+
   const fieldNameById = useMemo(() => {
     const map = {}
     fields.forEach((f) => { map[f.id] = f.name })
@@ -164,12 +212,83 @@ export default function AgronomyCleanup({ fields }) {
         </p>
       )}
 
+      <p className="agronomy-section-label">Smart auto-match</p>
+      <div className="agronomy-automatch">
+        <div className="agronomy-automatch-controls">
+          <label>
+            Link when at least{' '}
+            <select value={minScore} onChange={(e) => { setMinScore(e.target.value); setMatchResult(null) }}>
+              <option value="0.95">95% alike</option>
+              <option value="0.9">90% alike</option>
+              <option value="0.85">85% alike</option>
+              <option value="0.8">80% alike</option>
+            </select>
+          </label>
+          <button disabled={matchBusy} onClick={() => runMatch(false)}>
+            {matchBusy ? 'Working...' : 'Preview'}
+          </button>
+          {matchResult && !matchResult.applied && matchResult.linkableSamples > 0 && (
+            <button disabled={matchBusy} onClick={() => runMatch(true)}>
+              Link {matchResult.linkableSamples} samples
+            </button>
+          )}
+        </div>
+        <p className="agronomy-targets-hint">
+          Ignores words like "soil" and years, treats "SOUTH" and "S" as the same, forgives typos, and never links
+          when a direction or number differs (WILSON N will not match WILSON S).
+        </p>
+        {matchError && <p className="agronomy-error-banner">{matchError}</p>}
+        {matchResult && (
+          <>
+            <p className="agronomy-automatch-summary">
+              {matchResult.applied
+                ? `Linked ${matchResult.linkedSamples} samples. `
+                : ''}
+              {matchResult.totalUnmappedSamples} unmapped samples under {matchResult.uniqueLabels} different labels;{' '}
+              {matchResult.applied
+                ? 'the rest still need a manual pick below.'
+                : `${matchResult.linkableLabels} labels (${matchResult.linkableSamples} samples) clear ${Math.round(matchResult.threshold * 100)}%.`}
+            </p>
+            {matchResult.rows.length > 0 && (
+              <div className="agronomy-automatch-table-wrap">
+                <table className="agronomy-cleanup-table">
+                  <thead>
+                    <tr><th>Lab label</th><th>Samples</th><th>Best match</th><th>Alike</th><th>Runner-up</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    {matchResult.rows.map((r, i) => (
+                      <tr key={i}>
+                        <td>{r.label}</td>
+                        <td>{r.sampleCount}</td>
+                        <td>{r.fieldName || '\u2014'}</td>
+                        <td>{r.score != null ? `${Math.round(r.score * 100)}%` : '\u2014'}</td>
+                        <td>{r.runnerUp ? `${r.runnerUp.fieldName} (${Math.round(r.runnerUp.score * 100)}%)` : '\u2014'}</td>
+                        <td>
+                          <span className={r.willLink ? 'agronomy-automatch-yes' : 'agronomy-automatch-no'}>
+                            {matchResult.applied
+                              ? (r.willLink ? 'Linked' : 'Left for you')
+                              : (r.willLink ? 'Will link' : 'Too uncertain')}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
       {fuzzy.items.length > 0 && (
         <>
           <p className="agronomy-section-label">Suggested matches to confirm ({fuzzy.items.length}{fuzzy.hasMore ? '+' : ''})</p>
+          <button className="agronomy-load-more" disabled={confirmingAll} onClick={confirmAllShown}>
+            {confirmingAll ? 'Confirming...' : `Confirm all ${fuzzy.items.length} shown`}
+          </button>
           <table className="agronomy-cleanup-table">
             <thead>
-              <tr><th>Date</th><th>Type</th><th>Label</th><th>Suggested field</th><th></th></tr>
+              <tr><th>Date</th><th>Type</th><th>Label</th><th>Suggested field</th><th>Alike</th><th></th></tr>
             </thead>
             <tbody>
               {fuzzy.items.map((s) => (
@@ -178,6 +297,7 @@ export default function AgronomyCleanup({ fields }) {
                   <td><TypeBadge type={s.type} /></td>
                   <td>{s.rawFieldLabel || '—'}</td>
                   <td>{fieldNameById[s.fieldId] || s.fieldId}</td>
+                  <td>{s.fuzzyScore != null ? `${Math.round(s.fuzzyScore * 100)}%` : '\u2014'}</td>
                   <td>
                     <div className="agronomy-cleanup-actions">
                       <button disabled={savingId === s.id} onClick={() => handleAssign(s.id, s.fieldId, fuzzy.removeItem)}>
