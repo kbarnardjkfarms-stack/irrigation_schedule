@@ -604,25 +604,56 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .agronomy-automatch-yes { color: #2E8B3E; font-weight: 600; }
 .agronomy-automatch-no { color: #888; }
 
-/* By Field: soil tiles + chart on the left, petiole tiles + chart on the
-   right; clicking a point or a reading row picks that week for the tiles. */
-.agronomy-split {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 16px;
-  margin-bottom: 16px;
+/* ------------------------------------------------------------------
+   Contracts module (Contracts.jsx). Reuses the .agronomy-* filter bar,
+   view toggle, KPI cards and error banner; only what's new lives here.
+   ------------------------------------------------------------------ */
+.contracts-table { min-width: 0; table-layout: fixed; font-size: 12px; }
+.contracts-table th { text-align: left; color: #555; font-weight: 500; background: #f4f2ec; position: sticky; top: 0; z-index: 2; border-bottom: 0.5px solid #ddd8cc; }
+.contracts-table td { border-bottom: 0.5px solid #eee9de; vertical-align: middle; overflow: hidden; text-overflow: ellipsis; }
+.contracts-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.contracts-table tfoot td { background: #f4f2ec; border-bottom: none; }
+.contracts-table input[type="checkbox"] { margin: 0; width: 16px; height: 16px; }
+.contracts-crop-row { cursor: pointer; }
+.contracts-crop-row:hover td { background: #faf8f3; }
+.contracts-variety-row td { color: #555; font-size: 11px; background: #fcfbf8; }
+.contracts-row-selected td { background: #f2f7ee; }
+.contracts-caret { display: inline-block; width: 12px; color: #888; }
+.contracts-bar { height: 8px; background: #ebe7dc; border-radius: 4px; overflow: hidden; }
+.contracts-bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s ease; }
+.contracts-sub { font-size: 11px; color: #888; margin-top: 3px; }
+.contracts-hint { font-size: 11px; color: #888; margin: 10px 2px; }
+.contracts-empty { color: #888; font-size: 12px; padding: 16px 6px; }
+.contracts-readonly { font-size: 11px; color: #854F0B; background: #FAEEDA; padding: 3px 8px; border-radius: 4px; }
+.contracts-link { border: none; background: none; padding: 0; color: #185FA5; text-decoration: underline; font-size: 12px; }
+.contracts-row-select { width: 100%; max-width: 260px; font-size: 12px; padding: 4px; border-radius: 6px; border: 0.5px solid #ddd8cc; background: #fff; }
+
+.contracts-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.contracts-card { background: #fff; border: 0.5px solid #ddd8cc; border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; }
+.contracts-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.contracts-card-title { font-weight: 600; font-size: 14px; }
+.contracts-status { font-size: 10px; font-weight: 600; border: 1px solid; border-radius: 10px; padding: 1px 8px; white-space: nowrap; }
+.contracts-card-nums { display: flex; justify-content: space-between; font-size: 12px; margin: 6px 0 2px; font-variant-numeric: tabular-nums; }
+.contracts-card-actions { display: flex; gap: 6px; margin-top: auto; padding-top: 10px; }
+.contracts-notes-text { font-size: 11px; color: #555; background: #f7f5f0; border-radius: 6px; padding: 6px 8px; margin-top: 6px; white-space: pre-wrap; }
+
+.contracts-form { max-width: 640px; margin: 0 0 14px; }
+.contracts-form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin: 12px 0 4px; }
+.contracts-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: #666; }
+.contracts-form input, .contracts-form select, .contracts-form textarea {
+  font-family: inherit; font-size: 13px; padding: 7px 8px; border: 0.5px solid #ddd8cc; border-radius: 6px; background: #fff; color: #2b2b26;
 }
-.agronomy-split-col { min-width: 0; }
-.agronomy-split-col .agronomy-kpi-grid { margin-bottom: 10px; }
-.agronomy-chart-reading-row { cursor: pointer; }
-.agronomy-chart-reading-row:hover { background: #ebe7da; }
-.agronomy-chart-reading-row.selected { background: #e3dcc6; font-weight: 600; }
-.agronomy-link-btn {
-  background: none;
-  border: none;
-  color: #0F6E56;
-  font-size: 10px;
-  padding: 2px 0 0;
-  cursor: pointer;
-  text-decoration: underline;
+.contracts-notes { margin: 8px 0; }
+.contracts-variety-picks { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 6px; }
+.contracts-variety-picks label { flex-direction: row; align-items: center; gap: 5px; font-size: 12px; color: #2b2b26; cursor: pointer; }
+.contracts-variety-picks input { margin: 0; }
+
+.mode-bar select { font-size: 12px; padding: 5px 6px; border-radius: 6px; border: none; max-width: 240px; }
+
+.contracts-table.contracts-table-auto { table-layout: auto; }
+.contracts-table-auto td:last-child { min-width: 150px; }
+@media (max-width: 700px) {
+  .contracts-table { width: 100%; min-width: 560px; font-size: 11px; }
+  .contracts-table.contracts-table-auto { min-width: 0; }
+  .contracts-table .hide-sm { display: none; }
 }

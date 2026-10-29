@@ -17,6 +17,7 @@ import Login from './Login.jsx'
 import PotatoStorage from './PotatoStorage.jsx'
 import Users from './Users.jsx'
 import Agronomy from './Agronomy.jsx'
+import Contracts from './Contracts.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
 
@@ -162,7 +163,7 @@ export default function App() {
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
   const [userProfile, setUserProfile] = useState(null)
-  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', or 'agronomy' — more modules join this list later
+  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', or 'contracts' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
   const [online, setOnline] = useState(navigator.onLine)
@@ -342,6 +343,12 @@ export default function App() {
   // manager only. Deliberately excludes Irrigation manager and Irrigator,
   // unlike canEditField()'s farm-scoped roles above.
   const canSeeAgronomy = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager'
+
+  // Mirrors firestore.rules' canViewContracts() + hasModule('contracts'):
+  // Admin/Owner edit, Farm manager view-only. A profile with no modules
+  // list keeps everything its role allows.
+  const contractsModuleOn = !userProfile || !Array.isArray(userProfile.modules) || userProfile.modules.includes('contracts')
+  const canSeeContracts = (userRole === 'admin' || userRole === 'owner') || (userRole === 'farm_manager' && contractsModuleOn)
 
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
@@ -706,11 +713,34 @@ export default function App() {
               <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Agronomy</div>
             </div>
           )}
+          {canSeeContracts && (
+            <div
+              onClick={() => setPage('contracts')}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            >
+              <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#F6EBD3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="56" height="56" viewBox="0 0 48 48">
+                  <defs>
+                    <linearGradient id="contractsDocGradient" x1="10%" y1="0%" x2="90%" y2="100%">
+                      <stop offset="0%" stopColor="#FFF6E2" />
+                      <stop offset="100%" stopColor="#F2D9A6" />
+                    </linearGradient>
+                  </defs>
+                  <path d="M12 5h17l8 8v28a2 2 0 0 1-2 2H12a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" fill="url(#contractsDocGradient)" stroke="#9A6A12" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M29 5v8h8" fill="none" stroke="#9A6A12" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M15 19h16M15 24h16M15 29h9" stroke="#9A6A12" strokeWidth="1.8" strokeLinecap="round" />
+                  <path d="M25 37c2-3 4-3 5-1s3 1 5-2" fill="none" stroke="#3c5a3f" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </div>
+              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Contracts</div>
+            </div>
+          )}
         </div>
       )}
       {page === 'potato-storage' && <PotatoStorage />}
       {page === 'users' && <Users />}
       {page === 'agronomy' && canSeeAgronomy && <Agronomy userRole={userRole} />}
+      {page === 'contracts' && canSeeContracts && <Contracts userRole={userRole} />}
       {page === 'irrigation' && (
         <>
           {view === 'live-data' && <LiveData />}

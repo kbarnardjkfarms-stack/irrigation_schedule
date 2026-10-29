@@ -38,12 +38,17 @@ service cloud.firestore {
     function canViewAgronomy() {
       return isAdminOrOwner() || myRole() == 'farm_manager';
     }
+    // Contracts module - same audience as Agronomy (Admin, Owner, Farm
+    // manager can view); writes are Admin/Owner only, see the match blocks.
+    function canViewContracts() {
+      return isAdminOrOwner() || myRole() == 'farm_manager';
+    }
     // Module access. A profile may carry a `modules` list (e.g.
     // ['irrigation', 'potato-storage']) saying which AIO modules that person
     // can use at all. A profile with NO `modules` field keeps exactly what
     // its role already allowed, so deploying this changes nothing for
     // anyone until an Admin actually sets a list. Admin/Owner always have
-    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy'.
+    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts'.
     // This is the real enforcement — hiding a tile in the UI is only
     // cosmetic, since anyone could still query Firestore directly.
     function hasModule(m) {
@@ -236,6 +241,21 @@ service cloud.firestore {
     match /customerViews/{key} {
       allow read: if signedIn() && (hasModule('potato-storage') || (isCustomer() && key in myData().get('customerKeys', [])));
       allow write: if signedIn() && hasModule('potato-storage');
+    }
+    // Contracts module — processor / beet-share / corn / onion contracts
+    // and which whole fields are allocated to each (see Contracts.jsx).
+    // Same audience as Agronomy: Admin, Owner and Farm manager can read
+    // (gated by the 'contracts' module like everything else); only Admin
+    // and Owner can write. contractAllocations docs are keyed
+    // "{seasonId}__{fieldId}", so a field can only be on one contract per
+    // season.
+    match /contracts/{contractId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow write: if signedIn() && isAdminOrOwner();
+    }
+    match /contractAllocations/{allocationId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow write: if signedIn() && isAdminOrOwner();
     }
     match /potatoStorage/{document} {
       allow read, write: if signedIn() && hasModule('potato-storage');
