@@ -235,10 +235,13 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, 
         return (
           <g key={`b${i}`} onClick={() => onSelect && onSelect(p.x)} style={{ cursor: onSelect ? 'pointer' : 'default' }}>
             <rect x={scaleX(p.x) - barW / 2} y={top} width={barW} height={Math.max(1, base - top)}
-              fill={secondary.color} fillOpacity={selectedWeek === p.x ? 0.9 : 0.55} />
-            <text x={scaleX(p.x)} y={top - 2} textAnchor="middle" fontSize="6.5" fontWeight="600" fill={secondary.color}>
-              {fmtChartValue(p.y)}
-            </text>
+              fill={(secondary.byStatus && p.status && STATUS_COLOR[p.status]?.dot) || secondary.color}
+              fillOpacity={selectedWeek === p.x ? 0.85 : (secondary.byStatus ? 0.38 : 0.55)} />
+            {(secondary.barLabels !== false || selectedWeek === p.x) && (
+              <text x={scaleX(p.x)} y={top - 2} textAnchor="middle" fontSize="6.5" fontWeight="600" fill="#444">
+                {fmtChartValue(p.y)}
+              </text>
+            )}
             <title>{secondary.name}: {p.y} {secondary.unit || ''} (wk {p.x})</title>
           </g>
         )
@@ -613,17 +616,25 @@ export default function AgronomyByField({ fields }) {
     if (type === 'soil') {
       const mv = moistureJudged.map((p) => p.y)
       if (mv.length) {
+        // Bars coloured by status (red below / green in range / orange
+        // above); right axis runs 50-100% unless a reading falls outside.
+        const lo = Math.min(50, Math.floor(Math.min(...mv) - 2))
+        const hi = Math.max(100, Math.ceil(Math.max(...mv)))
         secondary = {
-          kind: 'line', color: '#1F6FB2', name: 'Field moisture', unit: '%',
-          points: moistureJudged,
-          lo: Math.floor(Math.min(MOISTURE_TARGET[0], ...mv) - 4),
-          hi: Math.ceil(Math.max(MOISTURE_TARGET[1], ...mv) + 4),
+          kind: 'bars', color: '#1F6FB2', name: 'Field moisture', unit: '%',
+          points: moistureJudged, byStatus: true, barLabels: false,
+          lo, hi,
           refLines: MOISTURE_TARGET,
-          labels: MOISTURE_TARGET.map((v) => ({ v, text: `${v}%` }))
+          labels: [lo, ...MOISTURE_TARGET, hi].map((v) => ({ v, text: `${v}%` }))
         }
       }
       secondaryNote = secondary
-        ? <><span style={{ color: '#1F6FB2' }}>{'◆'} Field moisture % (right axis, dashed lines {MOISTURE_TARGET[0]}{'–'}{MOISTURE_TARGET[1]})</span></>
+        ? <span style={{ color: '#555' }}>
+            Bars = field moisture % (right axis):{' '}
+            <span style={{ color: STATUS_COLOR.deficient.dot }}>{'■'} below {MOISTURE_TARGET[0]}</span>{' '}
+            <span style={{ color: STATUS_COLOR.optimal.dot }}>{'■'} {MOISTURE_TARGET[0]}{'–'}{MOISTURE_TARGET[1]}</span>{' '}
+            <span style={{ color: STATUS_COLOR.excess.dot }}>{'■'} above {MOISTURE_TARGET[1]}</span>
+          </span>
         : <span style={{ color: '#888' }}>Field moisture: no scouting data for this season yet (Scouting tab)</span>
     } else if (type === 'petiole') {
       const mx = nWeekly.length ? Math.max(...nWeekly.map((p) => p.y)) : 0
