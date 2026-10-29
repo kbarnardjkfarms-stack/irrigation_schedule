@@ -492,23 +492,32 @@ function computeZoneStats(bay, zone, zoneData) {
   // haul, etc.) — when set, this is what "current cwt" means everywhere;
   // the pipe-derived number is still shown alongside it for reference,
   // never silently discarded.
+  // "Measured cwt" (stored as actualCwtOverride) is the weighed total for the
+  // field. Everything is measured against it when set; otherwise the
+  // estimate (cwt/pipe × pipes) stands in.
   const hasOverride = zone.actualCwtOverride != null && zone.actualCwtOverride !== "";
-  const currentCwt = hasOverride ? Number(zone.actualCwtOverride) : calculatedCwt;
+  const measuredCwt = hasOverride ? Number(zone.actualCwtOverride) : null;
   const capacityCwt = pipeCount * cwtPerPipe;
-  const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
+  const initialCwt = capacityCwt; // estimated fill: cwt/pipe × pipes
+  const baseCwt = measuredCwt != null ? measuredCwt : initialCwt;
   const runs = zoneData?.cwtRuns || [];
-  // Logged loads (actual weights that left the building) are kept only to
-  // measure shrink. "Run out" itself is pipe-based: pipes hauled out ×
-  // the cwt the building was said to hold per pipe.
+  // Run out comes from pipe hauled out. With a measured total it is that
+  // share of the measured cwt (so it can never exceed it); without one it
+  // is pipes hauled × cwt/pipe. Logged loads (actual weights) are only for
+  // shrink: shrink = run out − logged loads.
   const loggedRun = runs.reduce((s, r) => s + Number(r.cwt || 0), 0);
-  const totalRun = pipesEmpty * cwtPerPipe;
-  const initialCwt = zone.initialFillCwt ?? capacityCwt;
-  const shrinkCwt = initialCwt - (loggedRun + currentCwt);
-  const shrinkPct = initialCwt > 0 ? shrinkCwt / initialCwt : 0;
+  const pipeRunOut = pipesEmpty * cwtPerPipe;
+  const totalRun = measuredCwt != null
+    ? Math.min(measuredCwt, pipeCount > 0 ? measuredCwt * (pipesEmpty / pipeCount) : 0)
+    : pipeRunOut;
+  const currentCwt = measuredCwt != null ? Math.max(0, measuredCwt - totalRun) : calculatedCwt;
+  const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
+  const shrinkCwt = totalRun - loggedRun;
+  const shrinkPct = baseCwt > 0 ? shrinkCwt / baseCwt : 0;
   return {
     pipeCount, pipesEmpty, pipesFilled, fullMap, topFullMap, hasTopRange, cwtPerPipe,
     calculatedCwt, hasOverride, currentCwt, capacityCwt, fillPct,
-    totalRun, loggedRun, initialCwt, shrinkCwt, shrinkPct, runs,
+    totalRun, loggedRun, initialCwt, baseCwt, measuredCwt, shrinkCwt, shrinkPct, runs,
     lastCheckDate: pipeLog.length ? pipeLog[pipeLog.length - 1].date : null,
   };
 }
@@ -519,7 +528,7 @@ function computeBayStats(bay, bayData) {
     const zs = computeZoneStats(bay, z, bayData?.zones?.[z.id]);
     zoneStats[z.id] = zs;
     currentCwt += zs.currentCwt; zoneCapacityCwt += zs.capacityCwt;
-    totalRun += zs.totalRun; loggedRun += zs.loggedRun; initialCwt += zs.initialCwt; shrinkCwt += zs.shrinkCwt;
+    totalRun += zs.totalRun; loggedRun += zs.loggedRun; initialCwt += zs.baseCwt; shrinkCwt += zs.shrinkCwt;
   });
   // A bay's own declared pipe count + cwt/pipe is its physical capacity —
   // known the moment the bay is created, even before any field is assigned
@@ -1448,7 +1457,7 @@ function Scene3D({ bays, statsById, selectedId, onSelect, mode = "yard", buildin
             </div>
             <div style={{ color: "#9aa4b8" }}>{zone.variety} · {zone.customer} · {zs.pipesFilled}/{zone.pipeCount} pipe{pipeSuffix(zone)} · {Math.round(zs.fillPct * 100)}%</div>
             <div style={{ color: "#f2c14e", fontWeight: 700, marginTop: 2 }}>
-              {fmt(zs.currentCwt)} cwt{zs.hasOverride ? " (manual)" : ""}
+              {fmt(zs.currentCwt)} cwt{zs.hasOverride ? " (measured)" : ""}
             </div>
           </div>
         );
@@ -1885,7 +1894,7 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
         <Field label="to">
           <input type="number" min="1" max={bayPipeBound || undefined} value={topPipeTo} onChange={(e) => setTopPipeTo(e.target.value)} style={{ ...inputStyle, width: 90 }} placeholder="e.g. 12" />
         </Field>
-        <Field label="Actual cwt override (optional)">
+        <Field label="Measured cwt (optional)">
           <input type="number" value={actualCwt} onChange={(e) => setActualCwt(e.target.value)} style={{ ...inputStyle, width: 130 }} placeholder="e.g. 42000" />
         </Field>
         <Button onClick={submit}><Plus size={14} /> Add product</Button>
@@ -1893,8 +1902,8 @@ function AddZoneForm({ bay, varieties, customers, onAdd, nextName = "Field 1" })
       <div style={{ fontSize: 11, color: "#6f7890" }}>
         Bottom pipe is the field's full base footprint (drives cwt). Top pipe is only the range still exposed at the
         top of the pile, if it's narrower than the base — leave blank and the 3D mound just uses a standard taper.
-        Actual cwt overrides the pipe-count math for this field's inventory total (e.g. to correct for shrink not yet
-        reflected in the log) — the calculated number stays visible for reference.
+        Measured cwt is the weighed total for this field. When set, run out can't exceed it and shrink is compared
+        to it; otherwise the estimate (cwt/pipe × pipes) is used.
       </div>
       {overlap.length > 0 && (
         <div style={{ fontSize: 11, color: "#e0a63e" }}>Heads up: pipe {formatPipeRanges([{ from: Math.min(...overlap), to: Math.max(...overlap) }])} is already assigned to another field in this bay.</div>
@@ -3026,28 +3035,21 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
           <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
             <StatBlock label={`${zone.name}${zone.customerFieldCode ? ` — ${zone.customerFieldCode}` : ""} inventory`} value={`${fmt(zs.currentCwt)} cwt`}
               sub={zs.hasOverride
-                ? `manual · calculated from checks: ${fmt(zs.calculatedCwt)} cwt · ${zs.pipesFilled}/${zone.pipeCount} pipe${pipeSuffix(zone)}`
+                ? `measured ${fmt(zs.measuredCwt)} − run out · ${zs.pipesFilled}/${zone.pipeCount} pipe${pipeSuffix(zone)}`
                 : `${Math.round(zs.fillPct * 100)}% of ${fmt(zs.capacityCwt)} cwt · ${zs.pipesFilled}/${zone.pipeCount} pipe${pipeSuffix(zone)}`}
               accent="#f2c14e" />
             <div>
-              <div style={{ fontSize: 10.5, letterSpacing: 1, textTransform: "uppercase", color: "#8790a3" }}>Actual cwt override</div>
+              <div style={{ fontSize: 10.5, letterSpacing: 1, textTransform: "uppercase", color: "#8790a3" }}>Measured cwt</div>
               <EditableInline
-                value={zone.actualCwtOverride ?? ""} type="number" disabled={readOnly} width={110}
-                placeholder={fmt(zs.calculatedCwt)}
+                value={zone.actualCwtOverride ?? ""} type="number" disabled={readOnly} width={110} allowClear
+                placeholder={fmt(zs.initialCwt)}
                 onSave={(v) => onUpdateZoneMeta(bay.id, zone.id, { actualCwtOverride: v })}
               />
-            </div>
-            <div>
-              <div style={{ fontSize: 10.5, letterSpacing: 1, textTransform: "uppercase", color: "#8790a3" }}>Initial fill cwt</div>
-              <EditableInline
-                value={zone.initialFillCwt ?? ""} type="number" disabled={readOnly} width={110}
-                placeholder={fmt(zs.capacityCwt)}
-                onSave={(v) => onUpdateZoneMeta(bay.id, zone.id, { initialFillCwt: v })}
-              />
-              <div style={{ fontSize: 10, color: "#5b6478", marginTop: 3, maxWidth: 140 }}>
-                Shrink is measured against this — set it once at fill time, otherwise it defaults to full bin capacity.
+              <div style={{ fontSize: 10, color: "#5b6478", marginTop: 3, maxWidth: 160 }}>
+                Weighed total. Run out can't exceed it; shrink is compared to it.
               </div>
             </div>
+            <StatBlock label="Initial fill (estimate)" value={`${fmt(zs.initialCwt)} cwt`} sub="cwt/pipe × pipes" />
             <div>
               <div style={{ fontSize: 10.5, letterSpacing: 1, textTransform: "uppercase", color: "#8790a3" }}>Variety</div>
               <select value={zone.variety} disabled={readOnly} onChange={(e) => onUpdateZoneVariety(bay.id, zone.id, e.target.value)}
@@ -4776,10 +4778,10 @@ function buildLedger(bays, statsById, buildingsById, locationsById) {
       rows.push({ ...base, customer: zone.customer, metric: "Shrink", cwt: zs.shrinkCwt });
       // Started-with cwt, projected shrink, and $ value (see bayEconomics).
       const eco = bayEconomics(bay, building);
-      const projShrink = eco.projectedShrinkPct != null ? zs.initialCwt * eco.projectedShrinkPct / 100 : 0;
-      rows.push({ ...base, customer: zone.customer, metric: "Initial", cwt: zs.initialCwt });
+      const projShrink = eco.projectedShrinkPct != null ? zs.baseCwt * eco.projectedShrinkPct / 100 : 0;
+      rows.push({ ...base, customer: zone.customer, metric: "Initial", cwt: zs.baseCwt });
       rows.push({ ...base, customer: zone.customer, metric: "Proj Shrink", cwt: projShrink });
-      if (eco.projectedShrinkPct != null) rows.push({ ...base, customer: zone.customer, metric: "Proj Rated", cwt: zs.initialCwt });
+      if (eco.projectedShrinkPct != null) rows.push({ ...base, customer: zone.customer, metric: "Proj Rated", cwt: zs.baseCwt });
       if (eco.valuePerCwt != null) {
         rows.push({ ...base, customer: zone.customer, metric: "Value Proj", cwt: Math.max(0, zs.currentCwt - projShrink) * eco.valuePerCwt });
         rows.push({ ...base, customer: zone.customer, metric: "Value Actual", cwt: Math.max(0, zs.currentCwt) * eco.valuePerCwt });
