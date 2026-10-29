@@ -78,6 +78,30 @@ function targetForReading(type, metric, curveRows, sampleDate, plantDate) {
 
 const STATUS_LABEL = { deficient: 'Below range', optimal: 'In range', excess: 'Above range' }
 
+// Looks up a metric's value in a sample's `values`, tolerating the lab
+// spelling a key differently than AgronomyConfig.js does ("NO3-N" vs "no3",
+// "Phosphorus" vs "p", "P (%)"...). Exact key first, then a case/punctuation/
+// unit-insensitive match against the key and a few known aliases.
+const VALUE_ALIASES = {
+  'soil.NO3': ['no3', 'no3n', 'nitrate', 'nitraten'],
+  'petiole.no3': ['no3', 'no3n', 'nitrate', 'nitraten', 'petioleno3', 'petiolenitrate'],
+  'petiole.p': ['p', 'phosphorus', 'ppercent', 'petiolep'],
+  'petiole.k': ['k', 'potassium', 'kpercent', 'petiolek'],
+  'petiole.sulfur': ['s', 'sulfur', 'sulphur', 'spercent', 'petioles']
+}
+function simplifyKey(k) {
+  return String(k).toLowerCase().replace(/\([^)]*\)|\[[^\]]*\]/g, '').replace(/[^a-z0-9]/g, '').replace(/(ppm|percent|pct)$/, '')
+}
+function metricValue(values, type, metric) {
+  if (!values) return undefined
+  if (values[metric.key] != null) return values[metric.key]
+  const wanted = new Set([simplifyKey(metric.key), ...(VALUE_ALIASES[`${type}.${metric.key}`] || [])])
+  for (const [k, v] of Object.entries(values)) {
+    if (v != null && wanted.has(simplifyKey(k))) return v
+  }
+  return undefined
+}
+
 // Compact hand-rolled line chart, no chart library - matches the rest of the
 // app's approach of hand-rolled SVG/table markup rather than a new dependency
 // for what's usually a handful of points per season.
@@ -97,13 +121,19 @@ const STATUS_LABEL = { deficient: 'Below range', optimal: 'In range', excess: 'A
 // The x-axis is weeks since emergence, labeled with a handful of "Wk N"
 // ticks along the bottom - points alone (no axis) made it impossible to
 // tell which week a reading landed in.
-function Sparkline({ points, color, band }) {
-  if (points.length < 2) {
-    return <div className="agronomy-chart-empty">Not enough samples yet</div>
+function Sparkline({ points, color, band, emptyMessage }) {
+  if (points.length < 1) {
+    return <div className="agronomy-chart-empty">{emptyMessage || 'No readings yet'}</div>
   }
   const xs = points.map((p) => p.x)
   const ys = points.map((p) => p.y)
-  const sortedBand = band && band.length ? [...band].sort((a, b) => a.x - b.x) : null
+  let sortedBand = band && band.length ? [...band].sort((a, b) => a.x - b.x) : null
+  // A single reading gives a one-week band; widen it a week each side so
+  // the shaded range is still drawn as an area.
+  if (sortedBand && sortedBand.length === 1) {
+    const only = sortedBand[0]
+    sortedBand = [{ ...only, x: only.x - 1 }, only, { ...only, x: only.x + 1 }]
+  }
   const bandYs = sortedBand ? sortedBand.flatMap((b) => [b.low, b.high]) : []
   const bandXs = sortedBand ? sortedBand.map((b) => b.x) : []
   const minX = Math.min(...xs, ...bandXs), maxX = Math.max(...xs, ...bandXs)
@@ -337,7 +367,7 @@ export default function AgronomyByField({ fields }) {
             .filter((m) => m.target) // no target yet = not "at a glance" actionable; still visible in the sample table below
             .map((m) => {
               const sample = latestByType[type]
-              const value = sample?.values?.[m.key]
+              const value = metricValue(sample?.values, type, m)
               const target = targetForReading(
                 type, m, getCurveRows(curvesByKey, field?.cropName, field?.varietyName), sample?.receivedDt, plantDate
               )
@@ -373,14 +403,29 @@ export default function AgronomyByField({ fields }) {
         {['soil', 'petiole'].map((type) => {
           const typeSamples = samples.filter((s) => s.type === type)
           const metric = metricsByType[type][0]
-          const points = typeSamples
-            .filter((s) => s.values?.[metric.key] != null && s.receivedDt && plantDate)
-            .map((s) => ({
-              x: weeksBetween(s.receivedDt.toDate(), plantDate),
-              y: s.values[metric.key],
-              date: s.receivedDt
-            }))
-            .filter((p) => p.x != null && p.x >= IN_SEASON_WEEK_MIN && p.x <= IN_SEASON_WEEK_MAX)
+          const withValue = typeSamples
+            .map((s) => ({ s, y: metricValue(s.values, type, metric) }))
+            .filter(({ s, y }) => y != null && s.receivedDt)
+          const dated = plantDate
+            ? withValue.map(({ s, y }) => ({
+                x: weeksBetween(s.receivedDt.toDate(), plantDate),
+                y,
+                date: s.receivedDt
+              }))
+            : []
+          const points = dated.filter((p) => p.x != null && p.x >= IN_SEASON_WEEK_MIN && p.x <= IN_SEASON_WEEK_MAX)
+          // Say WHY a chart is empty instead of just "not enough samples".
+          let emptyMessage = `No ${SAMPLE_TYPE_LABEL[type].toLowerCase()} samples for this field yet`
+          if (typeSamples.length > 0 && withValue.length === 0) {
+            const keys = [...new Set(typeSamples.flatMap((s) => Object.keys(s.values || {})))]
+            emptyMessage = keys.length
+              ? `${typeSamples.length} sample(s), but none has a ${metric.label} value. Value names found: ${keys.join(', ')}`
+              : `${typeSamples.length} sample(s), but the lab sent no values yet`
+          } else if (withValue.length > 0 && !plantDate) {
+            emptyMessage = 'This field has no plant date for the selected season, so readings can\u2019t be placed on the weekly chart'
+          } else if (withValue.length > 0 && points.length === 0) {
+            emptyMessage = `${withValue.length} reading(s), all outside this season (more than ${-IN_SEASON_WEEK_MIN} weeks before or ${IN_SEASON_WEEK_MAX} weeks after planting). Check the season selected above.`
+          }
           const curveRows = getCurveRows(curvesByKey, field?.cropName, field?.varietyName)
           const band = buildBand(points, curveRows, type === 'soil' ? 'soilNO3' : 'petioleNO3', metric.target)
           // Each reading is judged against the range for ITS week, not
@@ -392,7 +437,7 @@ export default function AgronomyByField({ fields }) {
           return (
             <div key={type} className="agronomy-chart-card">
               <p className="agronomy-chart-title">{SAMPLE_TYPE_LABEL[type]} {metric.label} vs weeks since emergence</p>
-              <Sparkline points={judged} color={type === 'soil' ? '#0F6E56' : '#3B6D11'} band={band} />
+              <Sparkline points={judged} color={type === 'soil' ? '#0F6E56' : '#3B6D11'} band={band} emptyMessage={emptyMessage} />
               {judged.length > 0 && (
                 <table className="agronomy-chart-readings">
                   <thead>
