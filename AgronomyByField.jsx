@@ -72,6 +72,19 @@ function targetForReading(type, metric, curveRows, sampleDate, plantDate) {
   return curveRangeForWeek(curveRows, week, curveKey) || metric.target
 }
 
+// Scouting observations (Agworld "Weekly Dig" reports, imported on the
+// Scouting tab) carry a real Timestamp in observedAt.
+function obsDate(o) {
+  return o && o.observedAt && o.observedAt.toDate ? o.observedAt.toDate() : null
+}
+function fmtObsDate(d) {
+  return d ? d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
+}
+
+// Field moisture % target (Kent, Oct 28): below 71 = red, 71-88 = green,
+// above 88 = orange. Same for every crop and week.
+const MOISTURE_TARGET = [71, 88]
+
 const STATUS_LABEL = { deficient: 'Below range', optimal: 'In range', excess: 'Above range' }
 
 // Looks up a metric's value in a sample's `values`, tolerating the lab
@@ -328,6 +341,26 @@ export default function AgronomyByField({ fields }) {
     return () => unsub()
   }, [fieldId])
 
+  // Scouting observations for this field. Equality filter only (sorted here
+  // in the browser) so no composite index is needed.
+  const [observations, setObservations] = useState([])
+  useEffect(() => {
+    if (!fieldId) return
+    setObservations([])
+    const q = query(collection(db, 'scoutingObservations'), where('fieldId', '==', fieldId))
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = []
+        snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
+        list.sort((a, b) => (obsDate(a)?.getTime() || 0) - (obsDate(b)?.getTime() || 0))
+        setObservations(list)
+      },
+      (err) => console.error('AgronomyByField scouting query failed:', err)
+    )
+    return () => unsub()
+  }, [fieldId])
+
   const field = fields.find((f) => f.id === fieldId)
 
   // plantDate/cropName/varietyName/acres all come straight from the season-
@@ -394,6 +427,35 @@ export default function AgronomyByField({ fields }) {
     if (!curveRows || activeWeek == null) return null
     return curveRows.find((r) => r.week === activeWeek) || null
   }, [curveRows, activeWeek])
+
+  // Field moisture % from the scouting reports, placed on the same weeks-
+  // since-emergence axis (and the same in-season window) as the other charts.
+  const moisturePoints = useMemo(() => {
+    if (!plantDate) return []
+    return observations
+      .filter((o) => o.moisture != null && obsDate(o))
+      .map((o) => ({ x: weeksBetween(obsDate(o), plantDate), y: o.moisture, date: obsDate(o) }))
+      .filter((p) => p.x != null && p.x >= IN_SEASON_WEEK_MIN && p.x <= IN_SEASON_WEEK_MAX)
+  }, [observations, plantDate])
+  // Tile value: latest reading on or before the picked week (or latest overall).
+  const moistureAsOf = useMemo(() => {
+    let found = null
+    moisturePoints.forEach((p) => { if (selectedWeek == null || p.x <= selectedWeek) found = p })
+    return found
+  }, [moisturePoints, selectedWeek])
+  const moistureBand = useMemo(() => buildBand(moisturePoints, null, null, MOISTURE_TARGET), [moisturePoints])
+  const moistureJudged = useMemo(
+    () => moisturePoints.map((p) => ({ ...p, status: statusFor(p.y, MOISTURE_TARGET) })),
+    [moisturePoints]
+  )
+  const moistureStatus = moistureAsOf ? statusFor(moistureAsOf.y, MOISTURE_TARGET) : null
+  const digLog = useMemo(
+    () => observations.filter((o) => obsDate(o) && plantDate)
+      .filter((o) => { const w = weeksBetween(obsDate(o), plantDate); return w >= IN_SEASON_WEEK_MIN && w <= IN_SEASON_WEEK_MAX })
+      .reverse(),
+    [observations, plantDate]
+  )
+  const digKeys = useMemo(() => [...new Set(digLog.flatMap((o) => Object.keys(o.values || {})))], [digLog])
 
   const cropColor = field?.cropName ? (CROP_COLOR[field.cropName] || { bg: '#D3D1C7', fg: '#2C2C2A' }) : null
 
@@ -547,6 +609,27 @@ export default function AgronomyByField({ fields }) {
             <button className="agronomy-link-btn" onClick={() => setSelectedWeek(null)}>Back to latest</button>
           )}
         </div>
+        {moistureAsOf && (
+          <div
+            className="agronomy-kpi-card"
+            style={moistureStatus ? { borderTop: `3px solid ${STATUS_COLOR[moistureStatus].dot}` } : undefined}
+          >
+            <p className="agronomy-kpi-label">Field moisture</p>
+            <p className="agronomy-kpi-value" style={moistureStatus ? { color: STATUS_COLOR[moistureStatus].fg } : undefined}>
+              {moistureAsOf.y}<span className="agronomy-kpi-unit"> %</span>
+            </p>
+            <p className="agronomy-kpi-date">Target {MOISTURE_TARGET[0]}{'–'}{MOISTURE_TARGET[1]}</p>
+            <p className="agronomy-kpi-date">
+              {fmtObsDate(moistureAsOf.date)} {'·'} Wk {moistureAsOf.x}
+              {selectedWeek != null && moistureAsOf.x !== selectedWeek ? ` (none in wk ${selectedWeek})` : ''}
+            </p>
+            {moistureStatus && (
+              <span className="agronomy-status-badge" style={{ background: STATUS_COLOR[moistureStatus].bg, color: STATUS_COLOR[moistureStatus].fg }}>
+                {STATUS_LABEL[moistureStatus]}
+              </span>
+            )}
+          </div>
+        )}
         {nRecRow && (
           <div className="agronomy-kpi-card">
             <p className="agronomy-kpi-label">N Rec ({selectedWeek != null ? `wk ${selectedWeek}` : 'this week'})</p>
@@ -572,6 +655,93 @@ export default function AgronomyByField({ fields }) {
             {renderChartCard(type)}
           </div>
         ))}
+      </div>
+
+      <div className="agronomy-split" style={SPLIT_STYLE}>
+        <div className="agronomy-split-col" style={{ minWidth: 0 }}>
+          <div className="agronomy-chart-card">
+            <p className="agronomy-chart-title">
+              Field moisture % vs weeks since emergence {'·'} click a point to see that week above
+            </p>
+            <Sparkline
+              points={moistureJudged}
+              color="#1F6FB2"
+              band={moistureBand}
+              emptyMessage={
+                observations.length === 0
+                  ? 'No scouting reports for this field yet - upload one on the Scouting tab'
+                  : !plantDate
+                    ? 'This field has no plant date for the selected season, so readings can’t be placed on the weekly chart'
+                    : 'No field moisture readings in this season'
+              }
+              selectedWeek={selectedWeek}
+              onSelect={toggleWeek}
+            />
+            {moisturePoints.length > 0 && (
+              <table className="agronomy-chart-readings" style={{ minWidth: 0, width: '100%', fontSize: 10 }}>
+                <thead><tr><th>Date</th><th>Wk</th><th>Moisture %</th><th>Target</th></tr></thead>
+                <tbody>
+                  {[...moistureJudged].reverse().map((p, i) => (
+                    <tr
+                      key={i}
+                      className={`agronomy-chart-reading-row${selectedWeek === p.x ? ' selected' : ''}`}
+                      onClick={() => toggleWeek(p.x)}
+                    >
+                      <td>{fmtObsDate(p.date)}</td><td>{p.x}</td>
+                      <td>
+                        <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 4, fontWeight: 600, background: STATUS_COLOR[p.status].bg, color: STATUS_COLOR[p.status].fg }}>
+                          {p.y}
+                        </span>
+                      </td>
+                      <td>{MOISTURE_TARGET[0]}{'–'}{MOISTURE_TARGET[1]}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+        <div className="agronomy-split-col" style={{ minWidth: 0 }}>
+          {digLog.length > 0 && (
+            <div className="agronomy-chart-card" style={{ overflowX: 'auto' }}>
+              <p className="agronomy-chart-title">Scouting log (Agworld)</p>
+              <table className="agronomy-chart-readings" style={{ minWidth: 0, width: '100%', fontSize: 10 }}>
+                <thead>
+                  <tr>
+                    <th>Date</th><th>Wk</th><th>Moist %</th>
+                    {digKeys.map((k) => <th key={k}>{k}</th>)}
+                    <th>Comments</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {digLog.map((o) => {
+                    const d = obsDate(o)
+                    const wk = weeksBetween(d, plantDate)
+                    return (
+                      <tr
+                        key={o.id}
+                        className={`agronomy-chart-reading-row${selectedWeek === wk ? ' selected' : ''}`}
+                        onClick={() => toggleWeek(wk)}
+                      >
+                        <td>{fmtObsDate(d)}</td>
+                        <td>{wk}</td>
+                        <td>
+                          {o.moisture != null ? (
+                            <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 4, fontWeight: 600, background: STATUS_COLOR[statusFor(o.moisture, MOISTURE_TARGET)].bg, color: STATUS_COLOR[statusFor(o.moisture, MOISTURE_TARGET)].fg }}>
+                              {o.moisture}
+                            </span>
+                          ) : '—'}
+                        </td>
+                        {digKeys.map((k) => <td key={k}>{o.values && o.values[k] != null ? o.values[k] : ''}</td>)}
+                        <td>{o.comments || ''}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
 
       {(annualSoilSample || nematodeSample) && (
