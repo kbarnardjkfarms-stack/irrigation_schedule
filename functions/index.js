@@ -1473,6 +1473,154 @@ exports.reassignSampleField = onCall(async (request) => {
 });
 
 // ---------------------------------------------------------------------
+// Scouting reports (Agworld Scout "Weekly Dig" export) - Oct 2026
+//
+// The Agronomy tab "Scouting" uploads the CSV exported from Agworld's scout
+// app / scouting report. Each row becomes one document in
+// scoutingObservations (Field Moisture % pulled out as `moisture`, every
+// other column kept under `values`), matched to a field by its Location
+// name the same way lab samples are: a saved alias first (see
+// assignScoutingLocation), then an exact name match, then the fuzzy matcher
+// at 90%+. Rows whose Location can't be matched are still saved (fieldId
+// null) so they can be assigned from the Scouting tab afterwards.
+//
+// Re-uploading the same or a bigger report is safe: a row's document id is a
+// hash of its location + date + author + template, so it just overwrites
+// itself instead of duplicating.
+// ---------------------------------------------------------------------
+async function loadScoutingAliases(db) {
+  const snap = await db.collection('scoutingAliases').get();
+  const map = {};
+  snap.forEach((d) => { map[d.id] = d.data().fieldId; });
+  return map;
+}
+
+exports.importScoutingReport = onCall({ timeoutSeconds: 300, memory: '512MiB' }, async (request) => {
+  await requireAgronomyAccess(request.auth);
+  const crypto = require('crypto');
+
+  const rows = (request.data && request.data.rows) || [];
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new HttpsError('invalid-argument', 'rows[] is required.');
+  }
+  if (rows.length > 1000) {
+    throw new HttpsError('invalid-argument', 'Send at most 1000 rows per call.');
+  }
+
+  const db = admin.firestore();
+  const fieldSnap = await db.collection('fields').get();
+  const lookup = buildFieldLookup(fieldSnap.docs);
+  const aliases = await loadScoutingAliases(db);
+
+  const docs = [];
+  const unmatched = {};
+  let skipped = 0;
+  let matchedRows = 0;
+
+  rows.forEach((r) => {
+    const location = String(r.location || '').trim();
+    const observed = r.observedAt ? new Date(r.observedAt) : null;
+    if (!location || !observed || Number.isNaN(observed.getTime())) { skipped++; return; }
+
+    const locNorm = normalizeFieldLabel(location);
+    let fieldId = aliases[locNorm] || null;
+    let matchType = fieldId ? 'alias' : null;
+    if (!fieldId && lookup[locNorm]) { fieldId = lookup[locNorm]; matchType = 'exact'; }
+    if (!fieldId) {
+      const fuzzy = findFuzzyFieldMatch(locNorm, lookup);
+      if (fuzzy) { fieldId = fuzzy; matchType = 'fuzzy'; }
+    }
+    if (fieldId) matchedRows++;
+    else unmatched[location] = (unmatched[location] || 0) + 1;
+
+    const author = String(r.author || '').trim();
+    const template = String(r.template || '').trim();
+    const id = crypto
+      .createHash('sha1')
+      .update(`${locNorm}|${observed.toISOString()}|${author}|${template}`)
+      .digest('hex');
+
+    const moisture = typeof r.moisture === 'number' && Number.isFinite(r.moisture) ? r.moisture : null;
+    docs.push({
+      id,
+      data: {
+        fieldId,
+        matchType,
+        rawLocation: location,
+        locNorm,
+        observedAt: admin.firestore.Timestamp.fromDate(observed),
+        author,
+        template,
+        moisture,
+        values: r.values && typeof r.values === 'object' ? r.values : {},
+        photos: r.photos ? String(r.photos) : null,
+        comments: r.comments ? String(r.comments) : null,
+        importedBy: request.auth.uid,
+        importedAt: admin.firestore.FieldValue.serverTimestamp()
+      }
+    });
+  });
+
+  // How many of these were already there (for the "N new, M updated" line).
+  let existing = 0;
+  for (let i = 0; i < docs.length; i += 300) {
+    const refs = docs.slice(i, i + 300).map((d) => db.collection('scoutingObservations').doc(d.id));
+    const snaps = await db.getAll(...refs);
+    existing += snaps.filter((s) => s.exists).length;
+  }
+
+  for (let i = 0; i < docs.length; i += 400) {
+    const batch = db.batch();
+    docs.slice(i, i + 400).forEach((d) => {
+      batch.set(db.collection('scoutingObservations').doc(d.id), d.data);
+    });
+    await batch.commit();
+  }
+
+  return {
+    received: rows.length,
+    saved: docs.length,
+    newRows: docs.length - existing,
+    updatedRows: existing,
+    matchedRows,
+    unmatchedRows: docs.length - matchedRows,
+    skippedRows: skipped,
+    unmatchedLocations: Object.entries(unmatched).map(([label, count]) => ({ label, count }))
+  };
+});
+
+// Assigns a Location label that wouldn't match on its own to a field -
+// remembered (scoutingAliases) so future uploads match it automatically, and
+// applied to every observation already saved under that label.
+exports.assignScoutingLocation = onCall({ timeoutSeconds: 120 }, async (request) => {
+  await requireAgronomyAccess(request.auth);
+
+  const { location, fieldId } = request.data || {};
+  if (!location || !fieldId) {
+    throw new HttpsError('invalid-argument', 'location and fieldId are required.');
+  }
+  const db = admin.firestore();
+  const locNorm = normalizeFieldLabel(location);
+
+  await db.collection('scoutingAliases').doc(locNorm).set({
+    fieldId,
+    label: String(location),
+    updatedBy: request.auth.uid,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+
+  const snap = await db.collection('scoutingObservations').where('locNorm', '==', locNorm).get();
+  let updated = 0;
+  for (let i = 0; i < snap.docs.length; i += 400) {
+    const batch = db.batch();
+    snap.docs.slice(i, i + 400).forEach((d) => batch.update(d.ref, { fieldId, matchType: 'manual' }));
+    await batch.commit();
+    updated += Math.min(400, snap.docs.length - i);
+  }
+  return { ok: true, updated };
+});
+
+// ---------------------------------------------------------------------
 // Agri-Stor sync — PHASE 1 (READ-ONLY)
 //
 // Polls the Agri-Stor monitoring panel (https://agristor-companies.com)
