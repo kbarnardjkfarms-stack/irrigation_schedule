@@ -6,8 +6,8 @@ import { fmt } from './yieldMath.js'
 
 // "Storage link" tab (Admin/Owner): Potato Storage -> Yield History.
 // The sync itself runs in Cloud Functions (functions/storageYields.js):
-// whenever Potato Storage saves, nightly, and from the "Sync now" button
-// here. This tab shows what it did, lets you change the tare, lists piles
+// every 15 minutes when Potato Storage changed, nightly, and from the
+// "Sync now" button here. This tab shows what it did, lets you change the tare, lists piles
 // it couldn't match to an Agworld field, and lets you remove (and later
 // re-link) a storage-based yield.
 
@@ -16,7 +16,7 @@ function when(ms) {
   const d = new Date(ms)
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
-const TRIGGER_LABEL = { 'storage-save': 'Potato Storage save', nightly: 'nightly run', manual: 'Sync now' }
+const TRIGGER_LABEL = { 'every-15-min': '15-minute check', 'storage-save': 'Potato Storage save', nightly: 'nightly run', manual: 'Sync now' }
 
 export default function StorageLink({ docsById }) {
   const [status, setStatus] = useState(null)
@@ -96,7 +96,7 @@ export default function StorageLink({ docsById }) {
           <button className="save" disabled={busy} onClick={() => syncNow()}>{busy ? 'Syncing…' : 'Sync now'}</button>
         </div>
         <div className="agronomy-kpi-grid" style={{ marginTop: 6 }}>
-          <div className="agronomy-kpi-card"><p className="agronomy-kpi-label">Last sync</p><p className="agronomy-kpi-value" style={{ fontSize: 15 }}>{status ? when(status.lastRunMs) : 'never'}</p><p className="contracts-sub" style={{ margin: 0 }}>{status && status.trigger ? `from ${TRIGGER_LABEL[status.trigger] || status.trigger}` : 'Runs on every Potato Storage save and nightly'}</p></div>
+          <div className="agronomy-kpi-card"><p className="agronomy-kpi-label">Last sync</p><p className="agronomy-kpi-value" style={{ fontSize: 15 }}>{status ? when(status.lastRunMs) : 'never'}</p><p className="contracts-sub" style={{ margin: 0 }}>{status && status.trigger ? `from ${TRIGGER_LABEL[status.trigger] || status.trigger}` : 'Checks every 15 minutes, full sync nightly'}</p></div>
           <div className="agronomy-kpi-card"><p className="agronomy-kpi-label">Piles linked</p><p className="agronomy-kpi-value">{status ? fmt(status.linkedPiles) : '—'}</p></div>
           <div className="agronomy-kpi-card"><p className="agronomy-kpi-label">Not linked</p><p className="agronomy-kpi-value" style={{ color: unlinked.length ? '#A32D2D' : undefined }}>{status ? fmt(unlinked.length) : '—'}</p></div>
           <div className="agronomy-kpi-card">
