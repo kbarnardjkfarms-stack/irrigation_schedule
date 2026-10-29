@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
 import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR, CROP_COLOR, sortValueKeys } from './AgronomyConfig.js'
+import AgronomySeason3D, { normalizeToRange } from './AgronomySeason3D.jsx'
 import { useLiveAgronomyCriteria, getCurveRows, mergeFlatTargets } from './AgronomyCriteriaData.js'
 
 function fmtDate(ts) {
@@ -575,6 +576,35 @@ export default function AgronomyByField({ fields }) {
     )
   }
 
+  // In-season readings of a weekly measure, each judged against the target
+  // for its own week - same logic as renderChartCard, used for the 3D view.
+  function judgedFor(type) {
+    const metric = metricsByType[type][0]
+    if (!plantDate) return { metric, judged: [] }
+    const pts = samples
+      .filter((s) => s.type === type && s.receivedDt)
+      .map((s) => ({ s, y: metricValue(s.values, type, metric) }))
+      .filter(({ y }) => y != null)
+      .map(({ s, y }) => ({ x: weeksBetween(s.receivedDt.toDate(), plantDate), y, date: s.receivedDt }))
+      .filter((p) => p.x != null && p.x >= IN_SEASON_WEEK_MIN && p.x <= IN_SEASON_WEEK_MAX)
+    const band = buildBand(pts, curveRows, type === 'soil' ? 'soilNO3' : 'petioleNO3', metric.target)
+    const judged = pts.map((p) => {
+      const range = rangeAt(band, p.x)
+      return { ...p, range, status: range ? statusFor(p.y, range) : null, norm: normalizeToRange(p.y, range) }
+    })
+    return { metric, judged }
+  }
+  const soil3d = judgedFor('soil')
+  const petiole3d = judgedFor('petiole')
+  const season3dSeries = [
+    { key: 'soil', label: 'Soil NO3', unit: soil3d.metric.unit, color: '#0F6E56', points: soil3d.judged },
+    { key: 'petiole', label: 'Petiole NO3', unit: petiole3d.metric.unit, color: '#3B6D11', points: petiole3d.judged },
+    {
+      key: 'moisture', label: 'Field moisture', unit: '%', color: '#1F6FB2',
+      points: moistureJudged.map((p) => ({ ...p, range: MOISTURE_TARGET, norm: normalizeToRange(p.y, MOISTURE_TARGET) }))
+    }
+  ]
+
   return (
     <div className="agronomy-by-field">
       <div className="agronomy-field-picker">
@@ -742,6 +772,18 @@ export default function AgronomyByField({ fields }) {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="agronomy-chart-card" style={{ marginBottom: 16 }}>
+        <p className="agronomy-chart-title">
+          Season 3D view {'·'} soil NO3, petiole NO3 and field moisture by week {'·'} drag to rotate, click a dot to pick that week
+        </p>
+        <AgronomySeason3D
+          series={season3dSeries}
+          selectedWeek={selectedWeek}
+          onSelect={toggleWeek}
+          fmtDate={(d) => (d && d.toDate ? fmtDate(d) : fmtObsDate(d))}
+        />
       </div>
 
       {(annualSoilSample || nematodeSample) && (
