@@ -477,7 +477,166 @@ async function requireAdminOrOwner(auth) {
     throw new HttpsError('permission-denied', 'Only an Admin or Owner can manage team members.');
   }
 }
+// =============================================================================
+// Agronomy "Targets" tab - editable criteria backend (Oct 2026)
+// =============================================================================
+// Paste this into functions/index.js, anywhere after requireAdminOrOwner()
+// is defined (it reuses that, plus admin/onCall/onRequest/HttpsError already
+// required at the top of the file - don't duplicate any of those).
+//
+// Moves the flat target ranges and weekly N Rec/target curves that used to
+// be hardcoded in AgronomyConfig.js into two Firestore collections, so
+// Admin/Owner can tune them from the app's new Targets tab with no GitHub
+// deploy involved:
+//   - agronomyCriteria/flatTargets - one doc, the flat fallback ranges
+//   - agronomyCurves/{cropKey} - one doc per crop ("POTATO") or per
+//     crop+variety override ("POTATO::RUSSET NORKOTAH TX 278"), holding
+//     that crop's full weekly curve.
+//
+// seedAgronomyCriteriaOnce writes the CURRENT AgronomyConfig.js values in
+// as a one-time starting point - call its URL once after deploying, then
+// never again (it's safe to re-run since it always overwrites with the
+// same hardcoded values below, not user edits, so re-running it WOULD wipe
+// out any edits made from the Targets tab since - that's the only reason
+// not to just leave it as a standing "reset to defaults" button for now).
+//
+// updateAgronomyCriteria is what the Targets tab actually calls to save
+// edits - Admin/Owner only (requireAdminOrOwner, same check used for team
+// management), using the Admin SDK so it bypasses firestore.rules'
+// `allow write: if false` on these two collections (that rule only blocks
+// direct browser writes).
+const { FieldValue: AgronomyCriteriaFieldValue } = admin.firestore;
 
+exports.seedAgronomyCriteriaOnce = onRequest({ timeoutSeconds: 60 }, async (req, res) => {
+  const db = admin.firestore();
+
+  const flatTargets = {
+    soil: { NO3: [15, 25], Salts: [0, 2] },
+    petiole: { no3: [18000, 28000], p: [0.25, 0.4], k: [8, 11], sulfur: [0.25, 0.4] },
+    compost: { n: [1, 2] }
+  };
+
+  const curves = {
+    POTATO: {
+      cropName: 'POTATO',
+      varietyName: null,
+      weeks: [
+        { week: 1, nRec: 20, soilNO3: [35, 50] },
+        { week: 2, nRec: 20, soilNO3: [33, 48] },
+        { week: 3, nRec: 40, soilNO3: [32, 47], petioleNO3: [20000, 25000], petioleP: [0.45, 0.5], petioleK: [11.5, 12.5], petioleS: [0.18, 0.2] },
+        { week: 4, nRec: 40, soilNO3: [31, 46], petioleNO3: [19200, 24000], petioleP: [0.45, 0.5], petioleK: [11, 12], petioleS: [0.18, 0.2] },
+        { week: 5, nRec: 54, soilNO3: [25, 40], petioleNO3: [18400, 23000], petioleP: [0.4, 0.45], petioleK: [10.5, 12], petioleS: [0.18, 0.2] },
+        { week: 6, nRec: 54, soilNO3: [20, 35], petioleNO3: [17600, 22000], petioleP: [0.38, 0.4], petioleK: [10.5, 11], petioleS: [0.15, 0.18] },
+        { week: 7, nRec: 40, soilNO3: [15, 30], petioleNO3: [15000, 21000], petioleP: [0.38, 0.4], petioleK: [10, 10.5], petioleS: [0.15, 0.18] },
+        { week: 8, nRec: 40, soilNO3: [10, 25], petioleNO3: [14500, 20000], petioleP: [0.33, 0.35], petioleK: [9.5, 10], petioleS: [0.15, 0.18] },
+        { week: 9, nRec: 20, soilNO3: [10, 20], petioleNO3: [14000, 19000], petioleP: [0.33, 0.35], petioleK: [9.5, 10], petioleS: [0.14, 0.16] },
+        { week: 10, nRec: 20, soilNO3: [5, 15], petioleNO3: [13500, 18000], petioleP: [0.28, 0.3], petioleK: [9, 9.5], petioleS: [0.14, 0.16] },
+        { week: 11, nRec: 27, soilNO3: [5, 10], petioleNO3: [13000, 17300], petioleP: [0.28, 0.3], petioleK: [9, 9.5], petioleS: [0.12, 0.14] },
+        { week: 12, nRec: 27, soilNO3: [5, 10], petioleNO3: [12500, 16600], petioleP: [0.28, 0.3], petioleK: [8.5, 9], petioleS: [0.12, 0.14] },
+        { week: 13, nRec: 0, soilNO3: [5, 9], petioleNO3: [12000, 15800], petioleP: [0.28, 0.3], petioleK: [7.5, 8], petioleS: [0.1, 0.12], stage: 'DYING' },
+        { week: 14, nRec: 0, soilNO3: [5, 8], petioleNO3: [11500, 15000], petioleP: [0.23, 0.25], petioleK: [6.5, 7], petioleS: [0.08, 0.1], stage: '10% DEAD' },
+        { week: 15, nRec: 0, soilNO3: [4, 7], petioleNO3: [10000, 12500], petioleP: [0.2, 0.25], petioleK: [5.5, 6], petioleS: [0.08, 0.1], stage: '20% DEAD' },
+        { week: 16, nRec: 0, soilNO3: [4, 5], petioleNO3: [7500, 10000], petioleP: [0.2, 0.25], petioleK: [5.5, 6], petioleS: [0.06, 0.08], stage: '30% DEAD' },
+        { week: 17, nRec: 0, stage: '40% DEAD' }
+      ]
+    },
+    BEETS: {
+      cropName: 'BEETS',
+      varietyName: null,
+      weeks: [
+        { week: 1, nRec: 0, soilNO3: [20, 35], petioleNO3: [10000, 15000] },
+        { week: 2, nRec: 5, soilNO3: [17, 30], petioleNO3: [10000, 15000] },
+        { week: 3, nRec: 15, soilNO3: [15, 25], petioleNO3: [10000, 15000] },
+        { week: 4, nRec: 25, soilNO3: [13, 20], petioleNO3: [10000, 15000] },
+        { week: 5, nRec: 30, soilNO3: [12, 17], petioleNO3: [10000, 15000] },
+        { week: 6, nRec: 35, soilNO3: [10, 15], petioleNO3: [10000, 14000] },
+        { week: 7, nRec: 35, soilNO3: [8, 13], petioleNO3: [8750, 13000] },
+        { week: 8, nRec: 35, soilNO3: [6, 11], petioleNO3: [7500, 11750] },
+        { week: 9, nRec: 35, soilNO3: [5, 9], petioleNO3: [6250, 10500] },
+        { week: 10, nRec: 35, soilNO3: [5, 7], petioleNO3: [5000, 9250], stage: 'END N' },
+        { week: 11, nRec: 35, soilNO3: [5, 7], petioleNO3: [3750, 8000] },
+        { week: 12, nRec: null, soilNO3: [5, 7], petioleNO3: [2500, 6750] },
+        { week: 13, nRec: null, soilNO3: [5, 7], petioleNO3: [2500, 5500] }
+      ]
+    },
+    CORN: {
+      cropName: 'CORN',
+      varietyName: null,
+      weeks: [
+        { week: 1, nRec: 0, soilNO3: [20, 35], petioleNO3: [2000, 3000] },
+        { week: 2, nRec: 5, soilNO3: [17, 30], petioleNO3: [1800, 2800] },
+        { week: 3, nRec: 10, soilNO3: [15, 25], petioleNO3: [1600, 2600] },
+        { week: 4, nRec: 20, soilNO3: [13, 20], petioleNO3: [1400, 2400] },
+        { week: 5, nRec: 30, soilNO3: [12, 17], petioleNO3: [1200, 2200] },
+        { week: 6, nRec: 50, soilNO3: [10, 15], petioleNO3: [1000, 2000] },
+        { week: 7, nRec: 50, soilNO3: [8, 13], petioleNO3: [800, 1800] },
+        { week: 8, nRec: 50, soilNO3: [6, 11], petioleNO3: [700, 1600] },
+        { week: 9, nRec: 50, soilNO3: [5, 9], petioleNO3: [600, 1400] },
+        { week: 10, nRec: 15, soilNO3: [5, 7], petioleNO3: [500, 800], stage: 'VT' },
+        { week: 11, nRec: 15, soilNO3: [5, 7], petioleNO3: [400, 600] },
+        { week: 12, nRec: 5, soilNO3: [5, 7], petioleNO3: [300, 400] },
+        { week: 13, nRec: 0, soilNO3: [5, 7], petioleNO3: [200, 200] },
+        { week: 14, nRec: null, soilNO3: [5, 7], petioleNO3: [100, 100] }
+      ]
+    }
+  };
+
+  try {
+    await db.collection('agronomyCriteria').doc('flatTargets').set(flatTargets);
+    const batch = db.batch();
+    Object.entries(curves).forEach(([cropKey, data]) => {
+      batch.set(db.collection('agronomyCurves').doc(cropKey), data);
+    });
+    await batch.commit();
+    res.status(200).send('Seeded agronomyCriteria/flatTargets and agronomyCurves/{POTATO,BEETS,CORN}.');
+  } catch (err) {
+    console.error('seedAgronomyCriteriaOnce failed:', err);
+    res.status(500).send(err.message);
+  }
+});
+
+// Called from the Targets tab. `kind` picks what's being saved:
+//   { kind: 'flat', data: { soil: {...}, petiole: {...}, compost: {...} } }
+//   { kind: 'curve', cropKey: 'POTATO', data: { cropName, varietyName, weeks: [...] } }
+//   { kind: 'deleteCurve', cropKey: 'POTATO::SOME VARIETY' }
+exports.updateAgronomyCriteria = onCall(async (request) => {
+  await requireAdminOrOwner(request.auth);
+
+  const { kind, cropKey, data } = request.data || {};
+  const db = admin.firestore();
+
+  if (kind === 'flat') {
+    if (!data || typeof data !== 'object') {
+      throw new HttpsError('invalid-argument', 'data is required for kind "flat".');
+    }
+    await db.collection('agronomyCriteria').doc('flatTargets').set(data);
+    return { ok: true };
+  }
+
+  if (kind === 'curve') {
+    if (!cropKey || !data || !Array.isArray(data.weeks)) {
+      throw new HttpsError('invalid-argument', 'cropKey and data.weeks[] are required for kind "curve".');
+    }
+    await db.collection('agronomyCurves').doc(cropKey).set({
+      cropName: data.cropName || null,
+      varietyName: data.varietyName || null,
+      weeks: data.weeks,
+      updatedAt: AgronomyCriteriaFieldValue.serverTimestamp(),
+      updatedBy: request.auth.uid
+    });
+    return { ok: true };
+  }
+
+  if (kind === 'deleteCurve') {
+    if (!cropKey) {
+      throw new HttpsError('invalid-argument', 'cropKey is required for kind "deleteCurve".');
+    }
+    await db.collection('agronomyCurves').doc(cropKey).delete();
+    return { ok: true };
+  }
+
+  throw new HttpsError('invalid-argument', `Unrecognized kind "${kind}".`);
+});
 // Mirrors canViewAgronomy() in firestore.rules - Admin, Owner, or Farm
 // manager only.
 async function requireAgronomyAccess(auth) {
