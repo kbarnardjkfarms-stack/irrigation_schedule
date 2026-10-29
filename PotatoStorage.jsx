@@ -512,23 +512,27 @@ function computeZoneStats(bay, zone, zoneData) {
     : pipeRunOut;
   const currentCwt = measuredCwt != null ? Math.max(0, measuredCwt - totalRun) : calculatedCwt;
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
-  const shrinkCwt = totalRun - loggedRun;
-  const shrinkPct = baseCwt > 0 ? shrinkCwt / baseCwt : 0;
+  // No logged loads = nothing to compare run out against, so no shrink
+  // estimate at all (shows as "—") rather than a misleading 100%.
+  const hasShrink = loggedRun > 0;
+  const shrinkCwt = hasShrink ? totalRun - loggedRun : 0;
+  const shrinkBase = hasShrink ? baseCwt : 0;
+  const shrinkPct = shrinkBase > 0 ? shrinkCwt / shrinkBase : 0;
   return {
     pipeCount, pipesEmpty, pipesFilled, fullMap, topFullMap, hasTopRange, cwtPerPipe,
     calculatedCwt, hasOverride, currentCwt, capacityCwt, fillPct,
-    totalRun, loggedRun, initialCwt, baseCwt, measuredCwt, shrinkCwt, shrinkPct, runs,
+    totalRun, loggedRun, initialCwt, baseCwt, measuredCwt, hasShrink, shrinkBase, shrinkCwt, shrinkPct, runs,
     lastCheckDate: pipeLog.length ? pipeLog[pipeLog.length - 1].date : null,
   };
 }
 function computeBayStats(bay, bayData) {
   const zoneStats = {};
-  let currentCwt = 0, zoneCapacityCwt = 0, totalRun = 0, loggedRun = 0, initialCwt = 0, shrinkCwt = 0;
+  let currentCwt = 0, zoneCapacityCwt = 0, totalRun = 0, loggedRun = 0, initialCwt = 0, shrinkCwt = 0, shrinkBase = 0;
   bay.zones.forEach((z) => {
     const zs = computeZoneStats(bay, z, bayData?.zones?.[z.id]);
     zoneStats[z.id] = zs;
     currentCwt += zs.currentCwt; zoneCapacityCwt += zs.capacityCwt;
-    totalRun += zs.totalRun; loggedRun += zs.loggedRun; initialCwt += zs.baseCwt; shrinkCwt += zs.shrinkCwt;
+    totalRun += zs.totalRun; loggedRun += zs.loggedRun; initialCwt += zs.baseCwt; shrinkCwt += zs.shrinkCwt; shrinkBase += zs.shrinkBase;
   });
   // A bay's own declared pipe count + cwt/pipe is its physical capacity —
   // known the moment the bay is created, even before any field is assigned
@@ -539,8 +543,8 @@ function computeBayStats(bay, bayData) {
     ? bay.pipeCount * bay.cwtPerPipe * pileHeightRatio(bay)
     : zoneCapacityCwt;
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
-  const shrinkPct = initialCwt > 0 ? shrinkCwt / initialCwt : 0;
-  return { zoneStats, currentCwt, capacityCwt, fillPct, totalRun, loggedRun, initialCwt, shrinkCwt, shrinkPct };
+  const shrinkPct = shrinkBase > 0 ? shrinkCwt / shrinkBase : 0;
+  return { zoneStats, currentCwt, capacityCwt, fillPct, totalRun, loggedRun, initialCwt, hasShrink: shrinkBase > 0, shrinkBase, shrinkCwt, shrinkPct };
 }
 /* =================================================================
    3D — shared bay-group builder (used by both the yard view and the
@@ -2962,7 +2966,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <StatBlock label="Bay inventory" value={`${fmt(stats.currentCwt)} cwt`} sub={`${Math.round(stats.fillPct * 100)}% of ${fmt(stats.capacityCwt)} cwt`} accent="#f2c14e" />
         <StatBlock label="Total run out" value={`${fmt(stats.totalRun)} cwt`} sub={`from pipe hauled · ${fmt(stats.loggedRun)} cwt logged loads`} />
-        <StatBlock label="Bay shrink" value={`${fmt(stats.shrinkCwt)} cwt`} sub={`${(stats.shrinkPct * 100).toFixed(2)}%`} accent={stats.shrinkPct > 0.08 ? "#e08787" : "#8fd19e"} />
+        <StatBlock label="Bay shrink" value={stats.hasShrink ? `${fmt(stats.shrinkCwt)} cwt` : "—"} sub={stats.hasShrink ? `${(stats.shrinkPct * 100).toFixed(2)}%` : "log cwt loads to see"} accent={stats.hasShrink ? (stats.shrinkPct > 0.08 ? "#e08787" : "#8fd19e") : undefined} />
       </div>
       <LiveConditionsCard bay={bay} />
       <IviConditionsCard bay={bay} />
@@ -3065,7 +3069,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
               </select>
             </div>
             <StatBlock label="Field run out" value={`${fmt(zs.totalRun)} cwt`} sub={`${fmt(zs.loggedRun)} cwt logged loads`} />
-            <StatBlock label="Field shrink" value={`${fmt(zs.shrinkCwt)} cwt`} sub={`${(zs.shrinkPct * 100).toFixed(2)}%`} accent={zs.shrinkPct > 0.08 ? "#e08787" : "#8fd19e"} />
+            <StatBlock label="Field shrink" value={zs.hasShrink ? `${fmt(zs.shrinkCwt)} cwt` : "—"} sub={zs.hasShrink ? `${(zs.shrinkPct * 100).toFixed(2)}%` : "log cwt loads to see"} accent={zs.hasShrink ? (zs.shrinkPct > 0.08 ? "#e08787" : "#8fd19e") : undefined} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
             <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
@@ -4775,7 +4779,10 @@ function buildLedger(bays, statsById, buildingsById, locationsById) {
       zonesCapacitySum += zs.capacityCwt;
       rows.push({ ...base, customer: zone.customer, metric: "In Storage", cwt: zs.currentCwt });
       rows.push({ ...base, customer: zone.customer, metric: "Capacity", cwt: zs.capacityCwt });
-      rows.push({ ...base, customer: zone.customer, metric: "Shrink", cwt: zs.shrinkCwt });
+      if (zs.hasShrink) {
+        rows.push({ ...base, customer: zone.customer, metric: "Shrink", cwt: zs.shrinkCwt });
+        rows.push({ ...base, customer: zone.customer, metric: "Shrink Base", cwt: zs.shrinkBase });
+      }
       // Started-with cwt, projected shrink, and $ value (see bayEconomics).
       const eco = bayEconomics(bay, building);
       const projShrink = eco.projectedShrinkPct != null ? zs.baseCwt * eco.projectedShrinkPct / 100 : 0;
@@ -4951,7 +4958,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
         ? dims.map((d) => (d === "variety" ? (varietyLabels.get(row.variety) || row.variety) : row[d]))
         : ["All"];
       const key = keyParts.join(" · ");
-      if (!map.has(key)) map.set(key, { key, labelParts: keyParts, members: new Set(), capacity: 0, inStorage: 0, shipped: 0, shrink: 0, initial: 0, projShrink: 0, projRated: 0, valueProj: 0, valueActual: 0, valueSet: 0 });
+      if (!map.has(key)) map.set(key, { key, labelParts: keyParts, members: new Set(), capacity: 0, inStorage: 0, shipped: 0, shrink: 0, initial: 0, shrinkBase: 0, projShrink: 0, projRated: 0, valueProj: 0, valueActual: 0, valueSet: 0 });
       const g = map.get(key);
       g.members.add(row.variety);
       if (row.metric === "Capacity") g.capacity += row.cwt;
@@ -4959,6 +4966,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
       if (row.metric === "Shipped") g.shipped += row.cwt;
       if (row.metric === "Shrink") g.shrink += row.cwt;
       if (row.metric === "Initial") g.initial += row.cwt;
+      if (row.metric === "Shrink Base") g.shrinkBase += row.cwt;
       if (row.metric === "Proj Shrink") g.projShrink += row.cwt;
       if (row.metric === "Proj Rated") g.projRated += row.cwt;
       if (row.metric === "Value Proj") g.valueProj += row.cwt;
@@ -4970,9 +4978,9 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
   const totals = grouped.reduce((acc, g) => ({
     capacity: acc.capacity + g.capacity, inStorage: acc.inStorage + g.inStorage,
     shipped: acc.shipped + g.shipped, shrink: acc.shrink + g.shrink,
-    initial: acc.initial + g.initial, projShrink: acc.projShrink + g.projShrink, projRated: acc.projRated + g.projRated,
+    initial: acc.initial + g.initial, shrinkBase: acc.shrinkBase + g.shrinkBase, projShrink: acc.projShrink + g.projShrink, projRated: acc.projRated + g.projRated,
     valueProj: acc.valueProj + g.valueProj, valueActual: acc.valueActual + g.valueActual, valueSet: acc.valueSet + g.valueSet,
-  }), { capacity: unassignedCapacity, inStorage: 0, shipped: 0, shrink: 0, initial: 0, projShrink: 0, projRated: 0, valueProj: 0, valueActual: 0, valueSet: 0 });
+  }), { capacity: unassignedCapacity, inStorage: 0, shipped: 0, shrink: 0, initial: 0, shrinkBase: 0, projShrink: 0, projRated: 0, valueProj: 0, valueActual: 0, valueSet: 0 });
   const fmtMoney = (v) => `$${Math.round(v).toLocaleString()}`;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -5040,11 +5048,11 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
         <StatBlock label="Total capacity" value={`${fmt(totals.capacity)} cwt`} />
         <StatBlock label="In storage" value={`${fmt(totals.inStorage)} cwt`} accent="#f2c14e" />
         <StatBlock label="Run out" value={`${fmt(totals.shipped)} cwt`} />
-        <StatBlock label="Actual shrink" value={`${fmt(totals.shrink)} cwt`} sub={totals.initial ? `${((totals.shrink / totals.initial) * 100).toFixed(2)}% of ${fmt(totals.initial)} cwt started` : ""} accent="#e08787" />
+        <StatBlock label="Actual shrink" value={totals.shrinkBase ? `${fmt(totals.shrink)} cwt` : "—"} sub={totals.shrinkBase ? `${((totals.shrink / totals.shrinkBase) * 100).toFixed(2)}% of ${fmt(totals.shrinkBase)} cwt with loads logged` : "log cwt loads to see"} accent="#e08787" />
       </div>
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <StatBlock label="Projected shrink" value={totals.projRated ? `${fmt(totals.projShrink)} cwt` : "—"} sub={totals.projRated ? `${((totals.projShrink / totals.projRated) * 100).toFixed(2)}% projected` : "default · change in Manage Sites"} accent="#e0a63e" />
-        <StatBlock label="Actual vs projected" value={totals.projRated ? `${totals.shrink - totals.projShrink > 0 ? "+" : ""}${fmt(totals.shrink - totals.projShrink)} cwt` : "—"} sub={totals.projRated ? (totals.shrink > totals.projShrink ? "running over projection" : "under projection") : ""} accent={totals.shrink > totals.projShrink ? "#e08787" : "#8fd19e"} />
+        <StatBlock label="Actual vs projected" value={totals.projRated && totals.shrinkBase ? `${(((totals.shrink / totals.shrinkBase) - (totals.projShrink / totals.projRated)) * 100) > 0 ? "+" : ""}${(((totals.shrink / totals.shrinkBase) - (totals.projShrink / totals.projRated)) * 100).toFixed(2)} pts` : "—"} sub={totals.projRated && totals.shrinkBase ? ((totals.shrink / totals.shrinkBase) > (totals.projShrink / totals.projRated) ? "running over projection" : "under projection") : "needs logged loads"} accent={totals.projRated && totals.shrinkBase && (totals.shrink / totals.shrinkBase) > (totals.projShrink / totals.projRated) ? "#e08787" : "#8fd19e"} />
         <StatBlock label="Pile value (projected shrink)" value={totals.valueSet ? fmtMoney(totals.valueProj) : "—"} sub={totals.valueSet ? "(in storage − projected shrink) × $/cwt" : "default · change in Manage Sites"} accent="#8fd19e" />
         <StatBlock label="Value of in storage" value={totals.valueSet ? fmtMoney(totals.valueActual) : "—"} sub={totals.valueSet ? "in storage × $/cwt" : ""} />
       </div>
@@ -5096,8 +5104,8 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
                 <td style={tdStyle}>{g.projRated ? fmt(g.projShrink) : "—"}</td>
                 <td style={{ ...tdStyle, color: "#8fd19e" }}>{g.valueSet ? fmtMoney(g.valueProj) : "—"}</td>
                 <td style={tdStyle}>{fmt(g.shipped)}</td>
-                <td style={{ ...tdStyle, color: g.initial && g.shrink / g.initial > 0.08 ? "#e08787" : "#8fd19e" }}>{fmt(g.shrink)}</td>
-                <td style={tdStyle}>{g.initial ? ((g.shrink / g.initial) * 100).toFixed(2) : "0.00"}%</td>
+                <td style={{ ...tdStyle, color: g.shrinkBase && g.shrink / g.shrinkBase > 0.08 ? "#e08787" : "#8fd19e" }}>{g.shrinkBase ? fmt(g.shrink) : "—"}</td>
+                <td style={tdStyle}>{g.shrinkBase ? `${((g.shrink / g.shrinkBase) * 100).toFixed(2)}%` : "—"}</td>
               </tr>
             ))}
             {grouped.length === 0 && (
