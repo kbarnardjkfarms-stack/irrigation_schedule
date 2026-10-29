@@ -6,17 +6,15 @@ import AgronomyByCriteria from './AgronomyByCriteria.jsx'
 import AgronomySampleDatabase from './AgronomySampleDatabase.jsx'
 import AgronomyCompostSources from './AgronomyCompostSources.jsx'
 import AgronomyCleanup from './AgronomyCleanup.jsx'
+import AgronomyTargets from './AgronomyTargets.jsx'
 
-// AgWorld sometimes sends the same crop under a different name (e.g. "Lucerne"
-// for alfalfa, "Maize" for corn). Fold those into the one name AIO uses so the
-// badge colour, crop filter and agronomy curves all treat them the same.
-const CROP_ALIASES = { LUCERNE: 'ALFALFA', MAIZE: 'CORN' }
-function normalizeCrop(name) {
-  const up = (name || '').toUpperCase().trim()
-  return CROP_ALIASES[up] || up
-}
-
-export default function Agronomy() {
+// Targets tab (editing the agronomyCriteria/agronomyCurves config that used
+// to be hardcoded in AgronomyConfig.js) is Admin/Owner only, per Kent -
+// narrower than canSeeAgronomy itself, which also lets Farm managers in.
+// The updateAgronomyCriteria Cloud Function enforces this independently
+// (requireAdminOrOwner), so this is a UI convenience, not the real gate.
+export default function Agronomy({ userRole }) {
+  const canEditTargets = userRole === 'admin' || userRole === 'owner'
   const [view, setView] = useState('field')
   const [baseFieldsById, setBaseFieldsById] = useState({})
   const [seasonDataByField, setSeasonDataByField] = useState({})
@@ -103,7 +101,7 @@ export default function Agronomy() {
           name: base.name,
           farmId: base.farmId,
           farmName: base.farmName,
-          cropName: normalizeCrop(seasonData.cropName),
+          cropName: (seasonData.cropName || '').toUpperCase(),
           varietyName: seasonData.varietyName || null,
           acres: seasonData.acres || null,
           plantDate: seasonData.plantDate || null
@@ -143,6 +141,11 @@ export default function Agronomy() {
         <button className={view === 'cleanup' ? 'active' : ''} onClick={() => setView('cleanup')}>
           Cleanup
         </button>
+        {canEditTargets && (
+          <button className={view === 'targets' ? 'active' : ''} onClick={() => setView('targets')}>
+            Targets
+          </button>
+        )}
       </div>
 
       {view === 'field' && <AgronomyByField fields={fields} />}
@@ -150,6 +153,7 @@ export default function Agronomy() {
       {view === 'database' && <AgronomySampleDatabase fields={fields} />}
       {view === 'compost' && <AgronomyCompostSources />}
       {view === 'cleanup' && <AgronomyCleanup fields={allFields} />}
+      {view === 'targets' && canEditTargets && <AgronomyTargets />}
     </div>
   )
 }

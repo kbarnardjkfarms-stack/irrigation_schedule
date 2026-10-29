@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, Fragment } from 'react'
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react'
 
 import { createPortal } from 'react-dom'
 
@@ -16,10 +16,7 @@ import Login from './Login.jsx'
 
 import PotatoStorage from './PotatoStorage.jsx'
 import Users from './Users.jsx'
-import PivotProfile from './PivotProfile.jsx'
-import PivotProfilesList from './PivotProfilesList.jsx'
 import Agronomy from './Agronomy.jsx'
-import CustomerPortal from './CustomerPortal.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
 
@@ -47,15 +44,6 @@ const DEFAULT_HOUR = { am: 8, pm: 17 }
 
 const GALLONS_PER_ACRE_INCH = 27154
 
-// AgWorld sometimes sends the same crop under a different name (e.g. "Lucerne"
-// for alfalfa, "Maize" for corn). Fold those into the one name AIO uses so the
-// badge colour, crop filter and agronomy curves all treat them the same.
-const CROP_ALIASES = { LUCERNE: 'ALFALFA', MAIZE: 'CORN' }
-function normalizeCrop(name) {
-  const up = (name || '').toUpperCase().trim()
-  return CROP_ALIASES[up] || up
-}
-
 const CROP_COLOR = {
   POTATO: { bg: '#D6B48C', fg: '#4A2E12' }, POTATOES: { bg: '#D6B48C', fg: '#4A2E12' },
   CORN: { bg: '#FCE9A8', fg: '#7A5C02' }, 'SWEET CORN': { bg: '#FCE9A8', fg: '#7A5C02' },
@@ -63,87 +51,11 @@ const CROP_COLOR = {
   'SUGAR BEET': { bg: '#E0D6F5', fg: '#3D2B6B' }, BEETS: { bg: '#E0D6F5', fg: '#3D2B6B' },
   FALLOW: { bg: '#E4E1D8', fg: '#5A574C' }, ONIONS: { bg: '#F4C0D1', fg: '#4B1528' },
   MINT: { bg: '#9FE1CB', fg: '#04342C' }, CARROTS: { bg: '#FAD9BB', fg: '#7A3E0A' },
-  SQUASH: { bg: '#F5C98A', fg: '#6B3D02' },
-  BARLEY: { bg: '#B5D4F4', fg: '#0C447C' }, 'BARLEY - WINTER': { bg: '#B5D4F4', fg: '#0C447C' }, 'BARLEY - SPRING': { bg: '#B5D4F4', fg: '#0C447C' }
+  SQUASH: { bg: '#F5C98A', fg: '#6B3D02' }
 }
 
 function slugifyFarmName(name) {
   return (name || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-}
-
-// Drops every service worker and cached file the browser is holding for this
-// site so the next load pulls everything fresh. With includeStorage it also
-// wipes the browser's stored app data (Firestore's offline cache, saved
-// login) — the one-tap "reset" for a phone that's gotten stuck.
-async function clearAppCaches({ includeStorage = false } = {}) {
-  try {
-    if ('serviceWorker' in navigator) {
-      const regs = await navigator.serviceWorker.getRegistrations()
-      await Promise.all(regs.map((r) => r.unregister()))
-    }
-    if (window.caches) {
-      const keys = await window.caches.keys()
-      await Promise.all(keys.map((k) => window.caches.delete(k)))
-    }
-    if (includeStorage) {
-      try { window.localStorage.clear(); window.sessionStorage.clear() } catch { /* storage blocked */ }
-      if (window.indexedDB && window.indexedDB.databases) {
-        const dbs = await window.indexedDB.databases()
-        await Promise.all(
-          dbs.filter((d) => d.name).map((d) => new Promise((resolve) => {
-            const req = window.indexedDB.deleteDatabase(d.name)
-            req.onsuccess = req.onerror = req.onblocked = () => resolve()
-          }))
-        )
-      }
-    }
-  } catch (e) {
-    console.warn('clearing app caches failed', e)
-  }
-}
-
-// Escape hatch: open the app at /?reset=1 (bookmark it on the phone) to wipe
-// the cached copy and stored data and start clean — no incognito window.
-if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('reset') === '1') {
-  clearAppCaches({ includeStorage: true }).finally(() => window.location.replace(window.location.pathname))
-}
-
-// Shown on the home screen in place of the module tiles whenever the signed-in
-// person's profile hasn't loaded: a short "loading", then — if it's stuck or
-// failed — a way out that doesn't need an incognito window. A stuck copy of
-// the app's saved data on the device is the usual cause.
-function ProfileRecovery({ status, slow, onRetry, onSignOut }) {
-  const box = { margin: '24px', padding: '20px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px', maxWidth: '520px' }
-  const row = { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '14px' }
-  if (status === 'loading' && !slow) {
-    return <div style={{ padding: '24px', color: '#888', fontSize: '14px' }}>Loading your account…</div>
-  }
-  if (status === 'missing' || status === 'ready') {
-    return (
-      <div style={box}>
-        <div style={{ fontWeight: 600, marginBottom: '6px' }}>Your login isn't set up yet</div>
-        <div style={{ fontSize: '14px', color: '#666' }}>You're signed in, but this login has no role assigned. Ask an Admin to set it up, then try again.</div>
-        <div style={row}>
-          <button onClick={onRetry}>Try again</button>
-          <button onClick={onSignOut}>Sign out</button>
-        </div>
-      </div>
-    )
-  }
-  return (
-    <div style={box}>
-      <div style={{ fontWeight: 600, marginBottom: '6px' }}>AIO is having trouble loading your account</div>
-      <div style={{ fontSize: '14px', color: '#666' }}>
-        This is usually a stuck saved copy of the app on this device, not a problem with your account. Try again first.
-        If it keeps happening, reset the app data — you'll need to sign in again.
-      </div>
-      <div style={row}>
-        <button onClick={onRetry}>Try again</button>
-        <button onClick={() => { clearAppCaches({ includeStorage: true }).finally(() => window.location.replace(window.location.pathname)) }}>Reset app data</button>
-        <button onClick={onSignOut}>Sign out</button>
-      </div>
-    </div>
-  )
 }
 
 const ROLE_LABELS = {
@@ -151,8 +63,7 @@ const ROLE_LABELS = {
   owner: 'Owner',
   farm_manager: 'Farm manager',
   irrigation_manager: 'Irrigation manager',
-  irrigator: 'Irrigator',
-  customer: 'Customer'
+  irrigator: 'Irrigator'
 }
 
 function mondayOf(d) {
@@ -243,103 +154,14 @@ function styleForState(state, additive) {
   return { background: base, color: '#fff' }
 }
 
-// Works out where the pivot popup should sit so it is never cut off.
-// anchor.top is just under the pivot icon, anchor.iconTop is the icon's top
-// edge. Prefer under the icon; if that runs off the bottom of the screen,
-// open above the icon; if neither fits, slide it up to stay fully visible.
-// Also keeps it inside the left and right edges.
-function placePivotPanel(anchor, size, viewport) {
-  const margin = 8
-  let top = anchor.top
-  if (top + size.height > viewport.height - margin) {
-    const above = anchor.iconTop - 4 - size.height
-    top = above >= margin ? above : Math.max(margin, viewport.height - margin - size.height)
-  }
-  let left = Math.min(anchor.left, viewport.width - size.width - margin)
-  left = Math.max(margin, left)
-  return { top, left }
-}
-
 export default function App() {
-  // Keep the service worker registration so new deploys are noticed quickly
-  // (see the polling effect below) instead of only on the next full page load.
-  const swRegistrationRef = useRef(null)
   const {
     needRefresh: [needRefresh],
     updateServiceWorker
-  } = useRegisterSW({
-    onRegisteredSW(_swUrl, registration) {
-      swRegistrationRef.current = registration || null
-    }
-  })
-  useEffect(() => {
-    const check = () => {
-      const reg = swRegistrationRef.current
-      if (reg && navigator.onLine) reg.update().catch(() => {})
-    }
-    const id = setInterval(check, 60 * 1000)
-    const onVisible = () => { if (document.visibilityState === 'visible') check() }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible) }
-  }, [])
-
-  // Belt-and-suspenders: don't rely on the service worker alone to notice a
-  // new deploy. /version.json is never cached and carries the build stamp
-  // baked into this bundle; if they differ, a newer build is live, so clear
-  // the old cached copy and reload. Re-checked on open, on returning to the
-  // app (phones freeze background apps rather than closing them), on
-  // regaining signal, and every couple of minutes.
-  useEffect(() => {
-    if (typeof __BUILD_ID__ === 'undefined') return undefined
-    let checking = false
-    async function checkVersion() {
-      if (checking || !navigator.onLine) return
-      checking = true
-      try {
-        const res = await fetch(`/version.json?t=${Date.now()}`, { cache: 'no-store' })
-        if (!res.ok) return
-        const { build } = await res.json()
-        if (!build || build === __BUILD_ID__) return
-        // Don't yank the page out from under someone mid-typing — catch it next check.
-        const tag = document.activeElement && document.activeElement.tagName
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-        // One reload attempt per new build per session, so a cache that
-        // refuses to clear can never trap the page in a reload loop.
-        if (window.sessionStorage.getItem('aio-reloaded-for') === build) return
-        window.sessionStorage.setItem('aio-reloaded-for', build)
-        await clearAppCaches()
-        window.location.reload()
-      } catch {
-        // offline, blocked, or running in dev (no version.json) — try again next time
-      } finally {
-        checking = false
-      }
-    }
-    const onVisible = () => { if (document.visibilityState === 'visible') checkVersion() }
-    const onPageShow = (e) => { if (e.persisted) checkVersion() }
-    checkVersion()
-    const id = setInterval(checkVersion, 2 * 60 * 1000)
-    document.addEventListener('visibilitychange', onVisible)
-    window.addEventListener('online', checkVersion)
-    window.addEventListener('focus', checkVersion)
-    window.addEventListener('pageshow', onPageShow)
-    return () => {
-      clearInterval(id)
-      document.removeEventListener('visibilitychange', onVisible)
-      window.removeEventListener('online', checkVersion)
-      window.removeEventListener('focus', checkVersion)
-      window.removeEventListener('pageshow', onPageShow)
-    }
-  }, [])
+  } = useRegisterSW()
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
   const [userProfile, setUserProfile] = useState(null)
-  // Where loading the signed-in person's profile stands. The home screen's
-  // tiles depend on it, so a stalled profile used to leave a blank page with
-  // no explanation — see ProfileRecovery.
-  const [profileStatus, setProfileStatus] = useState('loading') // 'loading' | 'ready' | 'missing' | 'error'
-  const [profileSlow, setProfileSlow] = useState(false)
-  const [profileAttempt, setProfileAttempt] = useState(0)
   const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', or 'agronomy' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
@@ -428,11 +250,8 @@ export default function App() {
   const [pivotGuidByFieldId, setPivotGuidByFieldId] = useState({})
   const [pivotsByGuid, setPivotsByGuid] = useState({})
   const [expandedPivotFieldId, setExpandedPivotFieldId] = useState(null)
-  const [pivotPanelPos, setPivotPanelPos] = useState({ top: 0, left: 0, iconTop: 0 })
-  const [pivotPanelPlace, setPivotPanelPlace] = useState(null)
+  const [pivotPanelPos, setPivotPanelPos] = useState({ top: 0, left: 0 })
   const pivotDetailRef = useRef(null)
-  const [pivotProfileGuid, setPivotProfileGuid] = useState(null)
-  const [pivotProfilesByGuid, setPivotProfilesByGuid] = useState({})
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const settingsMenuRef = useRef(null)
@@ -456,10 +275,7 @@ export default function App() {
     // The panel is positioned at a fixed screen coordinate captured at click
     // time. If the page scrolls afterward, that coordinate no longer lines up
     // with the icon, so just close it rather than let it drift out of place.
-    function handleScroll(e) {
-      // Scrolling inside the popup itself (when it is taller than the
-      // screen) shouldn't close it.
-      if (pivotDetailRef.current && e.target instanceof Node && pivotDetailRef.current.contains(e.target)) return
+    function handleScroll() {
       setExpandedPivotFieldId(null)
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -469,21 +285,6 @@ export default function App() {
       window.removeEventListener('scroll', handleScroll, true)
     }
   }, [expandedPivotFieldId])
-
-  // After the pivot popup renders, measure it and move it if it would run off
-  // the screen. Runs before the browser paints, so it never visibly jumps.
-  useLayoutEffect(() => {
-    const el = pivotDetailRef.current
-    if (!expandedPivotFieldId || !el) return
-    const next = placePivotPanel(
-      pivotPanelPos,
-      { width: el.offsetWidth, height: el.offsetHeight },
-      { width: window.innerWidth, height: window.innerHeight }
-    )
-    setPivotPanelPlace((prev) => (
-      prev && Math.abs(prev.top - next.top) < 0.5 && Math.abs(prev.left - next.left) < 0.5 ? prev : next
-    ))
-  })
 
   useEffect(() => {
     if (!sortMenuOpen) return
@@ -514,31 +315,14 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    if (!user) { setUserRole(null); setUserProfile(null); setProfileStatus('loading'); return }
-    setProfileStatus('loading')
+    if (!user) { setUserRole(null); setUserProfile(null); return }
     const unsub = onSnapshot(doc(db, 'users', user.uid), (snap) => {
-      // A "no such doc" answer that only came from the device's saved copy
-      // isn't proof the profile is missing — wait for the server to say so.
-      if (!snap.exists() && snap.metadata.fromCache) return
       const data = snap.exists() ? snap.data() : null
       setUserRole(data ? data.role : null)
       setUserProfile(data)
-      setProfileStatus(data ? 'ready' : 'missing')
-    }, (err) => {
-      console.error('profile listener failed', err)
-      setProfileStatus('error')
     })
     return () => unsub()
-  }, [user, profileAttempt])
-
-  // If the profile hasn't answered in a few seconds, say so instead of
-  // leaving a blank screen.
-  useEffect(() => {
-    setProfileSlow(false)
-    if (!user || profileStatus !== 'loading') return undefined
-    const t = setTimeout(() => setProfileSlow(true), 6000)
-    return () => clearTimeout(t)
-  }, [user, profileStatus, profileAttempt])
+  }, [user])
 
   // Mirrors firestore.rules' canEditSchedule() logic — kept client-side too
   // so the UI reflects reality (disabled buttons, skipped selections)
@@ -557,34 +341,7 @@ export default function App() {
   // Mirrors firestore.rules' canViewAgronomy() — Admin, Owner, or Farm
   // manager only. Deliberately excludes Irrigation manager and Irrigator,
   // unlike canEditField()'s farm-scoped roles above.
-  // Module access. Mirrors firestore.rules' hasModule(): Admin/Owner always
-  // have every module; anyone else follows the `modules` list on their
-  // profile, and a profile with NO list keeps everything their role already
-  // allowed. Not loaded yet (no profile) counts as no access, so nothing
-  // flashes up for someone who shouldn't see it. The rules are the real
-  // enforcement — this only keeps the UI honest.
-  const hasModule = (id) => {
-    if (userRole === 'admin' || userRole === 'owner') return true
-    if (userRole === 'customer') return false
-    if (!userProfile) return false
-    return !Array.isArray(userProfile.modules) || userProfile.modules.includes(id)
-  }
-  const irrigationAllowed = hasModule('irrigation')
-  // farms/seasons/fields are shared reference data that customer logins are
-  // locked out of in firestore.rules — don't even try to listen for them.
-  const staffReady = !!userRole && userRole !== 'customer'
-  const canSeeAgronomy = (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager') && hasModule('agronomy')
-
-  // If someone's module access changes while they're sitting on a page they
-  // no longer have, send them home rather than leaving a dead screen.
-  useEffect(() => {
-    if (!userRole) return
-    const needs = page === 'potato-storage' ? 'potato-storage'
-      : page === 'agronomy' ? 'agronomy'
-      : (page === 'irrigation' || page === 'pivot-profile' || page === 'pivot-profiles-list') ? 'irrigation'
-      : null
-    if (needs && !hasModule(needs)) setPage('home')
-  }, [page, userRole, userProfile]) // eslint-disable-line react-hooks/exhaustive-deps
+  const canSeeAgronomy = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager'
 
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
@@ -603,27 +360,27 @@ export default function App() {
   // something recreates it. Gating on `user` means the listener is only ever
   // created once auth is confirmed, so there's nothing stale to get stuck on.
   useEffect(() => {
-    if (!user || !irrigationAllowed) return
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'weeks', weekId, 'events'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data().events || [] })
       setEventsByField(next)
     })
     return () => unsub()
-  }, [user, weekId, irrigationAllowed])
+  }, [user, weekId])
 
   useEffect(() => {
-    if (!user || !irrigationAllowed) return
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'fieldSettings'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data().gpm ?? null })
       setGpmByField(next)
     })
     return () => unsub()
-  }, [user, irrigationAllowed])
+  }, [user])
 
   useEffect(() => {
-    if (!user || !staffReady) return
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'seasons'), (snap) => {
       const list = []
       snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
@@ -640,10 +397,10 @@ export default function App() {
       })
     })
     return () => unsub()
-  }, [user, staffReady])
+  }, [user])
 
   useEffect(() => {
-    if (!user || !staffReady) return
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'farms'), (snap) => {
       const list = []
       snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
@@ -651,57 +408,40 @@ export default function App() {
       setFarms(list)
     })
     return () => unsub()
-  }, [user, staffReady])
+  }, [user])
 
   useEffect(() => {
-    if (!user || !staffReady) return
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'fields'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data() })
       setBaseFieldsById(next)
     })
     return () => unsub()
-  }, [user, staffReady])
+  }, [user])
 
   useEffect(() => {
-    if (!user || !irrigationAllowed) return
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'pivotFieldMapping'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.data().fieldId] = d.data().pivotGuid })
       setPivotGuidByFieldId(next)
     })
     return () => unsub()
-  }, [user, irrigationAllowed])
+  }, [user])
 
   useEffect(() => {
-    if (!user || !irrigationAllowed) return
+    if (!user) return
     const unsub = onSnapshot(collection(db, 'pivots'), (snap) => {
       const next = {}
       snap.forEach((d) => { next[d.id] = d.data() })
       setPivotsByGuid(next)
     })
     return () => unsub()
-  }, [user, irrigationAllowed])
-
-  // GPM now lives on the pivot's own profile (a pivot can serve more than
-  // one field, e.g. Mietzner Middle, so it belongs with the machine, not
-  // any one field). This replaces fieldSettings.gpm as the source for the
-  // scheduled-inches column below — that field was never actually wired to
-  // a UI, so every field was showing 0.00 in "Scheduled inches" until now.
-  // Also carries the stuck-pivot alert state (stuckAlertActive, etc.) used
-  // for the badge and the "Clear error" action.
-  useEffect(() => {
-    if (!user || !irrigationAllowed) return
-    const unsub = onSnapshot(collection(db, 'pivotProfiles'), (snap) => {
-      const next = {}
-      snap.forEach((d) => { next[d.id] = d.data() })
-      setPivotProfilesByGuid(next)
-    })
-    return () => unsub()
-  }, [user, irrigationAllowed])
+  }, [user])
 
   useEffect(() => {
-    if (!user || !staffReady || !selectedSeasonId) return
+    if (!user || !selectedSeasonId) return
     const q = query(collectionGroup(db, 'seasons'), where('seasonId', '==', selectedSeasonId))
     const unsub = onSnapshot(q, (snap) => {
       const next = {}
@@ -712,7 +452,7 @@ export default function App() {
       setSeasonDataByField(next)
     })
     return () => unsub()
-  }, [user, staffReady, selectedSeasonId])
+  }, [user, selectedSeasonId])
 
   const fields = useMemo(() => {
     return Object.entries(baseFieldsById)
@@ -729,7 +469,7 @@ export default function App() {
           fieldName: base.name,
           farmId: base.farmId,
           farmName: base.farmName,
-          crop: normalizeCrop(seasonData.cropName),
+          crop: (seasonData.cropName || '').toUpperCase(),
           acres: seasonData.acres || null,
           pivotRank
         }
@@ -757,7 +497,7 @@ export default function App() {
   const cropOptions = useMemo(() => {
     const set = new Set()
     Object.values(seasonDataByField).forEach((sd) => {
-      if (sd && sd.cropName) set.add(normalizeCrop(sd.cropName))
+      if (sd && sd.cropName) set.add(sd.cropName.toUpperCase())
     })
     return [...set].sort((a, b) => a.localeCompare(b))
   }, [seasonDataByField])
@@ -840,60 +580,12 @@ export default function App() {
     await signOut(auth)
   }
 
-  async function handleClearStuckAlert(pivotGuid) {
-    await setDoc(doc(db, 'pivotProfiles', pivotGuid), {
-      stuckAlertActive: false,
-      stuckAlertClearedAt: new Date().toISOString()
-    }, { merge: true })
-  }
-
-  const expandedPivotGuid = expandedPivotFieldId ? pivotGuidByFieldId[expandedPivotFieldId] : null
-  const expandedPivotProfile = expandedPivotGuid ? pivotProfilesByGuid[expandedPivotGuid] : null
-  const expandedPivotIsStuck = !!(expandedPivotProfile && expandedPivotProfile.stuckAlertActive)
-  const expandedPivotStuckMinutes = expandedPivotIsStuck && expandedPivotProfile.positionUnchangedSince
-    ? Math.max(0, Math.round((Date.now() - new Date(expandedPivotProfile.positionUnchangedSince).getTime()) / 60000))
-    : null
-  const expandedPivotHasDrift = !!(expandedPivotProfile && expandedPivotProfile.lapTimeDriftFlagged)
-  const expandedPivotBaseline = expandedPivotProfile && expandedPivotProfile.seasonBaselines && selectedSeasonId
-    ? expandedPivotProfile.seasonBaselines[selectedSeasonId]
-    : null
-  const hasAnyExpandedAlert = expandedPivotIsStuck || expandedPivotHasDrift
-  const canClearStuckAlerts = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager' || userRole === 'irrigation_manager'
-  const showUsersMenuItem = userRole === 'admin' || userRole === 'owner'
-  const showPivotProfilesMenuItem = page === 'irrigation' && (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager')
-  const showCopyLinkMenuItem = page === 'irrigation' && selectedFarmId !== 'all'
-
   if (user === undefined) {
     return <div className="app"><p style={{ padding: '2rem' }}>Loading…</p></div>
   }
 
   if (!user) {
     return <Login />
-  }
-
-  // Customer logins see nothing but their own portal — no module tiles, no
-  // internal data. (firestore.rules enforces this too; this is just the UI.)
-  if (userRole === 'customer') {
-    return (
-      <div className="app">
-        {needRefresh && (
-          <div className="update-banner">
-            <span>A new version of AIO is available.</span>
-            <button onClick={() => updateServiceWorker(true)}>Reload</button>
-          </div>
-        )}
-        <header className="topbar">
-          <div className="brand" style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-            <img src={aioLogoIcon} alt="AIO — All In One" style={{ height: '40px' }} />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: 'auto' }}>
-            <span style={{ fontSize: '13px', color: '#888' }}>{user.email}</span>
-            <button onClick={handleSignOut}>Sign out</button>
-          </div>
-        </header>
-        <CustomerPortal profile={userProfile} />
-      </div>
-    )
   }
 
   return (
@@ -922,7 +614,7 @@ export default function App() {
           </div>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: '10px' }}>
-          {(userRole === 'admin' || userRole === 'owner' || (page === 'irrigation' && (userRole === 'farm_manager' || selectedFarmId !== 'all'))) && (
+          {(userRole === 'admin' || userRole === 'owner') && (
             <div ref={settingsMenuRef} style={{ position: 'relative' }}>
               <button
                 onClick={() => { setSettingsMenuOpen((o) => !o); setProfileMenuOpen(false) }}
@@ -936,24 +628,10 @@ export default function App() {
               </button>
               {settingsMenuOpen && (
                 <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '6px', background: '#fff', border: '0.5px solid #ddd8cc', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.12)', minWidth: '200px', zIndex: 10, overflow: 'hidden' }}>
-                  {showUsersMenuItem && (
-                    <button
-                      onClick={() => { setPage('users'); setSettingsMenuOpen(false) }}
-                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
-                    >Users &amp; Permissions</button>
-                  )}
-                  {showPivotProfilesMenuItem && (
-                    <button
-                      onClick={() => { setPage('pivot-profiles-list'); setSettingsMenuOpen(false) }}
-                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: showUsersMenuItem ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
-                    >Pivot profiles</button>
-                  )}
-                  {showCopyLinkMenuItem && (
-                    <button
-                      onClick={copyWatchLink}
-                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: (showUsersMenuItem || showPivotProfilesMenuItem) ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
-                    >{linkCopied ? 'Copied!' : 'Copy irrigator link'}</button>
-                  )}
+                  <button
+                    onClick={() => { setPage('users'); setSettingsMenuOpen(false) }}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
+                  >Users &amp; Permissions</button>
                 </div>
               )}
             </div>
@@ -976,12 +654,8 @@ export default function App() {
           </div>
         </div>
       </header>
-      {page === 'home' && !userRole && (
-        <ProfileRecovery status={profileStatus} slow={profileSlow} onRetry={() => setProfileAttempt((n) => n + 1)} onSignOut={handleSignOut} />
-      )}
       {page === 'home' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, 160px)', gap: '16px', padding: '24px' }}>
-          {hasModule('irrigation') && (
           <div
             onClick={() => setPage('irrigation')}
             style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
@@ -1003,8 +677,6 @@ export default function App() {
             </div>
             <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Irrigation</div>
           </div>
-          )}
-          {hasModule('potato-storage') && (
           <div
             onClick={() => setPage('potato-storage')}
             style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
@@ -1012,7 +684,6 @@ export default function App() {
             <img src={potatoStorageLogo} alt="Potato Storage" style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover' }} />
             <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato storage</div>
           </div>
-          )}
           {canSeeAgronomy && (
             <div
               onClick={() => setPage('agronomy')}
@@ -1037,25 +708,10 @@ export default function App() {
           )}
         </div>
       )}
-      {page === 'potato-storage' && hasModule('potato-storage') && <PotatoStorage />}
+      {page === 'potato-storage' && <PotatoStorage />}
       {page === 'users' && <Users />}
-      {page === 'pivot-profile' && hasModule('irrigation') && <PivotProfile pivotGuid={pivotProfileGuid} onBack={() => setPage('irrigation')} />}
-      {page === 'pivot-profiles-list' && hasModule('irrigation') && (
-        <PivotProfilesList
-          farms={farms}
-          pivotsByGuid={pivotsByGuid}
-          pivotProfilesByGuid={pivotProfilesByGuid}
-          pivotGuidByFieldId={pivotGuidByFieldId}
-          baseFieldsById={baseFieldsById}
-          userRole={userRole}
-          userProfile={userProfile}
-          selectedFarmId={selectedFarmId}
-          onOpenProfile={(guid) => { setPivotProfileGuid(guid); setPage('pivot-profile') }}
-          onBack={() => setPage('irrigation')}
-        />
-      )}
-      {page === 'agronomy' && canSeeAgronomy && <Agronomy />}
-      {page === 'irrigation' && hasModule('irrigation') && (
+      {page === 'agronomy' && canSeeAgronomy && <Agronomy userRole={userRole} />}
+      {page === 'irrigation' && (
         <>
           {view === 'live-data' && <LiveData />}
           {view === 'schedule' && <div className="filter-bar">
@@ -1080,6 +736,9 @@ export default function App() {
                 <option key={f.id} value={f.id}>{f.name}</option>
               ))}
             </select>
+            {selectedFarmId !== 'all' && (
+              <button onClick={copyWatchLink}>{linkCopied ? 'Copied!' : 'Copy irrigator link'}</button>
+            )}
           </div>}
           {view === 'schedule' && <div className="week-nav">
             <button onClick={() => setWeekOffset((w) => w - 1)}>‹ Prev week</button>
@@ -1237,7 +896,7 @@ export default function App() {
               <tbody>
                 {fields.map((field) => {
                   const events = eventsByField[field.id] || []
-                  const gpm = pivotProfilesByGuid[pivotGuidByFieldId[field.id]]?.currentGpm
+                  const gpm = gpmByField[field.id]
                   const color = CROP_COLOR[field.crop] || { bg: '#D3D1C7', fg: '#2C2C2A' }
                   const isSource = mode === 'copy-targets' && copySourceId === field.id
                   const isCopyTarget = mode === 'copy-targets' && copyTargets.has(field.id)
@@ -1269,15 +928,13 @@ export default function App() {
                             <PivotIcon
                               pivot={pivot}
                               size={55}
-                              flagged={!!(pivotProfilesByGuid[pivotGuid]?.stuckAlertActive || pivotProfilesByGuid[pivotGuid]?.lapTimeDriftFlagged)}
                               onClick={(e) => {
                                 e.stopPropagation()
                                 if (isPivotExpanded) {
                                   setExpandedPivotFieldId(null)
                                 } else {
                                   const rect = e.currentTarget.getBoundingClientRect()
-                                  setPivotPanelPos({ top: rect.bottom + 4, left: rect.left, iconTop: rect.top })
-                                  setPivotPanelPlace(null)
+                                  setPivotPanelPos({ top: rect.bottom + 4, left: rect.left })
                                   setExpandedPivotFieldId(field.id)
                                 }
                               }}
@@ -1338,52 +995,9 @@ export default function App() {
         <div
           ref={pivotDetailRef}
           onClick={(e) => e.stopPropagation()}
-          style={{ position: 'fixed', top: (pivotPanelPlace || pivotPanelPos).top, left: (pivotPanelPlace || pivotPanelPos).left, zIndex: 1000, boxShadow: '0 6px 16px rgba(0,0,0,0.12)', maxHeight: 'calc(100vh - 16px)', maxWidth: 'calc(100vw - 16px)', overflowY: 'auto' }}
+          style={{ position: 'fixed', top: pivotPanelPos.top, left: pivotPanelPos.left, zIndex: 1000, boxShadow: '0 6px 16px rgba(0,0,0,0.12)' }}
         >
-          {expandedPivotIsStuck && (
-            <div style={{ padding: '10px 14px', background: '#FBEAEA', border: '1px solid #E8B4B4', borderRadius: '8px 8px 0 0' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-                <span style={{ color: '#A32D2D', fontSize: '15px', fontWeight: 700, lineHeight: 1.3 }}>!</span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#A32D2D' }}>Potential parked wet pivot</div>
-                  <div style={{ fontSize: '11px', color: '#8A3636', marginTop: '2px' }}>
-                    No movement detected for {expandedPivotStuckMinutes != null ? `${expandedPivotStuckMinutes} min` : 'a while'} while running
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => handleClearStuckAlert(expandedPivotGuid)}
-                style={{ marginTop: '8px', width: '100%', fontSize: '12px', padding: '6px 0', border: '1px solid #A32D2D', color: '#A32D2D', background: '#fff', borderRadius: '6px', display: canClearStuckAlerts ? undefined : 'none' }}
-                disabled={!canClearStuckAlerts}
-              >Clear error</button>
-            </div>
-          )}
-          {expandedPivotHasDrift && (
-            <div style={{ padding: '10px 14px', background: '#FBF3E2', border: '1px solid #F0D9A8', borderTop: expandedPivotIsStuck ? 'none' : undefined, borderRadius: expandedPivotIsStuck ? '0' : '8px 8px 0 0' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-                <span style={{ color: '#854F0B', fontSize: '15px', fontWeight: 700, lineHeight: 1.3 }}>~</span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#854F0B' }}>Lap time has drifted</div>
-                  <div style={{ fontSize: '11px', color: '#6B4108', marginTop: '2px' }}>
-                    {expandedPivotProfile && expandedPivotProfile.currentLapTimeHours != null ? `${expandedPivotProfile.currentLapTimeHours} hr` : 'Current'} lap time is more than 10% off this season's baseline{expandedPivotBaseline ? ` (${expandedPivotBaseline.lapTimeHours} hr)` : ''}. Clears on its own once a new audit lands back in range.
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-          <div style={{ borderTop: hasAnyExpandedAlert ? 'none' : '1px solid #E2E4E8', borderRadius: hasAnyExpandedAlert ? '0' : '8px 8px 0 0', overflow: 'hidden' }}>
-            <PivotDetailPanel pivot={pivotsByGuid[pivotGuidByFieldId[expandedPivotFieldId]]} />
-          </div>
-          {pivotGuidByFieldId[expandedPivotFieldId] && (
-            <button
-              onClick={() => {
-                setPivotProfileGuid(pivotGuidByFieldId[expandedPivotFieldId])
-                setPage('pivot-profile')
-                setExpandedPivotFieldId(null)
-              }}
-              style={{ width: '100%', marginTop: '8px', borderRadius: '8px', border: 'none', background: '#3c5a3f', color: '#fff', fontWeight: 600, padding: '9px 0', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
-            >Pivot profile <span style={{ fontWeight: 400 }}>&rarr;</span></button>
-          )}
+          <PivotDetailPanel pivot={pivotsByGuid[pivotGuidByFieldId[expandedPivotFieldId]]} />
         </div>,
         document.body
       )}

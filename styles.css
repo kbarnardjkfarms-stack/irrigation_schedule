@@ -488,3 +488,81 @@ thead th.sticky-col { top: 0; z-index: 4; }
   border-bottom: 0.5px solid #eee8db;
 }
 .agronomy-annual-value-row:last-child { border-bottom: none; }
+
+/* Targets tab - editable flat-target table and per-crop/variety weekly
+   curve grid (see AgronomyTargets.jsx). Reuses the existing table/section
+   conventions above rather than introducing new ones. */
+.agronomy-targets-hint {
+  font-size: 11px;
+  color: #888;
+  margin: 0 0 8px;
+}
+
+.agronomy-targets-table input {
+  font-family: inherit;
+  font-size: 11px;
+  border: 0.5px solid #ddd8cc;
+  border-radius: 4px;
+  padding: 2px 5px;
+  width: 100%;
+}
+
+.agronomy-targets-range-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.agronomy-targets-table-wrap {
+  overflow-x: auto;
+  margin-bottom: 10px;
+}
+
+.agronomy-targets-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 18px;
+}
+
+.agronomy-targets-msg-ok { color: #0F6E56; font-size: 11px; }
+.agronomy-targets-msg-error { color: #A32D2D; font-size: 11px; }
+
+.agronomy-targets-crop-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.agronomy-targets-new-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  background: #FAF8F2;
+  border: 0.5px solid #ddd8cc;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+
+.agronomy-targets-new-form input {
+  font-family: inherit;
+  font-size: 11px;
+  border: 0.5px solid #ddd8cc;
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+.agronomy-targets-remove-btn {
+  padding: 1px 6px;
+  font-size: 10px;
+  color: #A32D2D;
+}
+
+.agronomy-targets-danger-btn {
+  color: #A32D2D;
+  border-color: #A32D2D;
+}

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
-import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR, CROP_COLOR, WEEKLY_CURVES_BY_CROP } from './AgronomyConfig.js'
+import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR, CROP_COLOR } from './AgronomyConfig.js'
+import { useLiveAgronomyCriteria, getCurveRows, mergeFlatTargets } from './AgronomyCriteriaData.js'
 
 function fmtDate(ts) {
   if (!ts) return ''
@@ -117,17 +118,18 @@ function Sparkline({ points, color, band }) {
 }
 
 // Builds the reference band passed to Sparkline: the real week-by-week
-// curve for this crop when WEEKLY_CURVES_BY_CROP has one (potato, beets,
-// corn, as of Oct 2026), clamped to the curve's own defined range so a
-// season running longer than the sheet covers still gets a band instead of
-// a gap. Falls back to a flat band (the same [low, high] repeated across
-// the chart's x-range) for any crop not yet in that table - onions,
-// alfalfa, etc. - using the placeholder target from METRICS_BY_TYPE.
-function buildBand(points, cropName, curveKey, flatTarget) {
+// curve for this field's crop/variety when the live Targets data (see
+// AgronomyCriteriaData.js) has one, clamped to the curve's own defined
+// range so a season running longer than the sheet covers still gets a band
+// instead of a gap. Falls back to a flat band (the same [low, high]
+// repeated across the chart's x-range) for any crop with no curve defined
+// yet - onions, alfalfa, etc. - using the fallback target from
+// METRICS_BY_TYPE (merged with any live flat-target override by the
+// caller before it gets here).
+function buildBand(points, curveRows, curveKey, flatTarget) {
   if (!points.length) return null
   const xs = points.map((p) => p.x)
   const minX = Math.min(...xs), maxX = Math.max(...xs)
-  const curveRows = cropName ? WEEKLY_CURVES_BY_CROP[cropName] : null
 
   if (curveRows && curveRows.length) {
     const sorted = [...curveRows].sort((a, b) => a.week - b.week)
@@ -221,11 +223,14 @@ export default function AgronomyByField({ fields }) {
   // show real numbers, so this tile is left out entirely for a crop with
   // no curve defined yet rather than showing an empty placeholder for
   // something that may never exist for that crop.
+  const { flatTargets, curvesByKey } = useLiveAgronomyCriteria()
+  const metricsByType = useMemo(() => mergeFlatTargets(METRICS_BY_TYPE, flatTargets), [flatTargets])
+
   const nRecRow = useMemo(() => {
-    const curveRows = field?.cropName ? WEEKLY_CURVES_BY_CROP[field.cropName] : null
+    const curveRows = getCurveRows(curvesByKey, field?.cropName, field?.varietyName)
     if (!curveRows || weeksSinceEmergence == null) return null
     return curveRows.find((r) => r.week === weeksSinceEmergence) || null
-  }, [field, weeksSinceEmergence])
+  }, [curvesByKey, field, weeksSinceEmergence])
 
   const cropColor = field?.cropName ? (CROP_COLOR[field.cropName] || { bg: '#D3D1C7', fg: '#2C2C2A' }) : null
 
@@ -266,7 +271,7 @@ export default function AgronomyByField({ fields }) {
             {nRecRow.stage && <p className="agronomy-kpi-date">{nRecRow.stage}</p>}
           </div>
         )}
-        {Object.entries(METRICS_BY_TYPE).flatMap(([type, metrics]) =>
+        {Object.entries(metricsByType).flatMap(([type, metrics]) =>
           metrics
             .filter((m) => m.target) // no target yet = not "at a glance" actionable; still visible in the sample table below
             .map((m) => {
@@ -298,7 +303,7 @@ export default function AgronomyByField({ fields }) {
       <div className="agronomy-charts">
         {['soil', 'petiole'].map((type) => {
           const typeSamples = samples.filter((s) => s.type === type)
-          const metric = METRICS_BY_TYPE[type][0]
+          const metric = metricsByType[type][0]
           const points = typeSamples
             .filter((s) => s.values?.[metric.key] != null && s.receivedDt && plantDate)
             .map((s) => ({
@@ -306,7 +311,8 @@ export default function AgronomyByField({ fields }) {
               y: s.values[metric.key]
             }))
             .filter((p) => p.x != null && p.x >= IN_SEASON_WEEK_MIN && p.x <= IN_SEASON_WEEK_MAX)
-          const band = buildBand(points, field?.cropName, type === 'soil' ? 'soilNO3' : 'petioleNO3', metric.target)
+          const curveRows = getCurveRows(curvesByKey, field?.cropName, field?.varietyName)
+          const band = buildBand(points, curveRows, type === 'soil' ? 'soilNO3' : 'petioleNO3', metric.target)
           return (
             <div key={type} className="agronomy-chart-card">
               <p className="agronomy-chart-title">{SAMPLE_TYPE_LABEL[type]} {metric.label} vs weeks since emergence</p>
@@ -340,7 +346,7 @@ export default function AgronomyByField({ fields }) {
                   Nematode counts {'—'} {fmtDate(nematodeSample.receivedDt)}
                 </p>
                 <div className="agronomy-annual-values">
-                  {METRICS_BY_TYPE.nematode
+                  {metricsByType.nematode
                     .filter((m) => nematodeSample.values?.[m.key] != null)
                     .map((m) => (
                       <div key={m.key} className="agronomy-annual-value-row">
