@@ -155,11 +155,83 @@ function styleForState(state, additive) {
   return { background: base, color: '#fff' }
 }
 
+// Unregisters the service worker, clears its caches and reloads, so the next
+// load comes straight from the network.
+async function forceFreshLoad() {
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations()
+      await Promise.all(regs.map((r) => r.unregister()))
+    }
+    if (window.caches) {
+      const keys = await caches.keys()
+      await Promise.all(keys.map((k) => caches.delete(k)))
+    }
+  } catch (e) {
+    // fall through to the reload either way
+  }
+  window.location.reload()
+}
+
 export default function App() {
   const {
     needRefresh: [needRefresh],
     updateServiceWorker
-  } = useRegisterSW()
+  } = useRegisterSW({
+    // Ask the browser to look for a new service worker every few minutes and
+    // whenever the app comes back to the foreground. By default it only
+    // checks when the page is loaded, so an installed app left open (or
+    // reopened from cache) could keep showing an old build for days.
+    onRegisteredSW(_url, registration) {
+      if (!registration) return
+      const check = () => { if (navigator.onLine) registration.update().catch(() => {}) }
+      setInterval(check, 5 * 60 * 1000)
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') check()
+      })
+    }
+  })
+
+  // Belt and braces for the service worker: every deploy writes a fresh
+  // /version.json (never cached) and bakes the same stamp into the app as
+  // __BUILD_ID__. If they differ, this copy of the app is old. On first load
+  // that means: drop the old service worker + caches and reload once, which
+  // gets the new build without needing an incognito window. Later (app already
+  // open, maybe mid-edit) it just shows the "new version" banner instead.
+  const [stale, setStale] = useState(false)
+  useEffect(() => {
+    if (typeof __BUILD_ID__ === 'undefined') return undefined
+    let cancelled = false
+    let firstCheck = true
+    async function checkVersion() {
+      try {
+        const res = await fetch('/version.json?t=' + Date.now(), { cache: 'no-store' })
+        if (!res.ok) return
+        const { build } = await res.json()
+        if (cancelled || !build || build === __BUILD_ID__) return
+        const guardKey = 'aio-fresh-reload-' + build
+        if (firstCheck && !sessionStorage.getItem(guardKey)) {
+          sessionStorage.setItem(guardKey, '1')
+          await forceFreshLoad()
+        } else {
+          setStale(true)
+        }
+      } catch (e) {
+        // offline, or the dev server (no version.json) - nothing to do
+      } finally {
+        firstCheck = false
+      }
+    }
+    checkVersion()
+    const timer = setInterval(checkVersion, 5 * 60 * 1000)
+    const onVisible = () => { if (document.visibilityState === 'visible') checkVersion() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [])
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
   const [userProfile, setUserProfile] = useState(null)
@@ -597,10 +669,10 @@ export default function App() {
 
   return (
     <div className="app">
-      {needRefresh && (
+      {(needRefresh || stale) && (
         <div className="update-banner">
           <span>A new version of AIO is available.</span>
-          <button onClick={() => updateServiceWorker(true)}>Reload</button>
+          <button onClick={() => (stale ? forceFreshLoad() : updateServiceWorker(true))}>Reload</button>
         </div>
       )}
       <header className="topbar">
