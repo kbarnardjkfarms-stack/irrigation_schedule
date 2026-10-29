@@ -680,3 +680,59 @@ thead th.sticky-col { top: 0; z-index: 4; }
   cursor: pointer;
   text-decoration: underline;
 }
+
+/* ------------------------------------------------------------------
+   Yield History module (Yields.jsx / YieldImport.jsx). Builds on the
+   .agronomy-* and .contracts-* pieces above.
+   ------------------------------------------------------------------ */
+.yields-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+.yields-filters select, .yields-card-head select { font-family: inherit; font-size: 12px; padding: 5px 6px; border: 0.5px solid #ddd8cc; border-radius: 6px; background: #fff; color: #2b2b26; }
+.yields-years { display: inline-flex; align-items: center; gap: 4px; color: #888; font-size: 12px; }
+.yields-check { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #555; cursor: pointer; }
+.yields-check input { margin: 0; }
+.yields-menu { position: relative; }
+.yields-menu-panel { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; max-height: 340px; }
+.yields-menu-search { width: 100%; font-family: inherit; font-size: 12px; padding: 5px 7px; border: 0.5px solid #ddd8cc; border-radius: 6px; margin-bottom: 8px; }
+.yields-count { font-size: 10px; color: #999; font-variant-numeric: tabular-nums; }
+.yields-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+.yields-chip { display: inline-flex; align-items: center; gap: 6px; background: #fff; border: 0.5px solid #ddd8cc; border-radius: 14px; padding: 2px 4px 2px 10px; font-size: 12px; }
+.yields-chip i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
+.yields-chip button { border: none; background: none; padding: 0 6px; font-size: 14px; line-height: 1; color: #888; }
+
+.yields-card { background: #fff; border: 0.5px solid #ddd8cc; border-radius: 12px; padding: 14px 16px 10px; margin-bottom: 12px; }
+.yields-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.yields-card-title { font-weight: 600; font-size: 14px; color: #2b2b26; }
+
+.yields-tip { background: #fff; border: 0.5px solid #ddd8cc; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); padding: 8px 10px; font-size: 12px; min-width: 170px; }
+.yields-tip-title { font-weight: 600; margin-bottom: 4px; }
+.yields-tip-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; }
+.yields-tip-row i { width: 10px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+.yields-tip-row span { flex: 1; color: #52514e; }
+.yields-tip-row strong { font-variant-numeric: tabular-nums; }
+.yields-tip-row.muted span:last-child { flex: 0 0 auto; color: #888; }
+.yields-tip-unit { font-size: 10px; color: #888; margin-top: 4px; }
+
+.yields-table-toggle { margin-bottom: 12px; }
+.yields-table-toggle summary { cursor: pointer; font-size: 12px; color: #52514e; margin-bottom: 8px; }
+
+.yields-field-layout { display: grid; grid-template-columns: 240px 1fr; gap: 14px; align-items: start; }
+.yields-field-list { background: #fff; border: 0.5px solid #ddd8cc; border-radius: 12px; padding: 10px; position: sticky; top: 8px; }
+.yields-field-scroll { max-height: 65vh; overflow-y: auto; margin-top: 8px; display: flex; flex-direction: column; gap: 2px; }
+.yields-field-scroll button { display: flex; justify-content: space-between; gap: 6px; text-align: left; border: none; border-radius: 6px; padding: 6px 8px; background: none; }
+.yields-field-scroll button:hover { background: #f4f2ec; }
+.yields-field-scroll button.active { background: #DEEAD2; color: #3c5a3f; }
+.yields-rotation { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 10px; }
+.yields-rot-cell { width: 42px; border-radius: 6px; padding: 4px 0; text-align: center; line-height: 1.1; }
+.yields-rot-year { font-size: 11px; font-weight: 700; }
+.yields-rot-crop { font-size: 8px; font-weight: 600; letter-spacing: 0.03em; }
+.yields-src { font-size: 8px; font-weight: 700; color: #185FA5; border: 1px solid #185FA5; border-radius: 3px; padding: 0 3px; margin-left: 4px; vertical-align: 1px; }
+.yields-ok { margin-top: 10px; background: #EAF3DE; color: #3B6D11; border-radius: 8px; padding: 8px 12px; font-size: 12px; font-weight: 600; }
+
+@media (max-width: 760px) {
+  .yields-field-layout { grid-template-columns: 1fr; }
+  .yields-field-list { position: static; }
+  .yields-field-scroll { max-height: 220px; }
+}
+.yields-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; font-size: 11px; color: #52514e; padding-top: 6px; }
+.yields-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.yields-legend i { display: inline-block; width: 14px; height: 2px; border-radius: 1px; }

@@ -48,7 +48,7 @@ service cloud.firestore {
     // can use at all. A profile with NO `modules` field keeps exactly what
     // its role already allowed, so deploying this changes nothing for
     // anyone until an Admin actually sets a list. Admin/Owner always have
-    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts'.
+    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts', 'yields'.
     // This is the real enforcement — hiding a tile in the UI is only
     // cosmetic, since anyone could still query Firestore directly.
     function hasModule(m) {
@@ -264,6 +264,14 @@ service cloud.firestore {
     }
     match /contractAllocations/{allocationId} {
       allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow write: if signedIn() && isAdminOrOwner();
+    }
+    // Yield History module (Yields.jsx). One doc per field-year, keyed
+    // "{FIELDKEY}__{YEAR}". Rows come from the yield workbook (imported in
+    // the browser by Admin/Owner) and from the nightly Agworld sync (Admin
+    // key, bypasses these rules). Same read audience as Agronomy.
+    match /yieldHistory/{recordId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('yields');
       allow write: if signedIn() && isAdminOrOwner();
     }
     match /potatoStorage/{document} {

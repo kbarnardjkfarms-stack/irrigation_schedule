@@ -18,6 +18,7 @@ import PotatoStorage from './PotatoStorage.jsx'
 import Users from './Users.jsx'
 import Agronomy from './Agronomy.jsx'
 import Contracts from './Contracts.jsx'
+import Yields from './Yields.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
 
@@ -235,7 +236,7 @@ export default function App() {
   const [user, setUser] = useState(undefined) // undefined = still checking, null = signed out
   const [userRole, setUserRole] = useState(null)
   const [userProfile, setUserProfile] = useState(null)
-  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', or 'contracts' — more modules join this list later
+  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', 'contracts', or 'yields' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
   const [online, setOnline] = useState(navigator.onLine)
@@ -421,6 +422,11 @@ export default function App() {
   // list keeps everything its role allows.
   const contractsModuleOn = !userProfile || !Array.isArray(userProfile.modules) || userProfile.modules.includes('contracts')
   const canSeeContracts = (userRole === 'admin' || userRole === 'owner') || (userRole === 'farm_manager' && contractsModuleOn)
+
+  // Mirrors firestore.rules' canViewYields() + hasModule('yields'): same
+  // audience as Agronomy; only Admin/Owner can import.
+  const yieldsModuleOn = !userProfile || !Array.isArray(userProfile.modules) || userProfile.modules.includes('yields')
+  const canSeeYields = (userRole === 'admin' || userRole === 'owner') || (userRole === 'farm_manager' && yieldsModuleOn)
 
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
@@ -807,12 +813,31 @@ export default function App() {
               <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Contracts</div>
             </div>
           )}
+          {canSeeYields && (
+            <div
+              onClick={() => setPage('yields')}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            >
+              <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#E3EDF7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="56" height="56" viewBox="0 0 48 48">
+                  <path d="M8 40h34" stroke="#52514e" strokeWidth="1.8" strokeLinecap="round" />
+                  <rect x="11" y="27" width="6" height="11" rx="1.5" fill="#9DC2E8" />
+                  <rect x="21" y="21" width="6" height="17" rx="1.5" fill="#5B9BDB" />
+                  <rect x="31" y="14" width="6" height="24" rx="1.5" fill="#2a78d6" />
+                  <path d="M10 22l10-6 8 3 12-10" fill="none" stroke="#3c5a3f" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                  <circle cx="40" cy="9" r="2.4" fill="#3c5a3f" />
+                </svg>
+              </div>
+              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Yields</div>
+            </div>
+          )}
         </div>
       )}
       {page === 'potato-storage' && <PotatoStorage />}
       {page === 'users' && <Users />}
       {page === 'agronomy' && canSeeAgronomy && <Agronomy userRole={userRole} />}
       {page === 'contracts' && canSeeContracts && <Contracts userRole={userRole} />}
+      {page === 'yields' && canSeeYields && <Yields userRole={userRole} />}
       {page === 'irrigation' && (
         <>
           {view === 'live-data' && <LiveData />}

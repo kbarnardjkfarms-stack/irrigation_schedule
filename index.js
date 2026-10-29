@@ -195,6 +195,69 @@ async function fetchFieldsForSeason(seasonId, token) {
   return { fields, farmsById };
 }
 
+// ---------------------------------------------------------------------------
+// Yield history (Yields.jsx). Agworld's /fields endpoint, when asked for a
+// season, also returns harvest_date / harvested_area / harvested_weight.
+// syncFields() turns those into yieldHistory/{FIELDKEY}__{YEAR} docs so new
+// harvests show up next to the imported workbook history.
+//
+// canonCrop() and yieldFieldKey() MUST match yieldMath.js in the app
+// (canonCrop / fieldKey) or Agworld rows and workbook rows for the same
+// field-year won't line up.
+// ---------------------------------------------------------------------------
+function canonCrop(raw) {
+  const s = String(raw || '').trim().toUpperCase().replace(/\s+/g, ' ');
+  if (!s) return null;
+  if (/^(RENTED )?POTATO(ES)?$/.test(s)) return 'POTATO';
+  if (/^MINI POTATO(ES)?$/.test(s)) return 'MINI POTATOES';
+  if (/^(SUGAR ?)?BEETS?$/.test(s)) return 'BEETS';
+  if (/^SWEET CORN$/.test(s)) return 'SWEET CORN';
+  if (/^(FIELD |SILAGE |GRAIN )?CORN$/.test(s)) return 'CORN';
+  if (/^HAY\b/.test(s) || s === 'TIMOTHY' || s === 'ALFALFA') return 'HAY';
+  if (/^RYE\b/.test(s)) return 'RYE';
+  if (/^BEANS?$/.test(s) || /\bBEANS?$/.test(s)) return 'BEANS';
+  if (/^ONIONS?$/.test(s)) return 'ONIONS';
+  if (/^MELONS?$|WATERMELON/.test(s)) return 'MELONS';
+  if (/^PUMPKINS?$/.test(s)) return 'PUMPKINS';
+  if (/^LETTUCE$/.test(s)) return 'LETTUCE';
+  return s;
+}
+function yieldFieldKey(name) {
+  return String(name || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+const CROP_YIELD_UNIT = {
+  POTATO: 'cwt', 'MINI POTATOES': 'cwt', BEETS: 'tons', CORN: 'tons', 'SWEET CORN': 'tons',
+  BEANS: 'cwt', HAY: 'tons', ONIONS: 'cwt', RYE: 'tons'
+};
+// Pounds per unit, for converting whatever Agworld reports into the unit
+// the yield workbook uses for that crop. "t"/"tonne" is metric.
+const LBS_PER = {
+  lb: 1, lbs: 1, pound: 1, pounds: 1, cwt: 100, ton: 2000, tons: 2000, short_ton: 2000,
+  t: 2204.62, tonne: 2204.62, tonnes: 2204.62, mt: 2204.62, kg: 2.20462
+};
+// Agworld sends measurements as "1234.5 cwt"-style strings (like area).
+// Returns { value, unit } in the crop's yield unit when it can convert,
+// otherwise the raw number and Agworld's own unit.
+function parseHarvestWeight(raw, crop) {
+  if (raw == null || raw === '') return null;
+  const m = String(raw).match(/^\s*(-?[\d,]*\.?\d+)\s*([a-zA-Z_ ]*)/);
+  if (!m) return null;
+  const value = parseFloat(m[1].replace(/,/g, ''));
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const fromUnit = (m[2] || '').trim().toLowerCase().replace(/\s+/g, '_');
+  const target = CROP_YIELD_UNIT[crop];
+  if (target && LBS_PER[fromUnit] && LBS_PER[target]) {
+    return { value: (value * LBS_PER[fromUnit]) / LBS_PER[target], unit: target, rawUnit: fromUnit };
+  }
+  return { value, unit: fromUnit || null, rawUnit: fromUnit || null };
+}
+function seasonYear(season) {
+  const fromName = String(season.name || '').match(/\b(19|20)\d{2}\b/);
+  if (fromName) return parseInt(fromName[0], 10);
+  const d = season.startDate || season.endDate;
+  return d ? parseInt(String(d).slice(0, 4), 10) : null;
+}
+
 async function syncFields() {
   const token = AGWORLD_TOKEN.value();
   const db = admin.firestore();
@@ -222,6 +285,16 @@ async function syncFields() {
   const fieldNamesById = {}; // field id -> { name, farmId }
   const skippedFieldIds = new Set(); // distinct fields skipped, across all seasons
   let totalFieldSeasonDocs = 0;
+  let totalYieldDocs = 0;
+
+  // yieldHistory docs that already exist for the seasons being synced. A doc
+  // that exists (imported from the workbook) only gets its `agworld` block
+  // updated; a brand-new field-year also gets the top-level fields the
+  // Yields module reads (crop, variety, acres, ...).
+  const minYear = Math.min(...seasons.map(seasonYear).filter((y) => Number.isFinite(y)), MIN_SEASON_YEAR);
+  const existingYieldIds = new Set(
+    (await db.collection('yieldHistory').where('year', '>=', minYear).select().get()).docs.map((d) => d.id)
+  );
 
   // Fetch every season's fields one season at a time to keep each batch
   // small and to avoid one bad season response taking down the whole sync.
@@ -235,9 +308,11 @@ async function syncFields() {
     }
     Object.assign(allFarmsById, farmsById);
 
-    // Firestore batches cap at 500 writes; chunk defensively.
-    for (let i = 0; i < fields.length; i += 400) {
-      const chunk = fields.slice(i, i + 400);
+    // Firestore batches cap at 500 writes; each field can now write two
+    // docs (season + yield history), so chunk at 200.
+    const year = seasonYear(season);
+    for (let i = 0; i < fields.length; i += 200) {
+      const chunk = fields.slice(i, i + 200);
       const batch = db.batch();
       chunk.forEach((f) => {
         if (EXCLUDED_FARM_IDS.has(String(f.attributes.farm_id))) {
@@ -277,11 +352,59 @@ async function syncFields() {
             acres: parseAreaToAcres(f.attributes.area),
             irrigationMethod: f.attributes.irrigation || null,
             croppingMethod: f.attributes.cropping_method || null,
+            harvestDate: f.attributes.harvest_date || null,
+            harvestedArea: parseAreaToAcres(f.attributes.harvested_area),
+            harvestedWeight: f.attributes.harvested_weight || null,
             syncedFromAgworldAt: admin.firestore.FieldValue.serverTimestamp()
           },
           { merge: true }
         );
         totalFieldSeasonDocs++;
+
+        // Harvest recorded in Agworld -> yield history for that field-year.
+        const crop = canonCrop(primaryCrop ? primaryCrop.crop_name : null);
+        const weight = parseHarvestWeight(f.attributes.harvested_weight, crop);
+        const key = yieldFieldKey(f.attributes.name);
+        if (weight && key && Number.isFinite(year)) {
+          const harvestedAcres = parseAreaToAcres(f.attributes.harvested_area);
+          const fieldAcres = parseAreaToAcres(f.attributes.area);
+          const acres = harvestedAcres > 0 ? harvestedAcres : fieldAcres;
+          const docId = `${key}__${year}`;
+          const agworld = {
+            fieldId: String(f.id),
+            fieldName: f.attributes.name || null,
+            farmName: farmsById[f.attributes.farm_id] || null,
+            seasonId: String(season.id),
+            crop,
+            variety: primaryCrop ? primaryCrop.variety_name : null,
+            harvestDate: f.attributes.harvest_date || null,
+            harvestedArea: acres || null,
+            harvestedWeightRaw: String(f.attributes.harvested_weight),
+            harvestedWeight: weight.value,
+            weightUnit: weight.unit,
+            yieldPerAcre: acres > 0 ? weight.value / acres : null,
+            yieldPrice: f.attributes.yield_price || null,
+            syncedAt: admin.firestore.FieldValue.serverTimestamp()
+          };
+          const yieldDoc = existingYieldIds.has(docId)
+            ? { agworld }
+            : {
+                agworld,
+                fieldKey: key,
+                fieldName: f.attributes.name,
+                year,
+                crop,
+                variety: agworld.variety,
+                acres: acres || null,
+                area: agworld.farmName,
+                unit: CROP_YIELD_UNIT[crop] || weight.unit || null,
+                harvestDate: agworld.harvestDate,
+                source: 'agworld'
+              };
+          batch.set(db.collection('yieldHistory').doc(docId), yieldDoc, { merge: true });
+          existingYieldIds.add(docId);
+          totalYieldDocs++;
+        }
       });
       await batch.commit();
     }
@@ -367,7 +490,8 @@ async function syncFields() {
     seasonCount: seasons.length,
     fieldSeasonRecords: totalFieldSeasonDocs,
     skippedFieldCount: skippedFieldIds.size,
-    staleFieldsRemoved: staleFieldDocs.length
+    staleFieldsRemoved: staleFieldDocs.length,
+    yieldRecords: totalYieldDocs
   };
 }
 
@@ -384,7 +508,7 @@ exports.syncAgworldFields = onSchedule(
   async () => {
     const result = await syncFields();
     console.log(
-      `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields).`
+      `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields, ${result.yieldRecords} harvest yields).`
     );
   }
 );
@@ -398,7 +522,7 @@ exports.syncAgworldFieldsNow = onRequest(
     try {
       const result = await syncFields();
       res.status(200).send(
-        `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields).`
+        `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields, ${result.yieldRecords} harvest yields).`
       );
     } catch (err) {
       console.error(err);

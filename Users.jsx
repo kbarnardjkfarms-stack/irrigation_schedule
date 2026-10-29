@@ -23,7 +23,8 @@ const MODULES = [
   { id: 'irrigation', label: 'Irrigation' },
   { id: 'potato-storage', label: 'Potato storage' },
   { id: 'agronomy', label: 'Agronomy', note: 'Only Admin, Owner and Farm manager roles can ever see this one.' },
-  { id: 'contracts', label: 'Contracts', note: 'Farm managers can view; only Admin and Owner can edit.' }
+  { id: 'contracts', label: 'Contracts', note: 'Farm managers can view; only Admin and Owner can edit.' },
+  { id: 'yields', label: 'Yield history', note: 'Farm managers can view; only Admin and Owner can import.' }
 ]
 const ALL_MODULE_IDS = MODULES.map((m) => m.id)
 const FULL_ACCESS_ROLES = ['admin', 'owner']
