@@ -204,7 +204,9 @@ export default function PublicScheduleView({ slug }) {
     if (!authReady) return
     const unsub = onSnapshot(collection(db, 'fields'), (snap) => {
       const next = {}
-      snap.forEach((d) => { next[d.id] = d.data() })
+      // Fields in the subleased / archive farms are kept for Agronomy and
+      // Potato Storage but don't belong on the irrigation schedule.
+      snap.forEach((d) => { if (!d.data().hiddenFromIrrigation) next[d.id] = d.data() })
       setBaseFieldsById(next)
     })
     return () => unsub()

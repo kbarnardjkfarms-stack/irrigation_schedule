@@ -83,6 +83,21 @@ export default function Agronomy({ userRole }) {
   // an orphaned sample could belong to a field in any farm. Also doesn't
   // depend on season, since matching a sample to a field is about the
   // field's name/id, not which crop is currently planted there.
+  // Farm picker: the real farms plus the subleased / archive farms, which
+  // have no farms/{id} doc (they're hidden from irrigation) but do have
+  // fields - so they're listed from the fields themselves.
+  const farmOptions = useMemo(() => {
+    const known = new Set(farms.map((f) => String(f.id)))
+    const extra = {}
+    Object.values(baseFieldsById).forEach((b) => {
+      if (b.hiddenFromIrrigation && b.farmId != null && !known.has(String(b.farmId))) {
+        extra[String(b.farmId)] = b.farmName || `Farm ${b.farmId}`
+      }
+    })
+    return [...farms, ...Object.entries(extra).map(([id, name]) => ({ id, name }))]
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+  }, [farms, baseFieldsById])
+
   const allFields = useMemo(() => {
     return Object.entries(baseFieldsById)
       .map(([id, base]) => ({ id, name: base.name, farmId: base.farmId, farmName: base.farmName }))
@@ -123,7 +138,7 @@ export default function Agronomy({ userRole }) {
         )}
         <select value={selectedFarmId} onChange={(e) => setSelectedFarmId(e.target.value)}>
           <option value="all">All farms</option>
-          {farms.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+          {farmOptions.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
         </select>
       </div>
 
