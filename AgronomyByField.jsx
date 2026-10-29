@@ -265,12 +265,37 @@ export default function AgronomyByField({ fields }) {
   const [samples, setSamples] = useState([])
   const [samplesError, setSamplesError] = useState(null)
 
+  // Pick the first field when nothing is selected - and ALSO when the
+  // selected field is no longer in the list, which happens whenever the farm
+  // (or season) filter above changes to one that doesn't include it. Without
+  // this, the dropdown just displayed the first field of the new list while
+  // the page kept showing the OLD field's samples (no crop, no plant date),
+  // which looked like samples had been matched to the wrong field.
+  const [cropFilter, setCropFilter] = useState('all')
+  const cropOptions = useMemo(
+    () => [...new Set(fields.map((f) => f.cropName).filter(Boolean))].sort(),
+    [fields]
+  )
+  // If the farm/season filters above leave no field of the chosen crop, drop
+  // back to all crops rather than showing an empty picker.
   useEffect(() => {
-    if (fields.length && !fieldId) setFieldId(fields[0].id)
-  }, [fields, fieldId])
+    if (cropFilter !== 'all' && !cropOptions.includes(cropFilter)) setCropFilter('all')
+  }, [cropOptions, cropFilter])
+  const visibleFields = useMemo(
+    () => (cropFilter === 'all' ? fields : fields.filter((f) => f.cropName === cropFilter)),
+    [fields, cropFilter]
+  )
+
+  useEffect(() => {
+    if (!visibleFields.length) return
+    if (!fieldId || !visibleFields.some((f) => f.id === fieldId)) setFieldId(visibleFields[0].id)
+  }, [visibleFields, fieldId])
 
   useEffect(() => {
     if (!fieldId) return
+    // Clear the previous field's samples straight away so they can't sit
+    // on screen under the new field's name while the new query loads.
+    setSamples([])
     const q = query(collection(db, 'samples'), where('fieldId', '==', fieldId), orderBy('receivedDt', 'asc'))
     const unsub = onSnapshot(
       q,
@@ -481,8 +506,12 @@ export default function AgronomyByField({ fields }) {
   return (
     <div className="agronomy-by-field">
       <div className="agronomy-field-picker">
+        <select value={cropFilter} onChange={(e) => setCropFilter(e.target.value)}>
+          <option value="all">All crops</option>
+          {cropOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
         <select value={fieldId || ''} onChange={(e) => setFieldId(e.target.value)}>
-          {fields.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+          {visibleFields.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
         </select>
         {field?.cropName && (
           <span className="crop-badge" style={{ background: cropColor.bg, color: cropColor.fg }}>
@@ -524,7 +553,7 @@ export default function AgronomyByField({ fields }) {
         {['soil', 'petiole'].map((type) => (
           <div key={type} className="agronomy-split-col">
             <div className="agronomy-kpi-grid">
-              {(type === 'soil' ? ['soil', 'compost'] : ['petiole']).flatMap((t) =>
+              {[type].flatMap((t) =>
                 metricsByType[t]
                   .filter((m) => m.target) // no target yet = not "at a glance" actionable; still visible in the sample table below
                   .map((m) => renderTile(t, m))
