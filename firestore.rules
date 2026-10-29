@@ -178,6 +178,12 @@ service cloud.firestore {
       allow read: if signedIn() && canViewAgronomy() && hasModule('agronomy');
       allow write: if false;
     }
+    // Nitrogen applied per field per Agworld activity (lbs N/ac), written by
+    // the syncNitrogenApplications function (Admin SDK). Same read gate.
+    match /nApplications/{docId} {
+      allow read: if signedIn() && canViewAgronomy() && hasModule('agronomy');
+      allow write: if false;
+    }
     // Pivot profiles: sprinkler package reference (metadata only — the PDF
     // itself lives in Storage, see storage.rules), current GPM, and the
     // stuck-pivot alert threshold. Deliberately NOT farm-scoped like
