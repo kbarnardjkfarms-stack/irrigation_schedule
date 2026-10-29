@@ -657,3 +657,26 @@ thead th.sticky-col { top: 0; z-index: 4; }
   .contracts-table.contracts-table-auto { min-width: 0; }
   .contracts-table .hide-sm { display: none; }
 }
+
+/* By Field: soil tiles + chart on the left, petiole tiles + chart on the
+   right; clicking a point or a reading row picks that week for the tiles. */
+.agronomy-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.agronomy-split-col { min-width: 0; }
+.agronomy-split-col .agronomy-kpi-grid { margin-bottom: 10px; }
+.agronomy-chart-reading-row { cursor: pointer; }
+.agronomy-chart-reading-row:hover { background: #ebe7da; }
+.agronomy-chart-reading-row.selected { background: #e3dcc6; font-weight: 600; }
+.agronomy-link-btn {
+  background: none;
+  border: none;
+  color: #0F6E56;
+  font-size: 10px;
+  padding: 2px 0 0;
+  cursor: pointer;
+  text-decoration: underline;
+}

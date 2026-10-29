@@ -113,6 +113,16 @@ function curveRangeForWeek(curveRows, week, curveKey) {
   return best ? best.range : null
 }
 
+// Soil on the left, petiole on the right, stacking only on a narrow screen.
+// Set inline (not just in styles.css) so the layout can't silently fall back
+// to one tall column if the stylesheet on the site is out of date.
+const SPLIT_STYLE = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+  gap: 16,
+  marginBottom: 16
+}
+
 // Compact hand-rolled line chart, no chart library - matches the rest of the
 // app's approach of hand-rolled SVG/table markup rather than a new dependency
 // for what's usually a handful of points per season.
@@ -220,7 +230,7 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect }
               cx={scaleX(p.x)} cy={cy} r={isSelected ? 5.5 : 3.5} fill={dot}
               stroke={isSelected ? '#222' : '#fff'} strokeWidth={isSelected ? 2 : 1}
             />
-            <text x={scaleX(p.x)} y={labelY} textAnchor="middle" className="agronomy-sparkline-value-label" fill={dot}>
+            <text x={scaleX(p.x)} y={labelY} textAnchor="middle" className="agronomy-sparkline-value-label" fill={dot} fontSize="7" fontWeight="600">
               {fmtChartValue(p.y)}
             </text>
           </g>
@@ -469,7 +479,7 @@ export default function AgronomyByField({ fields }) {
           onSelect={toggleWeek}
         />
         {judged.length > 0 && (
-          <table className="agronomy-chart-readings">
+          <table className="agronomy-chart-readings" style={{ minWidth: 0, width: '100%', fontSize: 10 }}>
             <thead>
               <tr><th>Date</th><th>Wk</th><th>Reading</th><th>Target</th></tr>
             </thead>
@@ -487,7 +497,7 @@ export default function AgronomyByField({ fields }) {
                     <td>
                       <span
                         className="agronomy-reading-chip"
-                        style={c ? { background: c.bg, color: c.fg } : undefined}
+                        style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 4, fontWeight: 600, ...(c ? { background: c.bg, color: c.fg } : {}) }}
                       >
                         {p.y}
                       </span>
@@ -549,9 +559,9 @@ export default function AgronomyByField({ fields }) {
         )}
       </div>
 
-      <div className="agronomy-split">
+      <div className="agronomy-split" style={SPLIT_STYLE}>
         {['soil', 'petiole'].map((type) => (
-          <div key={type} className="agronomy-split-col">
+          <div key={type} className="agronomy-split-col" style={{ minWidth: 0 }}>
             <div className="agronomy-kpi-grid">
               {[type].flatMap((t) =>
                 metricsByType[t]

@@ -23,6 +23,17 @@ function fmtDate(ts) {
 
 const PAGE_SIZE = 100
 
+// Firestore's "query requires an index" error carries a one-click link that
+// creates the index. Show it as a real link instead of plain text.
+function Linkified({ text }) {
+  const parts = String(text || '').split(/(https?:\/\/[^\s]+)/g)
+  return parts.map((part, i) =>
+    /^https?:\/\//.test(part)
+      ? <a key={i} href={part.replace(/[.,;]+$/, '')} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>Click here to create it</a>
+      : <span key={i}>{part}</span>
+  )
+}
+
 // The original version of this screen loaded the ENTIRE unmapped/fuzzy
 // sample lists in one unbounded onSnapshot query and rendered every one of
 // them as a table row with a full field-select dropdown. That's fine with a
@@ -207,8 +218,8 @@ export default function AgronomyCleanup({ fields }) {
     <div className="agronomy-cleanup">
       {(unmapped.error || fuzzy.error) && (
         <p className="agronomy-error-banner">
-          Couldn't load one of the cleanup lists: {unmapped.error || fuzzy.error}. Check the browser console -
-          if it's a missing-index error it'll include a link that creates the index automatically.
+          Couldn't load one of the cleanup lists: <Linkified text={unmapped.error || fuzzy.error} /> It can take a
+          minute or two to build after you create it, then reload this tab.
         </p>
       )}
 
@@ -249,6 +260,31 @@ export default function AgronomyCleanup({ fields }) {
                 ? 'the rest still need a manual pick below.'
                 : `${matchResult.linkableLabels} labels (${matchResult.linkableSamples} samples) clear ${Math.round(matchResult.threshold * 100)}%.`}
             </p>
+            {!matchResult.applied && matchResult.biggestUnmatched && matchResult.biggestUnmatched.length > 0 && (
+              <>
+                <p className="agronomy-section-label">
+                  Biggest labels that will NOT link ({matchResult.noCandidateLabels} labels have no similar field at
+                  all - checked against {matchResult.fieldCount} fields in the app)
+                </p>
+                <div className="agronomy-automatch-table-wrap">
+                  <table className="agronomy-cleanup-table">
+                    <thead>
+                      <tr><th>Lab label</th><th>Samples</th><th>Closest field</th><th>Alike</th></tr>
+                    </thead>
+                    <tbody>
+                      {matchResult.biggestUnmatched.map((r, i) => (
+                        <tr key={i}>
+                          <td>{r.label}</td>
+                          <td>{r.sampleCount}</td>
+                          <td>{r.fieldName || '\u2014'}</td>
+                          <td>{r.score != null ? `${Math.round(r.score * 100)}%` : '\u2014'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
             {matchResult.rows.length > 0 && (
               <div className="agronomy-automatch-table-wrap">
                 <table className="agronomy-cleanup-table">
