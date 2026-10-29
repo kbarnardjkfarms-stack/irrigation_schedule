@@ -15,6 +15,27 @@ export function weeksBetween(laterDate, earlierDate) {
   return Math.floor(ms / (7 * 24 * 60 * 60 * 1000))
 }
 
+// Calendar date a given week since emergence starts on (week 0 = the 7 days
+// from the plant date). Used to print dates next to "Wk N" everywhere.
+export function weekStartDate(plantDate, week) {
+  if (!plantDate || week == null) return null
+  const d = new Date(plantDate)
+  d.setDate(d.getDate() + week * 7)
+  return d
+}
+export function fmtShortDay(d) {
+  const x = d && d.toDate ? d.toDate() : d // accepts a Date or a Firestore Timestamp
+  return x ? x.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
+}
+// "Jun 3 - Jun 9" for a week since emergence.
+export function weekRangeText(plantDate, week) {
+  const a = weekStartDate(plantDate, week)
+  if (!a) return ''
+  const b = new Date(a)
+  b.setDate(b.getDate() + 6)
+  return `${fmtShortDay(a)}\u2013${fmtShortDay(b)}`
+}
+
 // Sample documents only carry fieldId + receivedDt, not a season/year -
 // the full-history Stukenholtz backfill pulled years of samples per field,
 // so without a bound here the "vs weeks since emergence" charts plot every
@@ -155,7 +176,7 @@ const SPLIT_STYLE = {
 // The x-axis is weeks since emergence, labeled with a handful of "Wk N"
 // ticks along the bottom - points alone (no axis) made it impossible to
 // tell which week a reading landed in.
-function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, secondary }) {
+function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, secondary, weekDate }) {
   if (points.length < 1) {
     return <div className="agronomy-chart-empty">{emptyMessage || 'No readings yet'}</div>
   }
@@ -175,10 +196,10 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, 
   const minX = Math.min(...xs, ...bandXs, ...secXs), maxX = Math.max(...xs, ...bandXs, ...secXs)
   const minY = Math.min(...ys, ...bandYs), maxY = Math.max(...ys, ...bandYs)
 
-  const w = 280, h = 120
+  const w = 280, h = weekDate ? 132 : 120
   // padR is wide enough for a 5-digit band label (petiole NO3 targets run
   // up to ~25000 ppm) sitting just past the plot area's right edge.
-  const padL = 34, padR = 36, padT = 10, padB = 20
+  const padL = 34, padR = 36, padT = 10, padB = weekDate ? 32 : 20
   const plotW = w - padL - padR
   const plotH = h - padT - padB
 
@@ -242,7 +263,7 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, 
                 {fmtChartValue(p.y)}
               </text>
             )}
-            <title>{secondary.name}: {p.y} {secondary.unit || ''} (wk {p.x})</title>
+            <title>{secondary.name}: {p.y} {secondary.unit || ''} (wk {p.x}{weekDate ? `, week of ${weekDate(p.x)}` : ''})</title>
           </g>
         )
       })}
@@ -251,9 +272,16 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, 
       ))}
       <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} className="agronomy-sparkline-axis" />
       {xTicks.map((t) => (
-        <text key={t} x={scaleX(t)} y={h - 4} className="agronomy-sparkline-week-label" textAnchor="middle">
-          Wk {t}
-        </text>
+        <g key={t}>
+          <text x={scaleX(t)} y={weekDate ? h - 14 : h - 4} className="agronomy-sparkline-week-label" textAnchor="middle">
+            Wk {t}
+          </text>
+          {weekDate && (
+            <text x={scaleX(t)} y={h - 4} className="agronomy-sparkline-week-label" textAnchor="middle">
+              {weekDate(t)}
+            </text>
+          )}
+        </g>
       ))}
       {selectedWeek != null && selectedWeek >= minX && selectedWeek <= maxX && (
         <line
@@ -273,7 +301,7 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, 
             <circle cx={cx} cy={cy} r="9" fill="transparent" />
             <polygon points={`${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`}
               fill={fill} stroke={selectedWeek === p.x ? '#222' : '#fff'} strokeWidth={selectedWeek === p.x ? 1.5 : 1} />
-            <title>{secondary.name}: {p.y}{secondary.unit || ''} (wk {p.x})</title>
+            <title>{secondary.name}: {p.y}{secondary.unit || ''} (wk {p.x}{weekDate ? `, week of ${weekDate(p.x)}` : ''})</title>
           </g>
         )
       })}
@@ -291,6 +319,10 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, 
               cx={scaleX(p.x)} cy={cy} r={isSelected ? 5.5 : 3.5} fill={dot}
               stroke={isSelected ? '#222' : '#fff'} strokeWidth={isSelected ? 2 : 1}
             />
+            <title>
+              {fmtChartValue(p.y)}{p.date ? ` on ${fmtShortDay(p.date)}` : ''} - wk {p.x}
+              {p.range ? ` - target ${p.range[0]}-${p.range[1]}` : ''}
+            </title>
             <text x={scaleX(p.x)} y={labelY} textAnchor="middle" className="agronomy-sparkline-value-label" fill={dot} fontSize="7" fontWeight="600">
               {fmtChartValue(p.y)}
             </text>
@@ -670,6 +702,7 @@ export default function AgronomyByField({ fields }) {
           selectedWeek={selectedWeek}
           onSelect={toggleWeek}
           secondary={secondary}
+          weekDate={plantDate ? (x) => fmtShortDay(weekStartDate(plantDate, x)) : null}
         />
         {secondaryNote && <p style={{ fontSize: 10, margin: '2px 0 6px' }}>{secondaryNote}</p>}
         {judged.length > 0 && (
@@ -737,6 +770,7 @@ export default function AgronomyByField({ fields }) {
         <div className="agronomy-kpi-card">
           <p className="agronomy-kpi-label">{selectedWeek != null ? 'Showing week' : 'Weeks since emergence'}</p>
           <p className="agronomy-kpi-value">{activeWeek != null ? activeWeek : '—'}</p>
+          {activeWeek != null && plantDate && <p className="agronomy-kpi-date">{weekRangeText(plantDate, activeWeek)}</p>}
           {selectedWeek != null && (
             <button className="agronomy-link-btn" onClick={() => setSelectedWeek(null)}>Back to latest</button>
           )}
@@ -751,6 +785,7 @@ export default function AgronomyByField({ fields }) {
               </p>
               <p className="agronomy-kpi-date">
                 Wk {activeWeek != null ? activeWeek - 1 : '—'}
+                {activeWeek != null && plantDate ? ` (${weekRangeText(plantDate, activeWeek - 1)})` : ''}
                 {nThisWeek > 0 ? ` · +${nThisWeek} this week` : ''}
               </p>
             </div>
@@ -760,7 +795,9 @@ export default function AgronomyByField({ fields }) {
                 {nTotal}<span className="agronomy-kpi-unit"> lbs N/ac</span>
               </p>
               <p className="agronomy-kpi-date">
-                {selectedWeek != null ? `through week ${selectedWeek}` : 'season to date'}
+                {selectedWeek != null
+                  ? `through week ${selectedWeek}${plantDate ? ` (${fmtShortDay(weekStartDate(plantDate, selectedWeek + 1))})` : ''}`
+                  : 'season to date'}
               </p>
             </div>
           </>
@@ -794,6 +831,7 @@ export default function AgronomyByField({ fields }) {
               {nRecRow.nRec != null && <span className="agronomy-kpi-unit"> lbs/ac</span>}
             </p>
             {nRecRow.stage && <p className="agronomy-kpi-date">{nRecRow.stage}</p>}
+            {plantDate && activeWeek != null && <p className="agronomy-kpi-date">{weekRangeText(plantDate, activeWeek)}</p>}
           </div>
         )}
       </div>
