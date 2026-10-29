@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { signInWithEmailAndPassword } from 'firebase/auth'
 import { auth } from './firebase.js'
-import aioLogoFull from './aio-logo-full.png'
+import AioLogo from './AioLogo.jsx'
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -45,11 +45,7 @@ export default function Login() {
           boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
         }}
       >
-        <img
-          src={aioLogoFull}
-          alt="AIO — All In One"
-          style={{ width: '100%', maxWidth: '220px', margin: '0 auto 8px', display: 'block' }}
-        />
+        <AioLogo style={{ width: '100%', maxWidth: '220px', margin: '0 auto 8px', display: 'block' }} />
         <input
           type="email"
           placeholder="Email"
