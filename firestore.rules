@@ -169,6 +169,15 @@ service cloud.firestore {
       allow read: if signedIn() && canViewAgronomy() && hasModule('agronomy');
       allow write: if false;
     }
+    // Agworld scouting report rows (Weekly Dig: field moisture %, tuber set,
+    // etc.) uploaded from the Agronomy "Scouting" tab. Same read gate as
+    // samples. Writes only happen through the importScoutingReport /
+    // assignScoutingLocation Cloud Functions (Admin key, bypasses these
+    // rules), never directly from the browser.
+    match /scoutingObservations/{observationId} {
+      allow read: if signedIn() && canViewAgronomy() && hasModule('agronomy');
+      allow write: if false;
+    }
     // Pivot profiles: sprinkler package reference (metadata only — the PDF
     // itself lives in Storage, see storage.rules), current GPM, and the
     // stuck-pivot alert threshold. Deliberately NOT farm-scoped like
