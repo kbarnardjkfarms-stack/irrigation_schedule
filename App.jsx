@@ -22,7 +22,7 @@ import Yields from './Yields.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
 
-import aioLogoFull from './aio-logo-full.png'
+import AioLogo from './AioLogo.jsx'
 
 import aioLogoIcon from './aio-logo-icon.png'
 
@@ -685,11 +685,9 @@ export default function App() {
       )}
       <header className="topbar">
         <div className="brand" onClick={() => setPage('home')} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <img
-            src={page === 'home' ? aioLogoFull : aioLogoIcon}
-            alt="AIO — All In One"
-            style={{ height: page === 'home' ? '52px' : '40px' }}
-          />
+          {page === 'home'
+            ? <AioLogo style={{ height: '52px' }} />
+            : <img src={aioLogoIcon} alt="AIO — All In One" style={{ height: '40px' }} />}
           <span className={`status ${online ? 'online' : 'offline'}`}>
             {online ? 'Online' : 'Offline — changes will sync automatically'}
           </span>
