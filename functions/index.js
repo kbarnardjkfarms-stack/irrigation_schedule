@@ -2810,3 +2810,11 @@ exports.syncIviReadingsNow = onRequest(
 const pivotWatcher = require('./pivotWatcher');
 exports.checkStuckPivots = pivotWatcher.checkStuckPivots;
 exports.checkStuckPivotsNow = pivotWatcher.checkStuckPivotsNow;
+
+// Potato Storage -> Yield History link (measured cwt minus tare becomes a
+// potato yield). Lives in its own file for the same reason as pivotWatcher.
+// See storageYields.js.
+const storageYields = require('./storageYields');
+exports.onPotatoStorageBaysWritten = storageYields.onPotatoStorageBaysWritten;
+exports.syncStorageYieldsNightly = storageYields.syncStorageYieldsNightly;
+exports.syncStorageYieldsNow = storageYields.syncStorageYieldsNow;
