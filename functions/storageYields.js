@@ -19,15 +19,18 @@
 // ignore list (yieldSettings/storage.ignored) so the next sync doesn't bring
 // it back.
 //
-// Runs: whenever Potato Storage saves its bay list, nightly at 2:15am, and on
-// demand from the Yields module ("Sync now").
+// Runs: every 15 minutes (a quick check that only does the full sync when
+// Potato Storage's bay list or the tare/ignore settings changed since the
+// last run), a full sync nightly at 2:15am, and on demand from the Yields
+// module ("Sync now"). Deliberately NOT a Firestore-triggered function:
+// those need extra one-time IAM grants (Eventarc) that the GitHub deploy
+// account can't make, which failed the whole functions deploy.
 //
 // Lives in its own file (like pivotWatcher.js) so uploading a new index.js
 // can't wipe it out. index.js only re-exports the three functions.
 
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
-const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const admin = require('firebase-admin');
 
 // Potato Storage's bay list document (CONFIG_KEY in PotatoStorage.jsx).
@@ -227,6 +230,7 @@ async function syncStorageYields(trigger) {
     try { bays = JSON.parse(baysSnap.data().value) || []; } catch (e) { bays = []; }
   }
   const settings = settingsSnap.exists ? settingsSnap.data() : {};
+  const inputSig = inputSignature(baysSnap, settingsSnap);
   const tarePct = Number.isFinite(Number(settings.tarePct)) && settings.tarePct !== null && settings.tarePct !== '' ? Number(settings.tarePct) : DEFAULT_TARE_PCT;
   const ignored = new Set(settings.ignored || []);
   const currentYear = new Date().getFullYear();
@@ -272,10 +276,21 @@ async function syncStorageYields(trigger) {
     removed: plan.deletes.length,
     unlinked: plan.unlinked.slice(0, 200),
     durationMs: Date.now() - started,
+    inputSig,
     error: null
   };
   await db.doc(STATUS_DOC).set(status);
   return { ...status, lastRunAt: null };
+}
+
+// What the 15-minute check compares: when Potato Storage last saved its bay
+// list, plus the tare / ignore settings. Same signature = nothing to do.
+function inputSignature(baysSnap, settingsSnap) {
+  const baysStamp = baysSnap.exists
+    ? (baysSnap.data().updatedAt || (baysSnap.updateTime && baysSnap.updateTime.toMillis()) || 0)
+    : 0;
+  const s = settingsSnap.exists ? settingsSnap.data() : {};
+  return `${baysStamp}|${s.tarePct ?? ''}|${(s.ignored || []).length}|${(s.ignored || []).slice().sort().join(',')}`;
 }
 
 async function runLogged(trigger) {
@@ -299,17 +314,26 @@ async function requireAdminOrOwner(auth) {
   if (role !== 'admin' && role !== 'owner') throw new HttpsError('permission-denied', 'Only an Admin or Owner can run the storage yield sync.');
 }
 
-// Whenever Potato Storage saves its bay list (which is where Measured cwt,
-// variety, customer and fill date live).
-exports.onPotatoStorageBaysWritten = onDocumentWritten(
-  { document: 'potatoStorage/{key}', timeoutSeconds: 120, memory: '512MiB' },
-  async (event) => {
-    if (event.params.key !== STORAGE_BAYS_KEY) return;
-    await runLogged('storage-save');
+// Every 15 minutes: picks up a new or changed Measured cwt within a quarter
+// hour. Reads three small docs and stops there unless something changed.
+exports.syncStorageYieldsEvery15 = onSchedule(
+  { schedule: 'every 15 minutes', timeZone: 'America/Denver', timeoutSeconds: 300, memory: '512MiB' },
+  async () => {
+    const db = admin.firestore();
+    const [baysSnap, settingsSnap, statusSnap] = await Promise.all([
+      db.doc(`potatoStorage/${STORAGE_BAYS_KEY}`).get(),
+      db.doc(SETTINGS_DOC).get(),
+      db.doc(STATUS_DOC).get()
+    ]);
+    const sig = inputSignature(baysSnap, settingsSnap);
+    const last = statusSnap.exists ? statusSnap.data() : null;
+    if (last && last.inputSig === sig && !last.error) return; // nothing changed
+    await runLogged('every-15-min');
   }
 );
 
-// Nightly safety net, in case a save-triggered run was missed.
+// Nightly full sync regardless of changes (also picks up Agworld acre
+// changes, which the 15-minute check doesn't look at).
 exports.syncStorageYieldsNightly = onSchedule(
   { schedule: 'every day 02:15', timeZone: 'America/Denver', timeoutSeconds: 300, memory: '512MiB' },
   async () => { await runLogged('nightly'); }

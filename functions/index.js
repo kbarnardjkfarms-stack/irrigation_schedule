@@ -2815,6 +2815,6 @@ exports.checkStuckPivotsNow = pivotWatcher.checkStuckPivotsNow;
 // potato yield). Lives in its own file for the same reason as pivotWatcher.
 // See storageYields.js.
 const storageYields = require('./storageYields');
-exports.onPotatoStorageBaysWritten = storageYields.onPotatoStorageBaysWritten;
+exports.syncStorageYieldsEvery15 = storageYields.syncStorageYieldsEvery15;
 exports.syncStorageYieldsNightly = storageYields.syncStorageYieldsNightly;
 exports.syncStorageYieldsNow = storageYields.syncStorageYieldsNow;
