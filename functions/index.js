@@ -1745,6 +1745,320 @@ exports.assignScoutingLocation = onCall({ timeoutSeconds: 120 }, async (request)
 });
 
 // ---------------------------------------------------------------------
+// Nitrogen applied, from Agworld activities (Oct 2026)
+//
+// Powers the "N applied" bars on the petiole chart and the N applied
+// last week / Total N applied cards on the Agronomy By field tab.
+//
+// Agworld's /user_api/v1/activities returns each logged job with its
+// products (activity_inputs: product name, rate, total_weight, total_area,
+// categories, substance) and the fields it covered (activity_fields). The
+// API docs don't say how much N a product carries, so pounds of N per acre
+// is worked out here:
+//   product lbs/ac  = total_weight / total_area when Agworld gives those,
+//                     otherwise the rate converted to lbs (liquids use a
+//                     per-gallon weight - UAN 32 is 11.06 lbs/gal etc.)
+//   N %             = product_substance when it names nitrogen, otherwise
+//                     read from the product name ("UAN 32", "32-0-0",
+//                     "10-34-0", "Urea", "AMS"...)
+// Anything that looks like fertilizer but can't be converted is listed in
+// the result (unresolved) so it can be fixed rather than silently missed.
+//
+// One doc per activity-field in nApplications/{activityId}__{fieldId}.
+// Agworld field ids are the same ids used for the fields/{id} docs.
+// ---------------------------------------------------------------------
+const N_LIQUID_LBS_PER_GAL = { 28: 10.65, 30: 10.85, 32: 11.06 };
+const MAX_ACTIVITY_PAGES = 80;
+
+function nMeasure(raw) {
+  if (raw == null || raw === '') return null;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? { value: raw, unit: '', per: '' } : null;
+  if (typeof raw === 'object') {
+    const v = Number(raw.value != null ? raw.value : raw.amount);
+    if (!Number.isFinite(v)) return null;
+    const u = String(raw.unit || raw.units || '').toLowerCase();
+    return { value: v, unit: u.split('/')[0].trim(), per: (u.split('/')[1] || '').trim() };
+  }
+  const m = String(raw).match(/^\s*(-?[\d,]*\.?\d+)\s*([a-zA-Z_ .]*?)\s*(?:(?:\/|\bper\b)\s*([a-zA-Z_ .]+))?\s*$/);
+  if (!m) return null;
+  const value = parseFloat(m[1].replace(/,/g, ''));
+  if (!Number.isFinite(value)) return null;
+  return { value, unit: (m[2] || '').trim().toLowerCase(), per: (m[3] || '').trim().toLowerCase() };
+}
+
+function weightUnitToLbs(unit) {
+  const u = String(unit || '').toLowerCase().replace(/[.\s]/g, '');
+  if (['lb', 'lbs', 'pound', 'pounds'].includes(u)) return 1;
+  if (['oz', 'ounce', 'ounces'].includes(u)) return 1 / 16;
+  if (['kg', 'kilogram', 'kilograms'].includes(u)) return 2.20462;
+  if (['ton', 'tons', 'shortton'].includes(u)) return 2000;
+  if (['t', 'tonne', 'tonnes', 'mt'].includes(u)) return 2204.62;
+  if (u === 'cwt') return 100;
+  return null;
+}
+function volumeUnitToGal(unit) {
+  const u = String(unit || '').toLowerCase().replace(/[.\s]/g, '');
+  if (['gal', 'gals', 'gallon', 'gallons', 'usgal'].includes(u)) return 1;
+  if (['qt', 'quart', 'quarts'].includes(u)) return 0.25;
+  if (['pt', 'pint', 'pints'].includes(u)) return 0.125;
+  if (['floz', 'flozs'].includes(u)) return 1 / 128;
+  if (['l', 'lt', 'liter', 'liters', 'litre', 'litres'].includes(u)) return 0.264172;
+  if (['ml'].includes(u)) return 0.000264172;
+  return null;
+}
+function areaUnitToAcres(unit) {
+  const u = String(unit || '').toLowerCase().replace(/[.\s]/g, '');
+  if (!u || ['ac', 'acre', 'acres'].includes(u)) return 1;
+  if (['ha', 'hectare', 'hectares'].includes(u)) return 2.47105;
+  return null;
+}
+
+// % nitrogen from Agworld's product_substance, when it names nitrogen.
+function nPctFromSubstance(sub) {
+  let found = null;
+  const walk = (node) => {
+    if (found != null || node == null) return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (typeof node === 'object') {
+      const label = Object.values(node).find((v) => typeof v === 'string' && /^(n|nitrogen)$/i.test(v.trim()));
+      if (label !== undefined) {
+        for (const k of ['percent', 'percentage', 'concentration', 'content', 'amount', 'value']) {
+          const n = parseFloat(node[k]);
+          if (Number.isFinite(n) && n > 0 && n <= 100) { found = n; return; }
+        }
+      }
+      Object.values(node).forEach(walk);
+    }
+  };
+  walk(sub);
+  return found;
+}
+
+// % nitrogen read from a product's name. Returns null when it can't tell.
+function nPctFromName(name) {
+  const s = String(name || '').toUpperCase();
+  let m = s.match(/(\d{1,2}(?:\.\d+)?)\s*-\s*\d{1,2}(?:\.\d+)?\s*-\s*\d{1,2}(?:\.\d+)?/);
+  if (m) return parseFloat(m[1]);
+  m = s.match(/\b(?:UAN|N)[\s-]?(\d{2})\b/);
+  if (m) return parseFloat(m[1]);
+  if (/\bUREA\b/.test(s)) return 46;
+  if (/AMMONIUM SULF|\bAMS\b/.test(s)) return 21;
+  if (/AMMONIUM NITRATE|\bAN\b/.test(s)) return 34;
+  if (/ANHYDROUS|\bNH3\b/.test(s)) return 82;
+  m = s.match(/\bCAN[\s-]?(\d{2})\b/);
+  if (m) return parseFloat(m[1]);
+  if (/\bMAP\b/.test(s)) return 11;
+  if (/\bDAP\b/.test(s)) return 18;
+  if (/\bATS\b/.test(s)) return 12;
+  return null;
+}
+
+// Pounds of product per acre for one input, plus how it was worked out.
+function productLbsPerAcre(input, areaAc, pct, name) {
+  const tw = nMeasure(input.total_weight);
+  if (tw && areaAc > 0) {
+    const f = weightUnitToLbs(tw.unit);
+    if (f) return { lbs: (tw.value * f) / areaAc, method: 'total weight / area' };
+  }
+  const r = nMeasure(input.rate);
+  if (!r) return null;
+  const areaDiv = areaUnitToAcres(r.per);
+  if (areaDiv == null) return null;
+  const perAcreFactor = 1 / areaDiv; // "per ha" -> "per ac"
+  const w = weightUnitToLbs(r.unit);
+  if (w) return { lbs: r.value * w * perAcreFactor, method: 'rate (weight)' };
+  const g = volumeUnitToGal(r.unit);
+  if (g) {
+    const nm = String(name || '').toUpperCase();
+    let density = null;
+    let method = 'rate (gallons, assumed 10 lbs/gal)';
+    if (/10\s*-\s*34\s*-\s*0/.test(nm)) { density = 11.65; method = 'rate (gallons x 10-34-0 weight)'; }
+    else if (/\bATS\b|12\s*-\s*0\s*-\s*0\s*-\s*26/.test(nm)) { density = 11.1; method = 'rate (gallons x ATS weight)'; }
+    else if (pct >= 27) {
+      density = pct >= 31 ? N_LIQUID_LBS_PER_GAL[32] : pct >= 29 ? N_LIQUID_LBS_PER_GAL[30] : N_LIQUID_LBS_PER_GAL[28];
+      method = 'rate (gallons x UAN weight)';
+    }
+    if (density == null) density = 10.0;
+    return { lbs: r.value * g * density * perAcreFactor, method };
+  }
+  return null;
+}
+
+// One Agworld activity -> { date, perField:[{fieldId, seasonId, nLbsPerAc, inputs}], unresolved:[] }
+function nitrogenForActivity(a) {
+  const attrs = a.attributes || {};
+  const inputs = attrs.activity_inputs || attrs.inputs || [];
+  const fields = attrs.activity_fields || attrs.fields || [];
+  if (!Array.isArray(inputs) || !inputs.length || !Array.isArray(fields) || !fields.length) return null;
+  if (attrs.completed === false) return null;
+  const when = attrs.completed_at || attrs.started_at || attrs.due_at;
+  const date = when ? new Date(when) : null;
+  if (!date || Number.isNaN(date.getTime())) return null;
+  if (date.getUTCFullYear() < MIN_SEASON_YEAR) return null;
+
+  const totalFieldArea = fields.reduce((sum, f) => sum + (parseAreaToAcres(f.area) || 0), 0);
+  const unresolved = [];
+  const used = [];
+  let nLbsPerAc = 0;
+  inputs.forEach((input) => {
+    const type = String(input.input_type || '');
+    if (/seed|operation/i.test(type)) return;
+    const name = input.input_name || input.name || `product ${input.product_id}`;
+    const cats = [].concat(input.product_categories || []).map((c) => (typeof c === 'string' ? c : (c && c.name) || '')).join(' ');
+    const isFert = /fertili|nutrient|nitrogen/i.test(cats);
+    const pct = nPctFromSubstance(input.product_substance) || nPctFromName(name);
+    if (!pct) {
+      if (isFert) unresolved.push({ name, reason: 'N % unknown' });
+      return;
+    }
+    const areaAc = parseAreaToAcres(input.total_area) || totalFieldArea || parseAreaToAcres(attrs.area) || 0;
+    const prod = productLbsPerAcre(input, areaAc, pct, name);
+    if (!prod || !(prod.lbs > 0)) {
+      unresolved.push({ name, reason: 'could not work out lbs per acre from rate / total weight' });
+      return;
+    }
+    const n = (prod.lbs * pct) / 100;
+    nLbsPerAc += n;
+    used.push({ name, nPct: pct, productLbsPerAc: Math.round(prod.lbs * 10) / 10, nLbsPerAc: Math.round(n * 10) / 10, method: prod.method });
+  });
+  return {
+    date,
+    title: attrs.title || attrs.name || '',
+    nLbsPerAc: Math.round(nLbsPerAc * 10) / 10,
+    inputs: used,
+    unresolved,
+    fields: fields.map((f) => ({ fieldId: String(f.field_id), seasonId: f.season_id != null ? String(f.season_id) : null, farmId: f.farm_id != null ? String(f.farm_id) : null }))
+  };
+}
+
+async function fetchActivityPages(token, withUpdatedFilter) {
+  const out = [];
+  let truncated = false;
+  for (let page = 1; page <= MAX_ACTIVITY_PAGES; page++) {
+    const params = new URLSearchParams({ 'page[number]': String(page), 'page[size]': '100' });
+    if (withUpdatedFilter) params.set('updated_at', `${MIN_SEASON_YEAR}-01-01T00:00:00Z`);
+    const json = await agworldGet('/user_api/v1/activities', params, token);
+    out.push(...json.data);
+    if (!json.data.length || json.data.length < 100) return { activities: out, truncated: false };
+    if (page === MAX_ACTIVITY_PAGES) truncated = true;
+  }
+  return { activities: out, truncated };
+}
+
+async function syncNitrogen() {
+  const token = AGWORLD_TOKEN.value();
+  const db = admin.firestore();
+
+  let fetched;
+  let updatedFilterUsed = true;
+  try {
+    fetched = await fetchActivityPages(token, true);
+  } catch (err) {
+    // If Agworld rejects the updated_at filter, fall back to scanning
+    // everything (the year check above still drops old activities).
+    console.warn('activities updated_at filter rejected, retrying without it:', err.message);
+    updatedFilterUsed = false;
+    fetched = await fetchActivityPages(token, false);
+  }
+
+  const unresolvedCount = {};
+  const writes = [];
+  const seenIds = new Set();
+  let withFertilizer = 0;
+  let sample = null;
+  fetched.activities.forEach((a) => {
+    const attrs = a.attributes || {};
+    if (!sample && (attrs.activity_inputs || attrs.inputs)) {
+      sample = {
+        attributeKeys: Object.keys(attrs),
+        firstInputs: [].concat(attrs.activity_inputs || attrs.inputs).slice(0, 2),
+        firstFields: [].concat(attrs.activity_fields || attrs.fields || []).slice(0, 1)
+      };
+    }
+    const r = nitrogenForActivity(a);
+    if (!r) return;
+    r.unresolved.forEach((u) => {
+      const k = `${u.name} | ${u.reason}`;
+      unresolvedCount[k] = (unresolvedCount[k] || 0) + 1;
+    });
+    if (!(r.nLbsPerAc > 0)) return;
+    withFertilizer++;
+    r.fields.forEach((f) => {
+      if (!f.fieldId || (f.farmId && EXCLUDED_FARM_IDS.has(f.farmId))) return;
+      const id = `${a.id}__${f.fieldId}`;
+      seenIds.add(id);
+      writes.push([id, {
+        activityId: String(a.id),
+        fieldId: f.fieldId,
+        seasonId: f.seasonId,
+        date: admin.firestore.Timestamp.fromDate(r.date),
+        nLbsPerAc: r.nLbsPerAc,
+        title: r.title,
+        inputs: r.inputs,
+        syncedAt: admin.firestore.FieldValue.serverTimestamp()
+      }]);
+    });
+  });
+
+  for (let i = 0; i < writes.length; i += 400) {
+    const batch = db.batch();
+    writes.slice(i, i + 400).forEach(([id, data]) => batch.set(db.collection('nApplications').doc(id), data));
+    await batch.commit();
+  }
+
+  // Drop docs for activities that were edited/deleted in Agworld since the
+  // last sync - only when the whole list was scanned, never after a cut-off.
+  let staleRemoved = 0;
+  if (!fetched.truncated) {
+    const existing = await db.collection('nApplications').select().get();
+    const stale = existing.docs.filter((d) => !seenIds.has(d.id));
+    for (let i = 0; i < stale.length; i += 400) {
+      const batch = db.batch();
+      stale.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+    }
+    staleRemoved = stale.length;
+  }
+
+  return {
+    activitiesScanned: fetched.activities.length,
+    activitiesWithNitrogen: withFertilizer,
+    docsWritten: writes.length,
+    staleRemoved,
+    truncated: fetched.truncated,
+    updatedFilterUsed,
+    unresolved: Object.entries(unresolvedCount)
+      .map(([k, count]) => ({ item: k, count }))
+      .sort((x, y) => y.count - x.count)
+      .slice(0, 30),
+    // Raw shape of the first activity that had inputs - only here so a
+    // mismatch with Agworld's real response is quick to diagnose.
+    sample
+  };
+}
+
+exports.syncNitrogenApplications = onCall(
+  { secrets: [AGWORLD_TOKEN], timeoutSeconds: 540, memory: '512MiB' },
+  async (request) => {
+    await requireAgronomyAccess(request.auth);
+    try {
+      return await syncNitrogen();
+    } catch (err) {
+      console.error('syncNitrogenApplications failed:', err);
+      throw new HttpsError('internal', err.message || 'Nitrogen sync failed.');
+    }
+  }
+);
+
+exports.syncNitrogenApplicationsNightly = onSchedule(
+  { schedule: 'every day 05:30', timeZone: 'America/Denver', secrets: [AGWORLD_TOKEN], timeoutSeconds: 540, memory: '512MiB' },
+  async () => {
+    const r = await syncNitrogen();
+    console.log(`N applied sync: ${r.activitiesScanned} activities, ${r.docsWritten} field records, ${r.staleRemoved} stale removed, ${r.unresolved.length} unresolved product types.`);
+  }
+);
+
+// ---------------------------------------------------------------------
 // Agri-Stor sync — PHASE 1 (READ-ONLY)
 //
 // Polls the Agri-Stor monitoring panel (https://agristor-companies.com)
