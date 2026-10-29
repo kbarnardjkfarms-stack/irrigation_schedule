@@ -159,10 +159,10 @@ export function parseYieldRows(rows) {
 // Analysis helpers
 // ---------------------------------------------------------------------------
 
-// The yield a record shows: the workbook's adjusted yield when there is one,
-// otherwise what Agworld reported at harvest.
+// The yield a record shows: the adjusted yield entered in AIO or imported
+// from the workbook when there is one, otherwise what Agworld reported.
 export function effectiveYield(rec) {
-  if (rec.yieldPerAcre > 0) return { value: rec.yieldPerAcre, source: 'spreadsheet' }
+  if (rec.yieldPerAcre > 0) return { value: rec.yieldPerAcre, source: rec.yieldSource === 'manual' ? 'manual' : 'spreadsheet' }
   if (rec.agworld && rec.agworld.yieldPerAcre > 0) return { value: rec.agworld.yieldPerAcre, source: 'agworld' }
   return { value: null, source: null }
 }

@@ -6,6 +6,7 @@ import {
 } from 'recharts'
 import { db } from './firebase.js'
 import YieldImport from './YieldImport.jsx'
+import YieldEntry from './YieldEntry.jsx'
 import { MAX_SERIES, SERIES, dayOfYear, doyLabel, effectiveYield, fmt, groupBy, summarize, unitFor } from './yieldMath.js'
 
 // Yield History module. History comes from the team's yield workbook
@@ -260,6 +261,7 @@ export default function Yields({ userRole }) {
   }
 
   const existingById = useMemo(() => Object.fromEntries((docs || []).map((d) => [d.id, true])), [docs])
+  const docsById = useMemo(() => Object.fromEntries((docs || []).map((d) => [d.id, d])), [docs])
 
   if (docs === null && !error) return <div className="agronomy"><p className="contracts-empty">Loading yield history…</p></div>
 
@@ -271,12 +273,13 @@ export default function Yields({ userRole }) {
         {[['trends', 'Trends'], ['field', 'Field history'], ['compare', 'Compare'], ['records', 'Records']].map(([k, l]) => (
           <button key={k} className={view === k ? 'active' : ''} onClick={() => setView(k)} disabled={empty}>{l}</button>
         ))}
+        {canImport && <button className={view === 'enter' ? 'active' : ''} onClick={() => setView('enter')}>Enter yields</button>}
         {canImport && <button className={view === 'import' ? 'active' : ''} onClick={() => setView('import')}>Import</button>}
       </div>
 
       {error && <div className="agronomy-error-banner">{error}</div>}
 
-      {empty && view !== 'import' && (
+      {empty && view !== 'import' && view !== 'enter' && (
         <div className="editor-panel">
           <div className="editor-field-name">No yield history yet</div>
           <p className="contracts-sub">{canImport ? 'Open the Import tab and upload THE Yield Database workbook to load the history. New harvests will then arrive from Agworld automatically.' : 'An Admin or Owner needs to import the yield workbook first.'}</p>
@@ -285,8 +288,9 @@ export default function Yields({ userRole }) {
       )}
 
       {view === 'import' && canImport && <YieldImport existingById={existingById} />}
+      {view === 'enter' && canImport && <YieldEntry docsById={docsById} />}
 
-      {!empty && view !== 'import' && view !== 'field' && (
+      {!empty && view !== 'import' && view !== 'enter' && view !== 'field' && (
         <div className="yields-filters">
           <select value={crop} onChange={(e) => { setCrop(e.target.value); setSelFields([]); setDims({ variety: [], area: [], manager: [], previousCrop: [], irrigation: [] }) }}>
             {cropOptions.map(([c, n]) => <option key={c} value={c}>{c.charAt(0) + c.slice(1).toLowerCase()} ({n})</option>)}
@@ -311,7 +315,7 @@ export default function Yields({ userRole }) {
         </div>
       )}
 
-      {!empty && selFields.length > 0 && view !== 'import' && view !== 'field' && (
+      {!empty && selFields.length > 0 && view !== 'import' && view !== 'enter' && view !== 'field' && (
         <div className="yields-chips">
           {selFields.map((k, i) => (
             <span key={k} className="yields-chip">
@@ -579,7 +583,7 @@ function FieldHistoryView({ records, fieldNameByKey, initialKey, includeLeased, 
                         <td><CropBadge crop={r.crop} /></td>
                         <td className="hide-sm">{r.variety || '—'}</td>
                         <td className="num">{fmt(r.acres, 1)}</td>
-                        <td className="num">{r._yield > 0 ? <><strong>{fmt(r._yield)}</strong> <span className="contracts-sub">{r.unit}</span>{r._source === 'agworld' && <span className="yields-src" title="From Agworld harvest record">AW</span>}</> : '—'}</td>
+                        <td className="num">{r._yield > 0 ? <><strong>{fmt(r._yield)}</strong> <span className="contracts-sub">{r.unit}</span>{r._source === 'agworld' && <span className="yields-src" title="From Agworld harvest record">AW</span>}{r._source === 'manual' && <span className="yields-src entered" title={r.entryGroup && r.entryGroup.combined ? `Entered, combined with ${r.entryGroup.fields.filter((n) => n !== r.fieldName).join(', ')}` : 'Entered in AIO'}>{r.entryGroup && r.entryGroup.combined ? 'COMB' : 'ENT'}</span>}</> : '—'}</td>
                         <td className="num" style={{ color: idx == null ? MUTED : idx >= 100 ? '#3B6D11' : '#A32D2D' }}>{idx == null ? '—' : fmt(idx) + '%'}</td>
                         <td className="hide-sm">{r.previousCrop || '—'}</td>
                         <td className="hide-sm">{r.plantDate ? doyLabel(dayOfYear(r.plantDate)) : '—'}</td>
@@ -793,7 +797,7 @@ function RecordsView({ rows }) {
                 {RECORD_COLS.map((c) => (
                   <td key={c.key} className={`${c.num ? 'num' : ''} ${c.sm ? 'hide-sm' : ''}`}>
                     {c.key === 'crop' ? <CropBadge crop={r.crop} />
-                      : c.key === '_source' ? (r._source === 'agworld' ? 'Agworld' : r._source === 'spreadsheet' ? 'Workbook' : '—')
+                      : c.key === '_source' ? (r._source === 'agworld' ? 'Agworld' : r._source === 'spreadsheet' ? 'Workbook' : r._source === 'manual' ? (r.entryGroup && r.entryGroup.combined ? 'Entered (combined)' : 'Entered') : '—')
                         : c.f ? c.f(r[c.key]) : (r[c.key] ?? '—')}
                   </td>
                 ))}
