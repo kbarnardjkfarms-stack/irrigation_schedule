@@ -839,32 +839,222 @@ function levenshteinDistance(a, b) {
   return dp[n];
 }
 
-// Fallback for when the exact normalized match fails. Deliberately
-// conservative: a wrong fuzzy match silently corrupts a field's sample
-// history, which is worse than leaving a sample unmapped for manual
-// review, so this only accepts a match that's both close (within ~20% of
-// the label's own length) AND unambiguous (no other field tied for
-// closest). Anything shorter than 3 characters is skipped entirely - too
-// short for edit distance to mean much.
-function findFuzzyFieldMatch(normalizedLabel, byNormalizedName) {
-  if (normalizedLabel.length < 3) return null;
-  const maxDistance = Math.max(1, Math.floor(normalizedLabel.length * 0.2));
-  let bestFieldId = null;
-  let bestDistance = Infinity;
-  let tied = false;
-  for (const [name, fieldId] of Object.entries(byNormalizedName)) {
-    const distance = levenshteinDistance(normalizedLabel, name);
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      bestFieldId = fieldId;
-      tied = false;
-    } else if (distance === bestDistance) {
-      tied = true;
-    }
-  }
-  return bestFieldId && bestDistance <= maxDistance && !tied ? bestFieldId : null;
+// =============================================================================
+// Smarter field matching for Stukenholtz samples - TWO paste-in changes to
+// functions/index.js (Oct 2026). Do NOT replace the whole file.
+// =============================================================================
+//
+// PART 1 - REPLACE one existing function.
+//   In functions/index.js, find the comment starting
+//       // Fallback for when the exact normalized match fails. Deliberately
+//   followed by `function findFuzzyFieldMatch(normalizedLabel, byNormalizedName) {`
+//   Delete from that comment through the function's closing `}` (about 25
+//   lines), and paste everything between the PART 1 markers below in its
+//   place. Leave levenshteinDistance(), normalizeFieldLabel(),
+//   buildFieldLookup() and mapResultToSample() exactly as they are - the new
+//   findFuzzyFieldMatch has the same name and arguments, so nothing else
+//   needs to change.
+//
+// PART 2 - ADD one new function.
+//   Paste everything between the PART 2 markers anywhere near the bottom of
+//   index.js (after requireAgronomyAccess is defined, which it already is).
+//
+// ----------------------------- PART 1: START ---------------------------------
+// Words that show up in lab sample labels but aren't part of a field's name.
+const FIELD_MATCH_NOISE_WORDS = new Set([
+  'field', 'fld', 'pivot', 'pvt', 'soil', 'petiole', 'nema', 'nematode', 'sample', 'test', 'tissue'
+]);
+
+// Direction/size words spelled out vs abbreviated ("WILSON SOUTH" vs
+// "WILSON S") are the same thing - collapse them to one spelling.
+const FIELD_MATCH_SYNONYMS = {
+  north: 'n', south: 's', east: 'e', west: 'w',
+  northeast: 'ne', northwest: 'nw', southeast: 'se', southwest: 'sw',
+  middle: 'mid', center: 'ctr', centre: 'ctr'
+};
+
+// Score at/above which a label is auto-linked to a field, and how far ahead
+// of the runner-up the best candidate has to be.
+const FUZZY_AUTO_LINK_SCORE = 0.9;
+const FUZZY_MIN_MARGIN = 0.05;
+
+const fieldMatchTokenCache = new Map();
+
+function fieldMatchTokens(normalized) {
+  if (fieldMatchTokenCache.has(normalized)) return fieldMatchTokenCache.get(normalized);
+  const raw = normalized.split(' ').filter(Boolean).map((t) => FIELD_MATCH_SYNONYMS[t] || t);
+  const kept = raw.filter((t) => !FIELD_MATCH_NOISE_WORDS.has(t) && !/^(19|20)\d{2}$/.test(t));
+  const tokens = kept.length ? kept : raw;
+  fieldMatchTokenCache.set(normalized, tokens);
+  return tokens;
 }
 
+function fieldMatchSimilarity(a, b) {
+  const longest = Math.max(a.length, b.length);
+  return longest === 0 ? 1 : 1 - levenshteinDistance(a, b) / longest;
+}
+
+// 0..1 how alike two normalized names are. Numbers and 1-2 letter tokens
+// ("S", "N", "12", "NE") are what tell "WILSON N" from "WILSON S" or
+// "FIELD 12" from "FIELD 13", so they must match exactly or the pair scores
+// 0 - no amount of other similarity can paper over a different direction or
+// number. Longer words are matched with typo tolerance, weighted by length.
+function scoreFieldMatch(normalizedLabel, normalizedName) {
+  if (normalizedLabel === normalizedName) return 1;
+  const a = fieldMatchTokens(normalizedLabel);
+  const b = fieldMatchTokens(normalizedName);
+  const isHard = (t) => t.length <= 2 || /^\d+$/.test(t);
+  const hardA = a.filter(isHard).sort();
+  const hardB = b.filter(isHard).sort();
+  if (hardA.length !== hardB.length || hardA.some((t, i) => t !== hardB[i])) return 0;
+
+  const softA = a.filter((t) => !isHard(t));
+  const softB = b.filter((t) => !isHard(t));
+  if (!softA.length || !softB.length) return 0;
+
+  const pairs = [];
+  softA.forEach((ta, i) => softB.forEach((tb, j) => {
+    const sim = fieldMatchSimilarity(ta, tb);
+    if (sim >= 0.8) pairs.push({ i, j, sim, w: ta.length + tb.length });
+  }));
+  pairs.sort((x, y) => y.sim - x.sim);
+  const usedA = new Set(), usedB = new Set();
+  let num = hardA.join('').length * 2;
+  pairs.forEach((p) => {
+    if (usedA.has(p.i) || usedB.has(p.j)) return;
+    usedA.add(p.i); usedB.add(p.j);
+    num += p.sim * p.w;
+  });
+  const den = a.join('').length + b.join('').length;
+  return den === 0 ? 0 : num / den;
+}
+
+// Best few candidate fields for a label, highest score first.
+function rankFieldMatches(normalizedLabel, byNormalizedName, limit = 3) {
+  const ranked = [];
+  for (const [name, fieldId] of Object.entries(byNormalizedName)) {
+    const score = scoreFieldMatch(normalizedLabel, name);
+    if (score > 0) ranked.push({ fieldId, name, score });
+  }
+  ranked.sort((x, y) => y.score - x.score);
+  return ranked.slice(0, limit);
+}
+
+// Same name and arguments as before, so mapResultToSample needs no change.
+function findFuzzyFieldMatch(normalizedLabel, byNormalizedName, minScore = FUZZY_AUTO_LINK_SCORE) {
+  if (normalizedLabel.length < 3) return null;
+  const [best, second] = rankFieldMatches(normalizedLabel, byNormalizedName, 2);
+  if (!best || best.score < minScore) return null;
+  if (second && best.score - second.score < FUZZY_MIN_MARGIN) return null;
+  return best.fieldId;
+}
+
+// ------------------------------ PART 1: END ----------------------------------
+
+
+// ----------------------------- PART 2: START ---------------------------------
+// Re-runs the matcher over every sample that has no field yet, which is what
+// finally fixes the backlog (the sync only matches a sample once, at the
+// moment it's first pulled in). Called from the Cleanup tab's "Smart
+// auto-match" panel:
+//   { apply: false, minScore: 0.9 }  -> preview only, nothing is written
+//   { apply: true,  minScore: 0.9 }  -> links every label that clears the bar
+// Labels are grouped, so 400 samples labelled "WILSON SOUTH" are one row in
+// the preview and one decision. Linked samples are marked fieldMatchType
+// 'fuzzy' with the score kept in fuzzyScore, so they still show up in the
+// "Suggested matches to confirm" list and can be corrected there. Never
+// touches a sample that already has a field, and never touches compost.
+exports.rematchUnmappedSamples = onCall({ timeoutSeconds: 540, memory: '1GiB' }, async (request) => {
+  await requireAgronomyAccess(request.auth);
+
+  const { apply, minScore } = request.data || {};
+  const threshold = Number(minScore);
+  if (!Number.isFinite(threshold) || threshold < 0.7 || threshold > 1) {
+    throw new HttpsError('invalid-argument', 'minScore must be between 0.7 and 1.');
+  }
+
+  const db = admin.firestore();
+  const fieldSnap = await db.collection('fields').get();
+  const lookup = buildFieldLookup(fieldSnap.docs);
+  const nameByFieldId = {};
+  fieldSnap.forEach((d) => { nameByFieldId[d.id] = d.data().name; });
+
+  // Pull every unmapped sample (in pages) and group by normalized label.
+  const groups = new Map();
+  let totalUnmapped = 0;
+  let last = null;
+  for (;;) {
+    let q = db.collection('samples').where('fieldId', '==', null).limit(1000);
+    if (last) q = q.startAfter(last);
+    const snap = await q.get();
+    if (snap.empty) break;
+    snap.forEach((doc) => {
+      const data = doc.data();
+      if (data.type === 'compost' || !data.rawFieldLabel) return;
+      totalUnmapped++;
+      const key = normalizeFieldLabel(data.rawFieldLabel);
+      if (!groups.has(key)) groups.set(key, { label: data.rawFieldLabel, refs: [] });
+      groups.get(key).refs.push(doc.ref);
+    });
+    last = snap.docs[snap.docs.length - 1];
+    if (snap.size < 1000) break;
+  }
+
+  const rows = [];
+  groups.forEach((g, key) => {
+    const [best, second] = key.length < 3 ? [] : rankFieldMatches(key, lookup, 2);
+    const margin = best && second ? best.score - second.score : null;
+    const willLink = !!best && best.score >= threshold && (margin === null || margin >= FUZZY_MIN_MARGIN);
+    rows.push({
+      label: g.label,
+      sampleCount: g.refs.length,
+      fieldId: best ? best.fieldId : null,
+      fieldName: best ? nameByFieldId[best.fieldId] || null : null,
+      score: best ? Math.round(best.score * 1000) / 1000 : null,
+      runnerUp: second ? { fieldName: nameByFieldId[second.fieldId] || null, score: Math.round(second.score * 1000) / 1000 } : null,
+      willLink,
+      _refs: g.refs
+    });
+  });
+
+  const linkable = rows.filter((r) => r.willLink);
+  const linkableSamples = linkable.reduce((n, r) => n + r.sampleCount, 0);
+
+  let linked = 0;
+  if (apply === true) {
+    for (const r of linkable) {
+      for (let i = 0; i < r._refs.length; i += 400) {
+        const batch = db.batch();
+        r._refs.slice(i, i + 400).forEach((ref) => {
+          batch.update(ref, {
+            fieldId: r.fieldId,
+            fieldMatchType: 'fuzzy',
+            fuzzyScore: r.score,
+            fuzzyMatchedBy: request.auth.uid,
+            fuzzyMatchedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        });
+        await batch.commit();
+      }
+      linked += r._refs.length;
+    }
+  }
+
+  // Closest-to-linking first, then biggest backlog; capped so the response
+  // stays small even with hundreds of odd labels.
+  rows.sort((a, b) => (b.willLink - a.willLink) || ((b.score || 0) - (a.score || 0)) || (b.sampleCount - a.sampleCount));
+  return {
+    applied: apply === true,
+    threshold,
+    totalUnmappedSamples: totalUnmapped,
+    uniqueLabels: rows.length,
+    linkableLabels: linkable.length,
+    linkableSamples,
+    linkedSamples: linked,
+    rows: rows.slice(0, 300).map(({ _refs, ...rest }) => rest)
+  };
+});
+// ------------------------------ PART 2: END ----------------------------------
 // Best-guess extraction of a usable sample doc from one raw Stukenholtz
 // result - see the file-level note above. Candidate property names are
 // checked in order; adjust once you've seen a real response.
