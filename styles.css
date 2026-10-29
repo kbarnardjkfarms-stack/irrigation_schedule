@@ -566,3 +566,40 @@ thead th.sticky-col { top: 0; z-index: 4; }
   color: #A32D2D;
   border-color: #A32D2D;
 }
+
+/* By Field charts: value labels on points, and a per-chart readings table
+   with each reading colored against that week's target (red below, green in
+   range, orange above - colors come from STATUS_COLOR in AgronomyConfig.js). */
+.agronomy-sparkline-value-label { font-size: 7px; font-weight: 600; }
+
+.agronomy-chart-readings {
+  min-width: 0;
+  width: 100%;
+  margin-top: 8px;
+  font-size: 10px;
+}
+.agronomy-chart-readings th,
+.agronomy-chart-readings td {
+  text-align: left;
+  padding: 2px 6px;
+}
+.agronomy-chart-readings th { color: #888; font-weight: 500; }
+.agronomy-reading-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+/* Cleanup tab - Smart auto-match panel */
+.agronomy-automatch {
+  border: 0.5px solid #ddd8cc;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+}
+.agronomy-automatch-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.agronomy-automatch-summary { font-size: 11px; margin: 8px 0; }
+.agronomy-automatch-table-wrap { max-height: 320px; overflow-y: auto; }
+.agronomy-automatch-yes { color: #2E8B3E; font-weight: 600; }
+.agronomy-automatch-no { color: #888; }

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { collection, getDocs, limit, onSnapshot, orderBy, query, startAfter, where } from 'firebase/firestore'
 import { db } from './firebase.js'
-import { SAMPLE_TYPE_LABEL, METRICS_BY_TYPE, CROP_COLOR } from './AgronomyConfig.js'
+import { SAMPLE_TYPE_LABEL, METRICS_BY_TYPE, CROP_COLOR, sortValueKeys } from './AgronomyConfig.js'
 
 const SAMPLE_TYPES = Object.keys(METRICS_BY_TYPE)
 const PAGE_SIZE = 200
@@ -131,7 +131,7 @@ export default function AgronomySampleDatabase({ fields }) {
     visibleSamples.forEach((s) => Object.keys(s.values || {}).forEach((k) => seenKeys.add(k)))
     const configured = (METRICS_BY_TYPE[type] || []).map((m) => m.key).filter((k) => seenKeys.has(k))
     const extra = [...seenKeys].filter((k) => !configured.includes(k)).sort()
-    return [...configured, ...extra].map((key) => {
+    return sortValueKeys(type, [...configured, ...extra]).map((key) => {
       const metric = (METRICS_BY_TYPE[type] || []).find((m) => m.key === key)
       return { key, label: metric ? metric.label : key, unit: metric ? metric.unit : null }
     })

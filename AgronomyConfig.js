@@ -165,9 +165,9 @@ export const WEEKLY_CURVES_BY_CROP = {
 // .status.offline. Light values (bg) are new tints in the same hue,
 // since styles.css doesn't define pastel backgrounds for these yet.
 export const STATUS_COLOR = {
-  deficient: { bg: '#F5DCDA', fg: '#A32D2D' },
-  optimal: { bg: '#DEEAD2', fg: '#3c5a3f' },
-  excess: { bg: '#F7E8D2', fg: '#854F0B' }
+  deficient: { bg: '#F5DCDA', fg: '#A32D2D', dot: '#D32F2F' },
+  optimal: { bg: '#DEEAD2', fg: '#3c5a3f', dot: '#2E8B3E' },
+  excess: { bg: '#FDE3C4', fg: '#B35A00', dot: '#F08A00' }
 }
 
 // Reused verbatim from CROP_COLOR in PublicScheduleView.jsx (mint, alfalfa,
@@ -191,8 +191,7 @@ export const CROP_COLOR = {
   'SUGAR BEET': { bg: '#E0D6F5', fg: '#3D2B6B' }, BEETS: { bg: '#E0D6F5', fg: '#3D2B6B' },
   FALLOW: { bg: '#E4E1D8', fg: '#5A574C' }, ONIONS: { bg: '#F4C0D1', fg: '#4B1528' },
   MINT: { bg: '#9FE1CB', fg: '#04342C' }, CARROTS: { bg: '#FAD9BB', fg: '#7A3E0A' },
-  SQUASH: { bg: '#F5C98A', fg: '#6B3D02' },
-  BARLEY: { bg: '#B5D4F4', fg: '#0C447C' }, 'BARLEY - WINTER': { bg: '#B5D4F4', fg: '#0C447C' }, 'BARLEY - SPRING': { bg: '#B5D4F4', fg: '#0C447C' }
+  SQUASH: { bg: '#F5C98A', fg: '#6B3D02' }
 }
 
 // Returns 'deficient' | 'optimal' | 'excess' | null (null when there's no
@@ -215,4 +214,55 @@ export function distanceFromTarget(value, target) {
   if (value < low) return low - value
   if (value > high) return value - high
   return 0
+}
+
+// Display order for a soil (or petiole) sample's value columns, per Kent:
+// NO3, P, K, pH, excess lime, CEC, B, Zn, Mn first, then the base-saturation
+// keys (anything starting with "BS"), then everything else, with the
+// recommendation keys (anything starting with "R") always last. Used by every
+// place that lists a sample's values so they all read in the same order.
+//
+// The first-group keys are matched by name after stripping case, units in
+// parentheses, spaces/punctuation and a trailing "ppm", so "P (ppm)", "p_ppm"
+// and "P" all count as P. If the lab's real key for one of them is spelled
+// differently than any alias below it just falls into the "everything else"
+// group - add the real spelling to the matching list.
+const FIRST_GROUP_ALIASES = [
+  ['no3', 'no3n', 'nitrate', 'nitraten'],
+  ['p', 'phosphorus', 'olsenp', 'polsen'],
+  ['k', 'potassium'],
+  ['ph', 'soilph'],
+  ['excesslime', 'lime', 'limeexcess', 'freelime', 'exlime'],
+  ['cec'],
+  ['b', 'boron'],
+  ['zn', 'zinc'],
+  ['mn', 'manganese']
+]
+
+function simplifyValueKey(key) {
+  return String(key)
+    .toLowerCase()
+    .replace(/\([^)]*\)|\[[^\]]*\]/g, '')
+    .replace(/[^a-z0-9]/g, '')
+    .replace(/ppm$/, '')
+}
+
+export function valueKeyRank(key) {
+  const simple = simplifyValueKey(key)
+  const first = FIRST_GROUP_ALIASES.findIndex((aliases) => aliases.includes(simple))
+  if (first !== -1) return first
+  const trimmed = String(key).trim().toLowerCase()
+  if (trimmed.startsWith('r')) return 1000 // recommendations, always last
+  if (trimmed.startsWith('bs')) return 100 // base saturation
+  return 500
+}
+
+// Soil and petiole only - nematode/compost keep their own order (a nematode
+// like "Root-knot" would otherwise be mistaken for a recommendation).
+export function sortValueKeys(type, keys) {
+  if (type !== 'soil' && type !== 'petiole') return keys
+  return keys
+    .map((key, i) => ({ key, i }))
+    .sort((a, b) => valueKeyRank(a.key) - valueKeyRank(b.key) || a.i - b.i)
+    .map((x) => x.key)
 }

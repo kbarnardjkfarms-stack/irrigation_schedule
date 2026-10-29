@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { collection, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
-import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR, CROP_COLOR } from './AgronomyConfig.js'
+import { METRICS_BY_TYPE, SAMPLE_TYPE_LABEL, statusFor, STATUS_COLOR, SAMPLE_TYPE_BADGE_COLOR, CROP_COLOR, sortValueKeys } from './AgronomyConfig.js'
 import { useLiveAgronomyCriteria, getCurveRows, mergeFlatTargets } from './AgronomyCriteriaData.js'
 
 function fmtDate(ts) {
@@ -27,6 +27,56 @@ function weeksBetween(laterDate, earlierDate) {
 // with its season at sync time, which needs a backend change.
 const IN_SEASON_WEEK_MIN = -6
 const IN_SEASON_WEEK_MAX = 35
+
+// Short form for on-chart labels so 5-digit petiole NO3 readings (e.g. 21500)
+// don't collide with neighbouring points; the table under each chart always
+// shows the exact number.
+function fmtChartValue(v) {
+  if (v == null) return ''
+  if (Math.abs(v) >= 10000) return `${(v / 1000).toFixed(1)}k`
+  return Number.isInteger(v) ? String(v) : String(Math.round(v * 100) / 100)
+}
+
+// The target range in force at a given week: the band entry for that exact
+// week when there is one (week-by-week curves), otherwise the nearest entry
+// (flat fallback bands only have entries at the two ends and are the same
+// range throughout anyway).
+function rangeAt(band, x) {
+  if (!band || !band.length) return null
+  let best = band[0]
+  for (const b of band) {
+    if (b.x === x) return [b.low, b.high]
+    if (Math.abs(b.x - x) < Math.abs(best.x - x)) best = b
+  }
+  return [best.low, best.high]
+}
+
+// Which curve column judges which metric. Metrics not listed (compost,
+// nematode, soil Salts) just keep their flat target.
+const CURVE_KEY_BY_METRIC = {
+  'soil.NO3': 'soilNO3',
+  'petiole.no3': 'petioleNO3',
+  'petiole.p': 'petioleP',
+  'petiole.k': 'petioleK',
+  'petiole.sulfur': 'petioleS'
+}
+
+// The target for a reading: that sample's own week on the crop/variety
+// curve when one exists (clamped to the curve's first/last week, same as the
+// chart band), otherwise the flat target.
+function targetForReading(type, metric, curveRows, sampleDate, plantDate) {
+  const curveKey = CURVE_KEY_BY_METRIC[`${type}.${metric.key}`]
+  if (!curveKey || !curveRows || !curveRows.length || !sampleDate || !plantDate) return metric.target
+  const week = weeksBetween(sampleDate.toDate(), plantDate)
+  if (week == null) return metric.target
+  const sorted = [...curveRows].sort((a, b) => a.week - b.week)
+  const row =
+    sorted.find((r) => r.week === week) ||
+    (week < sorted[0].week ? sorted[0] : sorted[sorted.length - 1])
+  return row[curveKey] || metric.target
+}
+
+const STATUS_LABEL = { deficient: 'Below range', optimal: 'In range', excess: 'Above range' }
 
 // Compact hand-rolled line chart, no chart library - matches the rest of the
 // app's approach of hand-rolled SVG/table markup rather than a new dependency
@@ -110,9 +160,20 @@ function Sparkline({ points, color, band }) {
         </text>
       ))}
       <polyline points={path} fill="none" stroke={color} strokeWidth="2" />
-      {points.map((p, i) => (
-        <circle key={i} cx={scaleX(p.x)} cy={scaleY(p.y)} r="2.5" fill={color} />
-      ))}
+      {points.map((p, i) => {
+        const dot = (p.status && STATUS_COLOR[p.status]?.dot) || color
+        const cy = scaleY(p.y)
+        // Label above the point, flipped below when there's no room at the top.
+        const labelY = cy < padT + 9 ? cy + 11 : cy - 5
+        return (
+          <g key={i}>
+            <circle cx={scaleX(p.x)} cy={cy} r="3.5" fill={dot} stroke="#fff" strokeWidth="1" />
+            <text x={scaleX(p.x)} y={labelY} textAnchor="middle" className="agronomy-sparkline-value-label" fill={dot}>
+              {fmtChartValue(p.y)}
+            </text>
+          </g>
+        )
+      })}
     </svg>
   )
 }
@@ -277,21 +338,29 @@ export default function AgronomyByField({ fields }) {
             .map((m) => {
               const sample = latestByType[type]
               const value = sample?.values?.[m.key]
-              const status = statusFor(value, m.target)
+              const target = targetForReading(
+                type, m, getCurveRows(curvesByKey, field?.cropName, field?.varietyName), sample?.receivedDt, plantDate
+              )
+              const status = statusFor(value, target)
               const color = status ? STATUS_COLOR[status] : null
               return (
-                <div key={type + m.key} className="agronomy-kpi-card">
+                <div
+                  key={type + m.key}
+                  className="agronomy-kpi-card"
+                  style={color ? { borderTop: `3px solid ${color.dot}` } : undefined}
+                >
                   <p className="agronomy-kpi-label">{SAMPLE_TYPE_LABEL[type]} {m.label}</p>
-                  <p className="agronomy-kpi-value">
+                  <p className="agronomy-kpi-value" style={color ? { color: color.fg } : undefined}>
                     {value != null ? value : '—'}
                     {value != null && <span className="agronomy-kpi-unit"> {m.unit}</span>}
                   </p>
-                  {value != null && sample?.receivedDt && (
-                    <p className="agronomy-kpi-date">{fmtDate(sample.receivedDt)}</p>
-                  )}
+                  <p className="agronomy-kpi-date">
+                    Target {target[0]}{'\u2013'}{target[1]}
+                    {value != null && sample?.receivedDt ? ` · ${fmtDate(sample.receivedDt)}` : ''}
+                  </p>
                   {status && (
                     <span className="agronomy-status-badge" style={{ background: color.bg, color: color.fg }}>
-                      {status}
+                      {STATUS_LABEL[status] || status}
                     </span>
                   )}
                 </div>
@@ -308,15 +377,49 @@ export default function AgronomyByField({ fields }) {
             .filter((s) => s.values?.[metric.key] != null && s.receivedDt && plantDate)
             .map((s) => ({
               x: weeksBetween(s.receivedDt.toDate(), plantDate),
-              y: s.values[metric.key]
+              y: s.values[metric.key],
+              date: s.receivedDt
             }))
             .filter((p) => p.x != null && p.x >= IN_SEASON_WEEK_MIN && p.x <= IN_SEASON_WEEK_MAX)
           const curveRows = getCurveRows(curvesByKey, field?.cropName, field?.varietyName)
           const band = buildBand(points, curveRows, type === 'soil' ? 'soilNO3' : 'petioleNO3', metric.target)
+          // Each reading is judged against the range for ITS week, not
+          // today's: red = below range, green = in range, orange = above.
+          const judged = points.map((p) => {
+            const range = rangeAt(band, p.x)
+            return { ...p, range, status: range ? statusFor(p.y, range) : null }
+          })
           return (
             <div key={type} className="agronomy-chart-card">
               <p className="agronomy-chart-title">{SAMPLE_TYPE_LABEL[type]} {metric.label} vs weeks since emergence</p>
-              <Sparkline points={points} color={type === 'soil' ? '#0F6E56' : '#3B6D11'} band={band} />
+              <Sparkline points={judged} color={type === 'soil' ? '#0F6E56' : '#3B6D11'} band={band} />
+              {judged.length > 0 && (
+                <table className="agronomy-chart-readings">
+                  <thead>
+                    <tr><th>Date</th><th>Wk</th><th>Reading</th><th>Target</th></tr>
+                  </thead>
+                  <tbody>
+                    {[...judged].reverse().map((p, i) => {
+                      const c = p.status ? STATUS_COLOR[p.status] : null
+                      return (
+                        <tr key={i}>
+                          <td>{fmtDate(p.date)}</td>
+                          <td>{p.x}</td>
+                          <td>
+                            <span
+                              className="agronomy-reading-chip"
+                              style={c ? { background: c.bg, color: c.fg } : undefined}
+                            >
+                              {p.y}
+                            </span>
+                          </td>
+                          <td>{p.range ? `${p.range[0]}\u2013${p.range[1]}` : '\u2014'}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
             </div>
           )
         })}
@@ -332,9 +435,9 @@ export default function AgronomyByField({ fields }) {
                   Fall soil panel {'—'} {fmtDate(annualSoilSample.receivedDt)}
                 </p>
                 <div className="agronomy-annual-values">
-                  {Object.entries(annualSoilSample.values || {}).map(([k, v]) => (
+                  {sortValueKeys('soil', Object.keys(annualSoilSample.values || {})).map((k) => (
                     <div key={k} className="agronomy-annual-value-row">
-                      <span>{k}</span><span>{v}</span>
+                      <span>{k}</span><span>{annualSoilSample.values[k]}</span>
                     </div>
                   ))}
                 </div>
@@ -381,7 +484,7 @@ export default function AgronomyByField({ fields }) {
                   {SAMPLE_TYPE_LABEL[s.type]}
                 </span>
               </td>
-              <td>{Object.entries(s.values || {}).map(([k, v]) => `${k}: ${v}`).join(' · ')}</td>
+              <td>{sortValueKeys(s.type, Object.keys(s.values || {})).map((k) => `${k}: ${s.values[k]}`).join(' · ')}</td>
             </tr>
           ))}
         </tbody>
