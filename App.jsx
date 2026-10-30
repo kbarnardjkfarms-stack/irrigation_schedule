@@ -33,10 +33,6 @@ import PivotIcon from './PivotIcon.jsx'
 
 import PivotDetailPanel from './PivotDetailPanel.jsx'
 
-import EtDetail from './EtDetail.jsx'
-
-import { weeklyEt, scheduledBand, scheduledShare, stationsForField } from './etMath.js'
-
 const DAYS = [
   { k: 'mon', en: 'Mon' }, { k: 'tue', en: 'Tue' }, { k: 'wed', en: 'Wed' },
   { k: 'thu', en: 'Thu' }, { k: 'fri', en: 'Fri' }, { k: 'sat', en: 'Sat' }, { k: 'sun', en: 'Sun' }
@@ -172,12 +168,6 @@ function mondayOf(d) {
 function addDays(d, n) { const nd = new Date(d); nd.setDate(nd.getDate() + n); return nd }
 
 function isoDate(d) { return d.toISOString().slice(0, 10) }
-
-// Local calendar day (not UTC), so "today" doesn't flip to tomorrow in the
-// evening Mountain time. Used for the ET column.
-function localIso(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 function fmtShort(d) { return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }
 
@@ -358,12 +348,6 @@ export default function App() {
   const [online, setOnline] = useState(navigator.onLine)
   const [eventsByField, setEventsByField] = useState({})
   const [gpmByField, setGpmByField] = useState({})
-  // ET column: which weather station(s) a field uses when it overrides its
-  // farm's default (fieldSettings/{id}.etStations), AgriMet's saved daily
-  // weather per station (agrimetDaily), and which field's ET detail is open.
-  const [etStationsByField, setEtStationsByField] = useState({})
-  const [agrimetByStation, setAgrimetByStation] = useState({})
-  const [etDetailFieldId, setEtDetailFieldId] = useState(null)
   const [selected, setSelected] = useState(null)
   const [editingMode, setEditingMode] = useState(null)
   const [editingHour, setEditingHour] = useState(0)
@@ -645,32 +629,9 @@ export default function App() {
     if (!user || !irrigationAllowed) return
     const unsub = onSnapshot(collection(db, 'fieldSettings'), (snap) => {
       const next = {}
-      const stations = {}
-      snap.forEach((d) => {
-        next[d.id] = d.data().gpm ?? null
-        if (Array.isArray(d.data().etStations)) stations[d.id] = d.data().etStations
-      })
+      snap.forEach((d) => { next[d.id] = d.data().gpm ?? null })
       setGpmByField(next)
-      setEtStationsByField(stations)
     })
-    return () => unsub()
-  }, [user, irrigationAllowed])
-
-  // AgriMet weather saved each morning by the archiveAgrimetNightly function.
-  useEffect(() => {
-    if (!user || !irrigationAllowed) return
-    const unsub = onSnapshot(collection(db, 'agrimetDaily'), (snap) => {
-      const next = {}
-      snap.forEach((d) => {
-        const v = d.data()
-        next[d.id] = {
-          etrByDate: v.days || {},
-          forecast: typeof v.forecast === 'number' ? v.forecast : null,
-          forecastAsOf: v.forecastAsOf || null
-        }
-      })
-      setAgrimetByStation(next)
-    }, (err) => console.warn('agrimetDaily listener failed', err))
     return () => unsub()
   }, [user, irrigationAllowed])
 
@@ -785,7 +746,6 @@ export default function App() {
           farmName: base.farmName,
           crop: normalizeCrop(seasonData.cropName),
           acres: seasonData.acres || null,
-          plantDate: seasonData.plantDate || null,
           pivotRank
         }
       })
@@ -816,27 +776,6 @@ export default function App() {
     })
     return [...set].sort((a, b) => a.localeCompare(b))
   }, [seasonDataByField])
-
-  // Everything the Scheduled / Applied / ET cells and the ET detail sheet
-  // need for one field this week. Scheduled inches need the pivot's GPM and
-  // the field's acres; without them we show scheduled hours instead and the
-  // cell stays gray.
-  const todayIso = localIso(new Date())
-  function etInfoFor(field) {
-    const events = eventsByField[field.id] || []
-    const gpm = pivotProfilesByGuid[pivotGuidByFieldId[field.id]]?.currentGpm
-    const hours = overlapHours(onIntervals(events), 0, 168)
-    const haveInches = !!(gpm && field.acres)
-    const scheduled = haveInches ? weeklyInches(events, gpm, field.acres) : null
-    const stationInfo = stationsForField(field.farmName, etStationsByField[field.id])
-    const stationData = stationInfo ? stationInfo.codes.map((c) => agrimetByStation[c]).filter(Boolean) : []
-    const et = weeklyEt({ weekStart: weekId, today: todayIso, cropName: field.crop, plantDate: field.plantDate, stations: stationData })
-    return {
-      hours, scheduled, stationInfo, et,
-      band: scheduledBand(scheduled, et ? et.inches : null),
-      share: scheduledShare(scheduled, et ? et.inches : null)
-    }
-  }
 
   async function copyWatchLink() {
     const farm = farms.find((f) => String(f.id) === String(selectedFarmId))
@@ -1309,8 +1248,6 @@ export default function App() {
                   <col key={d.k + '-pm-col'} className="col-shift" />
                 ]))}
                 <col className="col-inches" />
-                <col className="col-inches" />
-                <col className="col-inches" />
               </colgroup>
               <thead>
                 <tr>
@@ -1344,14 +1281,6 @@ export default function App() {
                     <span className="inches-label-full">Scheduled inches</span>
                     <span className="inches-label-short">In.</span>
                   </th>
-                  <th rowSpan={2} className="inches-head">
-                    <span className="inches-label-full">Applied inches</span>
-                    <span className="inches-label-short">App.</span>
-                  </th>
-                  <th rowSpan={2} className="inches-head">
-                    <span className="inches-label-full">ET forecast</span>
-                    <span className="inches-label-short">ET</span>
-                  </th>
                 </tr>
                 <tr>
                   {DAYS.map((d, i) => ([
@@ -1363,6 +1292,7 @@ export default function App() {
               <tbody>
                 {fields.map((field) => {
                   const events = eventsByField[field.id] || []
+                  const gpm = pivotProfilesByGuid[pivotGuidByFieldId[field.id]]?.currentGpm
                   const color = CROP_COLOR[field.crop] || { bg: '#D3D1C7', fg: '#2C2C2A' }
                   const isSource = mode === 'copy-targets' && copySourceId === field.id
                   const isCopyTarget = mode === 'copy-targets' && copyTargets.has(field.id)
@@ -1370,7 +1300,6 @@ export default function App() {
                   const pivotGuid = pivotGuidByFieldId[field.id]
                   const pivot = pivotGuid ? pivotsByGuid[pivotGuid] : null
                   const isPivotExpanded = expandedPivotFieldId === field.id
-                  const etInfo = etInfoFor(field)
 
                   function onNameClick() {
                     if (mode === 'copy-source') { setCopySourceId(field.id); setMode('copy-targets'); setCopyTargets(new Set()); return }
@@ -1443,29 +1372,13 @@ export default function App() {
                             )
                           })
                         ))}
-                        <td className="inches-cell">
-                          <button className={`sched-cell sched-${etInfo.band}`} onClick={() => setEtDetailFieldId(field.id)} aria-label={`Scheduled inches for ${field.fieldName}, tap for details`}>
-                            {etInfo.scheduled != null ? etInfo.scheduled.toFixed(2) : (etInfo.hours > 0 ? `${Math.round(etInfo.hours)} h` : '—')}
-                          </button>
-                        </td>
-                        <td className="inches-cell applied-cell" title="Applied inches need pivot run history, which AIO doesn't keep yet">—</td>
-                        <td className="inches-cell et-cell" onClick={() => setEtDetailFieldId(field.id)}>
-                          {etInfo.et ? <>{etInfo.et.inches.toFixed(2)}<span className="et-mark">{etInfo.stationInfo && etInfo.stationInfo.codes.length > 1 ? '*' : ''}{etInfo.et.approximate ? '~' : ''}</span></> : '—'}
-                        </td>
+                        <td className="inches-cell">{weeklyInches(events, gpm, field.acres).toFixed(2)}</td>
                       </tr>
                     </Fragment>
                   )
                 })}
               </tbody>
             </table>
-          </div>}
-          {view === 'schedule' && <div className="legend">
-            <strong>Scheduled inches vs this week's ET:</strong>
-            <span><i className="swatch sched-red" />Under 50%</span>
-            <span><i className="swatch sched-yellow" />50% to under 80%</span>
-            <span><i className="swatch sched-green" />80% to 115%</span>
-            <span><i className="swatch sched-split" />Over 115%</span>
-            <span><i className="swatch sched-gray" />Can't tell</span>
           </div>}
           {view === 'schedule' && <div className="legend">
             <span><i className="swatch" style={{ background: '#3B6D11' }} />Coming on</span>
@@ -1476,20 +1389,6 @@ export default function App() {
           </div>}
         </>
       )}
-      {etDetailFieldId && (() => {
-        const f = fields.find((x) => x.id === etDetailFieldId)
-        if (!f) return null
-        return createPortal(
-          <EtDetail
-            field={f}
-            info={etInfoFor(f)}
-            weekStart={weekStart}
-            todayIso={todayIso}
-            onClose={() => setEtDetailFieldId(null)}
-          />,
-          document.body
-        )
-      })()}
       {expandedPivotFieldId && createPortal(
         <div
           ref={pivotDetailRef}
