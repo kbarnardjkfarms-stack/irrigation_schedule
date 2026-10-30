@@ -2843,3 +2843,8 @@ exports.satelliteRotationWeekly = satelliteExports.satelliteRotationWeekly;
 const agrimet = require('./agrimet');
 exports.archiveAgrimetNightly = agrimet.archiveAgrimetNightly;
 exports.archiveAgrimetNow = agrimet.archiveAgrimetNow;
+
+// Field history links by location (old Agworld field outlines overlapped
+// with today's). Lives in its own file — see fieldLineage.js.
+const fieldLineageExports = require('./fieldLineage').makeExports(AGWORLD_TOKEN, MIN_SEASON_YEAR);
+exports.suggestFieldLineageByMap = fieldLineageExports.suggestFieldLineageByMap;
