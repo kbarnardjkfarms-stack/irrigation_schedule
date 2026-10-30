@@ -432,8 +432,22 @@ function SatellitePanel({ status, fieldCount, canEdit, satFirst, rotationRecords
     setRunning(true); setMsg(null)
     try {
       const call = httpsCallable(functions, 'syncSatelliteRotationNow', { timeout: 560000 })
-      for (let i = 0; i < 15; i++) {
-        const res = await call({ force: !!force && i === 0 })
+      let cutShort = 0
+      for (let i = 0; i < 25; i++) {
+        let res
+        try {
+          res = await call({ force: !!force && i === 0 })
+          cutShort = 0
+        } catch (err) {
+          // A round that ran into the server's time limit still saved what it
+          // finished (every field-year is saved as it's done), so keep going.
+          const code = String(err.code || '')
+          if (/internal|deadline-exceeded|unavailable/.test(code) && ++cutShort <= 3) {
+            setMsg({ ok: true, text: 'A round was cut short by the server; what it finished is saved. Continuing…' })
+            continue
+          }
+          throw err
+        }
         const r = res.data || {}
         setMsg({ ok: true, text: `Working… ${fmt(r.filled)} field-years filled this round, ${fmt(r.remaining)} still to look up.` })
         if (!r.remaining || r.processed === 0) {
