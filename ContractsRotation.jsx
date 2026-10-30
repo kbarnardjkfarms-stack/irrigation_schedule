@@ -480,17 +480,18 @@ function SatellitePanel({ status, fieldCount, canEdit, satFirst, rotationRecords
     try {
       const call = httpsCallable(functions, 'syncSatelliteRotationNow', { timeout: 560000 })
       let cutShort = 0
-      for (let i = 0; i < 25; i++) {
+      for (let i = 0; i < 40; i++) {
         let res
         try {
           res = await call({ force: !!force && i === 0 })
           cutShort = 0
         } catch (err) {
-          // A round that ran into the server's time limit still saved what it
-          // finished (every field-year is saved as it's done), so keep going.
+          // Every field-year is saved as it's done, so a round that failed or
+          // was cut off still made progress; keep going a few times, showing
+          // the reason the server recorded.
           const code = String(err.code || '')
-          if (/internal|deadline-exceeded|unavailable/.test(code) && ++cutShort <= 3) {
-            setMsg({ ok: true, text: 'A round was cut short by the server; what it finished is saved. Continuing…' })
+          if (/internal|deadline-exceeded|unavailable/.test(code) && ++cutShort <= 5) {
+            setMsg({ ok: true, text: `A round stopped early (${err.message || code}); what it finished is saved. Continuing…` })
             continue
           }
           throw err
@@ -517,9 +518,18 @@ function SatellitePanel({ status, fieldCount, canEdit, satFirst, rotationRecords
           <div className="yields-card-title">USDA satellite crop history</div>
           <div className="contracts-sub">
             {status
-              ? `${fmt(fieldCount)} fields · ${status.firstYear || 2008}–${status.latestYear || ''} · last run ${last || '—'}${status.remaining ? ` · ${fmt(status.remaining)} field-years still to look up` : ''}`
+              ? `${fmt(fieldCount)} fields · ${status.firstYear || 2008}–${status.latestYear || ''} · last finished round ${last || '—'}${status.remaining ? ` · ${fmt(status.remaining)} field-years still to look up` : ''}`
               : 'Not run yet. Fills the years before 2021 (and any other gaps) from the USDA Cropland Data Layer, using each field’s Agworld outline.'}
           </div>
+          {status && status.running && status.heartbeatMs && Date.now() - status.heartbeatMs < 10 * 60 * 1000 && (
+            <div className="contracts-sub" style={{ color: '#185FA5' }}>
+              Running now: {status.progress && status.progress.stage} · {fmt((status.progress && status.progress.filled) || 0)} filled this round
+              {status.progress && status.progress.failed ? `, ${fmt(status.progress.failed)} failed` : ''} · updated {Math.max(0, Math.round((Date.now() - status.heartbeatMs) / 1000))}s ago
+            </div>
+          )}
+          {status && status.lastError && (
+            <div className="contracts-sub" style={{ color: '#A32D2D' }}>Last problem ({status.lastErrorMs ? new Date(status.lastErrorMs).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : ''}): {status.lastError}</div>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <label className="rot-ctl" title="When the records and the satellite both have a crop for a year, which one the rotation uses">When both have a crop
