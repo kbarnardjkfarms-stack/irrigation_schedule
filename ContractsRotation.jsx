@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { collection, collectionGroup, onSnapshot } from 'firebase/firestore'
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { db } from './firebase.js'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions } from './firebase.js'
 import { effectiveYield, fmt, unitFor } from './yieldMath.js'
 import { buildRotation, fieldStats, seasonYear, yieldByGap } from './rotationMath.js'
 
@@ -34,6 +35,8 @@ export function useRotation(baseFieldsById, seasons, enabled = true) {
   const [historyDocs, setHistoryDocs] = useState(null)
   const [historyError, setHistoryError] = useState(null)
   const [seasonDocs, setSeasonDocs] = useState([])
+  const [satDocs, setSatDocs] = useState([])
+  const [satStatus, setSatStatus] = useState(null)
 
   // Only starts reading once a tab that needs it is opened, then stays live.
   const [on, setOn] = useState(enabled)
@@ -64,19 +67,44 @@ export function useRotation(baseFieldsById, seasons, enabled = true) {
     }, () => setSeasonDocs([]))
   }, [on])
 
+  // USDA satellite crop history (rotationSat/{agworldFieldId}, written by the
+  // satelliteRotation Cloud Functions; "_status" holds the last run).
+  useEffect(() => {
+    if (!on) return undefined
+    return onSnapshot(collection(db, 'rotationSat'), (snap) => {
+      const list = []
+      let st = null
+      snap.forEach((d) => { if (d.id === '_status') st = d.data(); else list.push({ id: d.id, ...d.data() }) })
+      setSatDocs(list); setSatStatus(st)
+    }, () => { setSatDocs([]); setSatStatus(null) })
+  }, [on])
+
   const yearBySeasonId = useMemo(() => Object.fromEntries((seasons || []).map((s) => [String(s.id), seasonYear(s)])), [seasons])
 
-  const rotation = useMemo(() => {
-    const agRows = seasonDocs.map((sd) => {
-      const base = baseFieldsById[sd.fieldId]
-      return base ? { name: base.name, farmName: base.farmName, year: yearBySeasonId[String(sd.seasonId)] || seasonYear({ name: sd.seasonName }), crop: sd.cropName } : null
-    }).filter((r) => r && r.year)
-    return buildRotation(historyDocs || [], agRows)
-  }, [historyDocs, seasonDocs, baseFieldsById, yearBySeasonId])
+  const agRows = useMemo(() => seasonDocs.map((sd) => {
+    const base = baseFieldsById[sd.fieldId]
+    return base ? { name: base.name, farmName: base.farmName, year: yearBySeasonId[String(sd.seasonId)] || seasonYear({ name: sd.seasonName }), crop: sd.cropName } : null
+  }).filter((r) => r && r.year), [seasonDocs, baseFieldsById, yearBySeasonId])
+
+  const satRows = useMemo(() => {
+    const out = []
+    satDocs.forEach((d) => {
+      const base = baseFieldsById[d.fieldId || d.id]
+      const name = base ? base.name : d.fieldName
+      Object.entries(d.years || {}).forEach(([y, v]) => {
+        if (v && v.crop) out.push({ name, farmName: base ? base.farmName : d.farmName, year: Number(y), crop: v.crop, share: v.share, cdlName: v.cdlName })
+      })
+    })
+    return out
+  }, [satDocs, baseFieldsById])
+
+  // With and without the satellite fill, so the Rotation tab can toggle it.
+  const rotation = useMemo(() => buildRotation(historyDocs || [], agRows, satRows), [historyDocs, agRows, satRows])
+  const rotationNoSat = useMemo(() => buildRotation(historyDocs || [], agRows, []), [historyDocs, agRows])
 
   const yieldRecords = useMemo(() => (historyDocs || []).filter((d) => !d.deleted).map((d) => ({ ...d, _yield: effectiveYield(d).value })), [historyDocs])
 
-  return { rotation, yieldRecords, loading: historyDocs === null, historyError }
+  return { rotation, rotationNoSat, yieldRecords, loading: historyDocs === null, historyError, satStatus, satFieldCount: satDocs.length }
 }
 
 // Small year strip used in tables.
@@ -86,9 +114,9 @@ export function RotationStrip({ field, from, to, highlight }) {
     const v = field && field.years[y]
     const c = v && v.crop ? rotColor(v.crop) : null
     cells.push(
-      <span key={y} className={`rot-mini ${c ? '' : 'none'} ${highlight && v && v.crop === highlight ? 'hl' : ''}`}
+      <span key={y} className={`rot-mini ${c ? '' : 'none'} ${highlight && v && v.crop === highlight ? 'hl' : ''} ${v && v.source === 'satellite' ? 'sat' : ''}`}
         style={c ? { background: c.bg, color: c.fg } : undefined}
-        title={`${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}`}>
+        title={`${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.source === 'satellite' ? ' (USDA satellite)' : ''}`}>
         {c ? c.abbr.slice(0, 1) : ''}
       </span>
     )
@@ -121,8 +149,10 @@ function HBar({ title, sub, data, valueKey, color, labelFn, tipFn, empty, refX }
   )
 }
 
-export default function ContractsRotation({ rotationData, seasonFields, selectedFarmId, seasonYearNum }) {
-  const { rotation, yieldRecords, loading, historyError } = rotationData
+export default function ContractsRotation({ rotationData, seasonFields, selectedFarmId, seasonYearNum, canEdit }) {
+  const [useSat, setUseSat] = useState(true)
+  const { yieldRecords, loading, historyError, satStatus, satFieldCount } = rotationData
+  const rotation = useSat ? rotationData.rotation : rotationData.rotationNoSat
   const [focus, setFocus] = useState('POTATO')
   const [compare, setCompare] = useState('BEETS')
   const [windowYears, setWindowYears] = useState(15)
@@ -250,7 +280,12 @@ export default function ContractsRotation({ rotationData, seasonFields, selected
           </select>
         </label>
         <input className="agronomy-search-input" placeholder="Search field or farm…" value={q} onChange={(e) => setQ(e.target.value)} style={{ alignSelf: 'flex-end' }} />
+        <label className="yields-check" style={{ alignSelf: 'flex-end', paddingBottom: 6 }} title="Fill years with no workbook or Agworld record from the USDA satellite crop map">
+          <input type="checkbox" checked={useSat} onChange={(e) => setUseSat(e.target.checked)} /> Fill gaps with USDA satellite
+        </label>
       </div>
+
+      <SatellitePanel status={satStatus} fieldCount={satFieldCount} canEdit={canEdit} />
 
       {historyError === 'no-access' && <div className="agronomy-error-banner">Only Agworld seasons are shown — your login doesn’t have the Yield history module, which holds the 2007-on rotation history.</div>}
 
@@ -304,13 +339,14 @@ export default function ContractsRotation({ rotationData, seasonFields, selected
         <div className="yields-card-head">
           <div>
             <div className="yields-card-title">Rotation history</div>
-            <div className="contracts-sub">One row per field, one cell per year. Click a column heading to sort. Blank = no record (before 2021 the workbook mostly lists only potato and beet fields).</div>
+            <div className="contracts-sub">One row per field, one cell per year. Click a column heading to sort. Faded, dashed cells come from the USDA satellite crop map (only where the workbook and Agworld have nothing); hover for the detail. Blank = no record.</div>
           </div>
           <div className="rot-legend">
             {[focus, compare, ...cropChoices.filter((c) => c !== focus && c !== compare)].slice(0, 9).map((c) => {
               const col = rotColor(c)
               return <span key={c}><i style={{ background: col.bg }} />{cropLabel(c)}</span>
             })}
+            {useSat && <span><i className="rot-legend-sat" />USDA satellite</span>}
           </div>
         </div>
         <div className="table-scroll" style={{ maxHeight: '70vh' }}>
@@ -333,8 +369,8 @@ export default function ContractsRotation({ rotationData, seasonFields, selected
                     const v = r.field.years[y]
                     const c = v && v.crop ? rotColor(v.crop) : null
                     return (
-                      <td key={y} className={`rot-cell ${y === refYear ? 'ref' : ''} ${v && v.crop === focus ? 'focus' : ''}`}
-                        title={`${r.name} ${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.leasedOut ? ' · leased out' : ''}`}>
+                      <td key={y} className={`rot-cell ${y === refYear ? 'ref' : ''} ${v && v.crop === focus ? 'focus' : ''} ${v && v.source === 'satellite' ? 'sat' : ''}`}
+                        title={`${r.name} ${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.source === 'satellite' ? ` (USDA satellite: ${v.cdlName || v.crop}${v.share ? `, ${Math.round(v.share * 100)}% of field` : ''})` : ''}${v && v.leasedOut ? ' · leased out' : ''}${r.field.sat && r.field.sat[y] && v && v.source !== 'satellite' && r.field.sat[y].crop !== v.crop ? ` · satellite says ${r.field.sat[y].crop}` : ''}`}>
                         {c ? <span style={{ background: c.bg, color: c.fg }}>{c.abbr}</span> : <span className="none" />}
                       </td>
                     )
@@ -358,4 +394,62 @@ function k2label(k) {
   if (k === '1') return '1 yr (back-to-back)'
   if (k === '7+') return '7+ yrs'
   return `${k} yrs`
+}
+
+// Status of the USDA satellite crop history + the backfill button. The
+// Cloud Function works for ~7 minutes per call and reports what's left, so
+// the button keeps calling it until everything is filled.
+function SatellitePanel({ status, fieldCount, canEdit }) {
+  const [running, setRunning] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const [open, setOpen] = useState(false)
+
+  async function run(force) {
+    setRunning(true); setMsg(null)
+    try {
+      const call = httpsCallable(functions, 'syncSatelliteRotationNow', { timeout: 560000 })
+      for (let i = 0; i < 15; i++) {
+        const res = await call({ force: !!force && i === 0 })
+        const r = res.data || {}
+        setMsg({ ok: true, text: `Working… ${fmt(r.filled)} field-years filled this round, ${fmt(r.remaining)} still to look up.` })
+        if (!r.remaining || r.processed === 0) {
+          setMsg({ ok: !r.failed || r.filled > 0, text: `Done. ${fmt(r.fieldsWithBoundary)} fields with an Agworld outline${r.fieldsWithoutBoundary ? `, ${fmt(r.fieldsWithoutBoundary)} without one (skipped)` : ''}.${r.failed ? ` ${fmt(r.failed)} field-years couldn’t be read from USDA this time; they’re retried weekly.` : ''}` })
+          break
+        }
+      }
+    } catch (e) {
+      setMsg({ ok: false, text: e.code === 'functions/not-found' ? 'The satellite function isn’t deployed yet (it deploys with the Cloud Functions workflow).' : (e.message || String(e)) })
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  const last = status && status.lastRunMs ? new Date(status.lastRunMs).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : null
+  return (
+    <div className="yields-card rot-sat">
+      <div className="yields-card-head" style={{ marginBottom: 0 }}>
+        <div>
+          <div className="yields-card-title">USDA satellite crop history</div>
+          <div className="contracts-sub">
+            {status
+              ? `${fmt(fieldCount)} fields · ${status.firstYear || 2008}–${status.latestYear || ''} · last run ${last || '—'}${status.remaining ? ` · ${fmt(status.remaining)} field-years still to look up` : ''}`
+              : 'Not run yet. Fills the years before 2021 (and any other gaps) from the USDA Cropland Data Layer, using each field’s Agworld outline.'}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <button className="clear-sort-btn" onClick={() => setOpen((o) => !o)}>{open ? 'Hide' : 'About'}</button>
+          {canEdit && <button className="save" disabled={running} onClick={() => run(false)}>{running ? 'Running…' : status ? 'Update now' : 'Run satellite backfill'}</button>}
+        </div>
+      </div>
+      {open && (
+        <div className="contracts-sub" style={{ marginTop: 8, lineHeight: 1.5 }}>
+          Source: USDA NASS Cropland Data Layer (the yearly 30 m satellite crop map behind the Crop Sequence Boundaries viewer), read through USDA’s CropScape service. For each field and year it takes the crop covering the most of the field’s Agworld outline.
+          USDA rates it about 85–95% accurate for major crops; small, narrow or double-cropped fields are less reliable, so it never overrides the yield workbook or Agworld — it only fills years they don’t have. Runs weekly on its own to pick up new fields and each new year (USDA publishes a year’s map early the following year).
+          {status && status.errors && status.errors.length > 0 && <div style={{ marginTop: 6 }}>Last errors: {status.errors.slice(0, 3).join(' · ')}</div>}
+          {canEdit && status && <div style={{ marginTop: 6 }}><button className="clear-sort-btn" disabled={running} onClick={() => { if (window.confirm('Look every field up again from scratch? This takes a while.')) run(true) }}>Re-check everything</button></div>}
+        </div>
+      )}
+      {msg && <div className={msg.ok ? 'yields-ok' : 'agronomy-error-banner'}>{msg.text}</div>}
+    </div>
+  )
 }

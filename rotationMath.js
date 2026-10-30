@@ -8,6 +8,9 @@
 //   - Agworld's per-season crop (fields/{id}/seasons/{id}, synced nightly
 //     from 2026 on, including next season once it's planned) -> source 'agworld'
 // Agworld wins for a year it has, since it's the live plan going forward.
+//   - USDA satellite crop map (Cropland Data Layer, 2008 on, per Agworld
+//     field outline; see functions/satelliteRotation.js) -> source
+//     'satellite'. Only fills years the two sources above have no crop for.
 
 import { canonCrop, fieldKey } from './yieldMath.js'
 
@@ -21,7 +24,7 @@ export function seasonYear(s) {
 
 // historyDocs: yieldHistory docs (deleted ones skipped)
 // agworldRows: [{ name, farmName, year, crop }]
-export function buildRotation(historyDocs, agworldRows) {
+export function buildRotation(historyDocs, agworldRows, satRows) {
   const rot = {}
   const entry = (key, name, area) => {
     const e = (rot[key] = rot[key] || { key, name, area: area || null, years: {} })
@@ -51,6 +54,17 @@ export function buildRotation(historyDocs, agworldRows) {
     if (r.farmName) e.farmName = r.farmName
     if (crop) e.years[r.year] = { crop, source: 'agworld' }
     else if (!e.years[r.year]) e.years[r.year] = { crop: null, source: 'agworld' }
+  })
+  // satRows: [{ name, farmName, year, crop, share, cdlName }] keyed by the
+  // field's CURRENT Agworld name, so a renamed/split field still lines up.
+  ;(satRows || []).forEach((r) => {
+    const key = fieldKey(r.name)
+    if (!key || !r.year || !r.crop) return
+    const e = entry(key, r.name, r.farmName)
+    e.sat = e.sat || {}
+    e.sat[r.year] = { crop: r.crop, share: r.share, cdlName: r.cdlName }
+    const cur = e.years[r.year]
+    if (!cur || !cur.crop) e.years[r.year] = { crop: r.crop, source: 'satellite', share: r.share, cdlName: r.cdlName }
   })
   return rot
 }

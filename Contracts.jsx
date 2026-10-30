@@ -281,7 +281,7 @@ export default function Contracts({ userRole }) {
           rotation={rotationData.rotation} refYear={seasonYearNum} />
       )}
       {view === 'rotation' && (
-        <ContractsRotation rotationData={rotationData} seasonFields={seasonFields} selectedFarmId={selectedFarmId} seasonYearNum={seasonYearNum} />
+        <ContractsRotation rotationData={rotationData} seasonFields={seasonFields} selectedFarmId={selectedFarmId} seasonYearNum={seasonYearNum} canEdit={canEdit} />
       )}
     </div>
   )

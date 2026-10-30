@@ -272,6 +272,14 @@ service cloud.firestore {
       allow read: if signedIn() && canViewContracts() && hasModule('contracts');
       allow write: if signedIn() && isAdminOrOwner();
     }
+    // USDA satellite crop history per Agworld field (Contracts > Rotation),
+    // written only by the satelliteRotation Cloud Functions (Admin key).
+    // fieldBoundaries (field outlines from the Agworld sync) has no rule on
+    // purpose: only the Cloud Functions read it, so the default deny applies.
+    match /rotationSat/{fieldId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow write: if false;
+    }
     // Yield History module (Yields.jsx). One doc per field-year, keyed
     // "{FIELDKEY}__{YEAR}". Rows come from the yield workbook (imported in
     // the browser by Admin/Owner) and from the nightly Agworld sync (Admin
