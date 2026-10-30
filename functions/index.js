@@ -2836,3 +2836,10 @@ exports.syncStorageYieldsNow = storageYields.syncStorageYieldsNow;
 const satelliteExports = satelliteRotation.makeExports(AGWORLD_TOKEN);
 exports.syncSatelliteRotationNow = satelliteExports.syncSatelliteRotationNow;
 exports.satelliteRotationWeekly = satelliteExports.satelliteRotationWeekly;
+
+// AgriMet weather archive for the ET column: saves each station's crop water
+// use file every morning (raw copy + parsed days and forecast). Lives in its
+// own file for the same reason as the ones above. See agrimet.js.
+const agrimet = require('./agrimet');
+exports.archiveAgrimetNightly = agrimet.archiveAgrimetNightly;
+exports.archiveAgrimetNow = agrimet.archiveAgrimetNow;
