@@ -278,7 +278,7 @@ async function cropByPoints(ringAlb, year, deadline) {
 // One field-year, never longer than JOB_MS: the polygon lookup first, then
 // point samples with whatever time is left. A hard timeout on top, so one
 // stuck USDA request can't hold the whole run past Google's 9-minute limit.
-const JOB_MS = 75 * 1000;
+const JOB_MS = 45 * 1000;
 function withTimeout(promise, ms) {
   let t;
   return Promise.race([promise, new Promise((_, rej) => { t = setTimeout(() => rej(new Error('lookup took too long')), ms); })])
@@ -326,106 +326,141 @@ async function fetchAgworldBoundary(fieldId, seasonId, token) {
 }
 
 // One pass: works through missing field-years until the time budget runs out.
-async function runSatelliteRotation({ trigger, budgetMs = 5 * 60 * 1000, agworldToken = null, force = false }) {
+// Firestore rejects undefined values; strip them from anything we write.
+function clean(v) {
+  if (Array.isArray(v)) return v.map(clean);
+  if (v && typeof v === 'object' && v.constructor === Object) {
+    const o = {};
+    Object.entries(v).forEach(([k, x]) => { if (x !== undefined && !(typeof x === 'number' && !Number.isFinite(x))) o[k] = clean(x); });
+    return o;
+  }
+  return v;
+}
+
+async function runSatelliteRotation({ trigger, budgetMs = 3 * 60 * 1000, agworldToken = null, force = false }) {
   const db = admin.firestore();
   const started = Date.now();
-  const latestYear = new Date().getFullYear() - 1; // CDL year Y is published early in Y+1
-  const [fieldsSnap, seasonsSnap, satSnap, boundSnap] = await Promise.all([
-    db.collection('fields').get(), db.collection('seasons').get(), db.collection('rotationSat').get(),
-    db.collection('fieldBoundaries').get()
-  ]);
-  // Outlines saved by the nightly Agworld sync (fieldBoundaries/{fieldId});
-  // kept out of the season docs because every screen of the app reads those.
-  const boundaryById = {};
-  boundSnap.forEach((d) => { boundaryById[d.id] = d.data().boundary || null; });
-  const seasonYearById = {};
-  seasonsSnap.forEach((s) => { const d = s.data(); seasonYearById[s.id] = yearOf(d.name) || yearOf(d.startDate); });
-  const existing = {};
-  satSnap.forEach((d) => { if (d.id !== STATUS_ID) existing[d.id] = d.data(); });
-
-  // Each current field's most recent season doc (boundary lives there).
-  const fields = [];
-  for (const f of fieldsSnap.docs) {
-    const base = f.data();
-    const ss = await f.ref.collection('seasons').get();
-    let best = null;
-    ss.forEach((s) => {
-      const d = s.data();
-      const y = seasonYearById[String(d.seasonId)] || yearOf(d.seasonName) || 0;
-      if (!best || y > best.y) best = { y, d, seasonId: String(d.seasonId || s.id) };
-    });
-    if (best) fields.push({ id: f.id, name: base.name, farmName: base.farmName || null, season: best });
+  // Live progress in the status doc, so a round that gets cut off still
+  // shows how far it got and where it stopped.
+  const progress = { stage: 'starting', processed: 0, filled: 0, failed: 0 };
+  const statusRef = db.collection('rotationSat').doc(STATUS_ID);
+  const heartbeat = (extra = {}) => statusRef.set(clean({ running: true, runStartedMs: started, runTrigger: trigger, heartbeatMs: Date.now(), progress: { ...progress, ...extra } }), { merge: true }).catch(() => {});
+  await heartbeat();
+  try {
+    return await runInner();
+  } catch (err) {
+    const message = `${progress.stage}: ${String((err && err.message) || err).slice(0, 300)}`;
+    console.error('Satellite rotation failed at', progress.stage, err);
+    await statusRef.set(clean({ running: false, lastErrorMs: Date.now(), lastError: message, progress }), { merge: true }).catch(() => {});
+    throw new HttpsError('internal', message);
   }
 
-  let processed = 0, filled = 0, failed = 0, noBoundary = 0;
-  const errors = [];
-  let remaining = 0;
-  const queue = [];
-  let boundaryFetchesSkipped = 0;
-  for (const f of fields) {
-    let boundary = boundaryById[f.id] || null;
-    // Fetching missing outlines from Agworld one by one can be slow; leave
-    // the rest for the next round rather than eating the lookup time.
-    if (!boundary && agworldToken && Date.now() - started > budgetMs / 2) { boundaryFetchesSkipped++; continue; }
-    if (!boundary && agworldToken) {
-      const raw = await fetchAgworldBoundary(f.id, f.season.seasonId, agworldToken);
-      const r = largestRing(raw);
-      if (r) {
-        boundary = JSON.stringify(simplifyRing(r, 80).map(([x, y]) => [Math.round(x * 1e6) / 1e6, Math.round(y * 1e6) / 1e6]));
-        await db.collection('fieldBoundaries').doc(f.id).set({ boundary, seasonId: f.season.seasonId, source: 'agworld-field', updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-      }
-    }
-    const ring = largestRing(boundary);
-    if (!ring) { noBoundary++; continue; }
-    const simple = simplifyRing(ring, 40);
-    const albers = simple.map(([lon, lat]) => toAlbers(lon, lat));
-    const hash = hashRing(simple);
-    const prev = existing[f.id] || {};
-    const sameShape = prev.boundaryHash === hash && !force;
-    const done = sameShape ? { ...(prev.years || {}) } : {};
-    const unavailable = sameShape ? { ...(prev.unavailable || {}) } : {};
-    const centroid = ringCentroid(simple);
-    const todo = [];
-    for (let y = FIRST_CDL_YEAR; y <= latestYear; y++) if (!done[y] && !(unavailable[y] >= 3)) todo.push(y);
-    if (!sameShape || prev.fieldName !== f.name) {
-      await db.collection('rotationSat').doc(f.id).set({
-        fieldId: f.id, fieldName: f.name, fieldKey: fieldKey(f.name), farmName: f.farmName,
-        boundaryHash: hash, centroid: { lon: centroid[0], lat: centroid[1] },
-        years: done, unavailable, updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  async function runInner() {
+    const latestYear = new Date().getFullYear() - 1; // CDL year Y is published early in Y+1
+    const [fieldsSnap, seasonsSnap, satSnap, boundSnap] = await Promise.all([
+      db.collection('fields').get(), db.collection('seasons').get(), db.collection('rotationSat').get(),
+      db.collection('fieldBoundaries').get()
+    ]);
+    // Outlines saved by the nightly Agworld sync (fieldBoundaries/{fieldId});
+    // kept out of the season docs because every screen of the app reads those.
+    const boundaryById = {};
+    boundSnap.forEach((d) => { boundaryById[d.id] = d.data().boundary || null; });
+    const seasonYearById = {};
+    seasonsSnap.forEach((s) => { const d = s.data(); seasonYearById[s.id] = yearOf(d.name) || yearOf(d.startDate); });
+    const existing = {};
+    satSnap.forEach((d) => { if (d.id !== STATUS_ID) existing[d.id] = d.data(); });
+
+    // Each current field's most recent season doc (boundary lives there).
+    progress.stage = 'reading fields';
+    const fields = [];
+    for (const f of fieldsSnap.docs) {
+      const base = f.data();
+      const ss = await f.ref.collection('seasons').get();
+      let best = null;
+      ss.forEach((s) => {
+        const d = s.data();
+        const y = seasonYearById[String(d.seasonId)] || yearOf(d.seasonName) || 0;
+        if (!best || y > best.y) best = { y, d, seasonId: String(d.seasonId || s.id) };
       });
+      if (best && base.name) fields.push({ id: f.id, name: base.name, farmName: base.farmName || null, season: best });
     }
-    todo.forEach((y) => queue.push({ f, y, albers, unavailable }));
-  }
 
-  // A few requests at a time, newest years first so recent history fills in first.
-  queue.sort((a, b) => b.y - a.y);
-  const CONCURRENCY = 4;
-  let qi = 0;
-  async function worker() {
-    while (qi < queue.length && Date.now() - started < budgetMs) {
-      const job = queue[qi++];
-      try {
-        const r = await cropForYear(job.albers, job.y);
-        await db.collection('rotationSat').doc(job.f.id).set({ years: { [job.y]: r }, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        filled++;
-      } catch (e) {
-        failed++;
-        job.unavailable[job.y] = (job.unavailable[job.y] || 0) + 1;
-        await db.collection('rotationSat').doc(job.f.id).set({ unavailable: { [job.y]: job.unavailable[job.y] } }, { merge: true });
-        if (errors.length < 10) errors.push(`${job.f.name} ${job.y}: ${String(e.message || e).slice(0, 120)}`);
+    let processed = 0, filled = 0, failed = 0, noBoundary = 0;
+    const errors = [];
+    let remaining = 0;
+    const queue = [];
+    let boundaryFetchesSkipped = 0;
+    progress.stage = 'preparing field outlines';
+    await heartbeat({ fields: fields.length });
+    for (const f of fields) {
+      let boundary = boundaryById[f.id] || null;
+      // Fetching missing outlines from Agworld one by one can be slow; leave
+      // the rest for the next round rather than eating the lookup time.
+      if (!boundary && agworldToken && Date.now() - started > budgetMs / 2) { boundaryFetchesSkipped++; continue; }
+      if (!boundary && agworldToken) {
+        const raw = await fetchAgworldBoundary(f.id, f.season.seasonId, agworldToken);
+        const r = largestRing(raw);
+        if (r) {
+          boundary = JSON.stringify(simplifyRing(r, 80).map(([x, y]) => [Math.round(x * 1e6) / 1e6, Math.round(y * 1e6) / 1e6]));
+          await db.collection('fieldBoundaries').doc(f.id).set(clean({ boundary, seasonId: f.season.seasonId, source: 'agworld-field', updatedAt: admin.firestore.FieldValue.serverTimestamp() }));
+        }
       }
-      processed++;
+      const ring = largestRing(boundary);
+      if (!ring) { noBoundary++; continue; }
+      const simple = simplifyRing(ring, 40);
+      const albers = simple.map(([lon, lat]) => toAlbers(lon, lat));
+      const hash = hashRing(simple);
+      const prev = existing[f.id] || {};
+      const sameShape = prev.boundaryHash === hash && !force;
+      const done = sameShape ? { ...(prev.years || {}) } : {};
+      const unavailable = sameShape ? { ...(prev.unavailable || {}) } : {};
+      const centroid = ringCentroid(simple);
+      const todo = [];
+      for (let y = FIRST_CDL_YEAR; y <= latestYear; y++) if (!done[y] && !(unavailable[y] >= 3)) todo.push(y);
+      if (!sameShape || prev.fieldName !== f.name) {
+        await db.collection('rotationSat').doc(f.id).set(clean({
+          fieldId: f.id, fieldName: f.name || null, fieldKey: fieldKey(f.name), farmName: f.farmName || null,
+          boundaryHash: hash, centroid: { lon: centroid[0], lat: centroid[1] },
+          years: done, unavailable, updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        }));
+      }
+      todo.forEach((y) => queue.push({ f, y, albers, unavailable }));
     }
-  }
-  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-  remaining = queue.length - processed + boundaryFetchesSkipped * (latestYear - FIRST_CDL_YEAR + 1);
 
-  const status = {
-    lastRunMs: Date.now(), trigger, fieldsWithBoundary: fields.length - noBoundary, fieldsWithoutBoundary: noBoundary,
-    processed, filled, failed, remaining, latestYear, firstYear: FIRST_CDL_YEAR, errors, durationMs: Date.now() - started
-  };
-  await db.collection('rotationSat').doc(STATUS_ID).set(status);
-  return status;
+    progress.stage = 'looking up USDA crops';
+    await heartbeat({ queued: queue.length });
+    // A few requests at a time, newest years first so recent history fills in first.
+    queue.sort((a, b) => b.y - a.y);
+    const CONCURRENCY = 4;
+    let qi = 0;
+    async function worker() {
+      while (qi < queue.length && Date.now() - started < budgetMs) {
+        const job = queue[qi++];
+        try {
+          const r = await cropForYear(job.albers, job.y);
+          await db.collection('rotationSat').doc(job.f.id).set(clean({ years: { [job.y]: r }, updatedAt: admin.firestore.FieldValue.serverTimestamp() }), { merge: true });
+          filled++; progress.filled++;
+        } catch (e) {
+          failed++; progress.failed++;
+          job.unavailable[job.y] = (job.unavailable[job.y] || 0) + 1;
+          await db.collection('rotationSat').doc(job.f.id).set({ unavailable: { [job.y]: job.unavailable[job.y] } }, { merge: true });
+          if (errors.length < 10) errors.push(`${job.f.name} ${job.y}: ${String(e.message || e).slice(0, 120)}`);
+        }
+        processed++; progress.processed++;
+        if (processed % 15 === 0) heartbeat();
+      }
+    }
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+    remaining = queue.length - processed + boundaryFetchesSkipped * (latestYear - FIRST_CDL_YEAR + 1);
+
+    const status = {
+      lastRunMs: Date.now(), trigger, fieldsWithBoundary: fields.length - noBoundary, fieldsWithoutBoundary: noBoundary,
+      processed, filled, failed, remaining, latestYear, firstYear: FIRST_CDL_YEAR, errors, durationMs: Date.now() - started
+    };
+    progress.stage = 'done';
+    await db.collection('rotationSat').doc(STATUS_ID).set(clean({ ...status, running: false, lastError: null }));
+    return status;
+  }
 }
 
 async function requireAdminOrOwner(auth) {
