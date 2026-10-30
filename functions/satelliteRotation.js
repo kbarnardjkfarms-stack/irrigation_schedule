@@ -223,7 +223,7 @@ function compactBoundary(raw) {
 // CropScape's certificate has a history of failing verification (the USDA's
 // own R client downloads with curl -k). This is public, read-only data, so a
 // certificate failure on THIS host only is retried without verification.
-function httpGet(url, { timeoutMs = 30000, insecure = false } = {}) {
+function httpGet(url, { timeoutMs = 20000, insecure = false } = {}) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, { timeout: timeoutMs, rejectUnauthorized: !insecure }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -261,10 +261,11 @@ async function cropByPolygon(ringAlb, year) {
   if (!m) throw new Error('empty stats');
   return { ...m, method: 'polygon' };
 }
-async function cropByPoints(ringAlb, year) {
+async function cropByPoints(ringAlb, year, deadline) {
   const pts = samplePoints(ringAlb, 7);
   const votes = [];
   for (const p of pts) {
+    if (Date.now() > deadline) break; // out of time for this field-year
     try {
       const v = parseCdlValue(await cdlGet(`${CDL_BASE}/GetCDLValue?year=${year}&x=${p[0].toFixed(1)}&y=${p[1].toFixed(1)}`));
       if (v) votes.push({ ...v, acres: 1 });
@@ -274,12 +275,25 @@ async function cropByPoints(ringAlb, year) {
   if (!m) throw new Error('no point values');
   return { ...m, method: `points(${votes.length})` };
 }
+// One field-year, never longer than JOB_MS: the polygon lookup first, then
+// point samples with whatever time is left. A hard timeout on top, so one
+// stuck USDA request can't hold the whole run past Google's 9-minute limit.
+const JOB_MS = 75 * 1000;
+function withTimeout(promise, ms) {
+  let t;
+  return Promise.race([promise, new Promise((_, rej) => { t = setTimeout(() => rej(new Error('lookup took too long')), ms); })])
+    .finally(() => clearTimeout(t));
+}
 async function cropForYear(ringAlb, year) {
-  try {
-    return await cropByPolygon(ringAlb, year);
-  } catch (e) {
-    return cropByPoints(ringAlb, year);
-  }
+  const deadline = Date.now() + JOB_MS - 5000;
+  return withTimeout((async () => {
+    try {
+      return await cropByPolygon(ringAlb, year);
+    } catch (e) {
+      if (Date.now() > deadline - 15000) throw e;
+      return cropByPoints(ringAlb, year, deadline);
+    }
+  })(), JOB_MS);
 }
 
 // ---------------------------------------------------------------------------
@@ -312,7 +326,7 @@ async function fetchAgworldBoundary(fieldId, seasonId, token) {
 }
 
 // One pass: works through missing field-years until the time budget runs out.
-async function runSatelliteRotation({ trigger, budgetMs = 7 * 60 * 1000, agworldToken = null, force = false }) {
+async function runSatelliteRotation({ trigger, budgetMs = 5 * 60 * 1000, agworldToken = null, force = false }) {
   const db = admin.firestore();
   const started = Date.now();
   const latestYear = new Date().getFullYear() - 1; // CDL year Y is published early in Y+1
@@ -347,8 +361,12 @@ async function runSatelliteRotation({ trigger, budgetMs = 7 * 60 * 1000, agworld
   const errors = [];
   let remaining = 0;
   const queue = [];
+  let boundaryFetchesSkipped = 0;
   for (const f of fields) {
     let boundary = boundaryById[f.id] || null;
+    // Fetching missing outlines from Agworld one by one can be slow; leave
+    // the rest for the next round rather than eating the lookup time.
+    if (!boundary && agworldToken && Date.now() - started > budgetMs / 2) { boundaryFetchesSkipped++; continue; }
     if (!boundary && agworldToken) {
       const raw = await fetchAgworldBoundary(f.id, f.season.seasonId, agworldToken);
       const r = largestRing(raw);
@@ -400,7 +418,7 @@ async function runSatelliteRotation({ trigger, budgetMs = 7 * 60 * 1000, agworld
     }
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-  remaining = queue.length - processed;
+  remaining = queue.length - processed + boundaryFetchesSkipped * (latestYear - FIRST_CDL_YEAR + 1);
 
   const status = {
     lastRunMs: Date.now(), trigger, fieldsWithBoundary: fields.length - noBoundary, fieldsWithoutBoundary: noBoundary,
