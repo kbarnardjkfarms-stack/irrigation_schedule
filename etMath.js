@@ -33,6 +33,40 @@ export function daysBetweenIso(a, b) {
   return Math.round((toUtc(b) - toUtc(a)) / DAY_MS)
 }
 
+// Plant dates come from AgWorld exactly as AgWorld sends them, and we don't
+// control the format. Turn whatever arrives into "YYYY-MM-DD", or null when
+// it can't be understood (which shows as a blank ET, never an error).
+// Accepts: "2026-04-20", "2026-04-20T00:00:00Z", "4/20/2026", a Date, or a
+// Firestore Timestamp.
+export function normalizeIsoDate(value) {
+  const iso = parseIsoDate(value)
+  // Only believe dates in a sensible range; anything else is "unreadable".
+  return iso && iso >= '1990-01-01' && iso <= '2100-12-31' ? iso : null
+}
+
+function parseIsoDate(value) {
+  if (value == null || value === '') return null
+  if (typeof value === 'object') {
+    if (typeof value.toDate === 'function') return parseIsoDate(value.toDate())
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10)
+    return null
+  }
+  const s = String(value).trim()
+  let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s)
+  if (m) return isRealDate(+m[1], +m[2], +m[3]) ? `${m[1]}-${m[2]}-${m[3]}` : null
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s)
+  if (m) return isRealDate(+m[3], +m[1], +m[2]) ? `${m[3]}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}` : null
+  const t = Date.parse(s)
+  if (Number.isNaN(t)) return null
+  const iso = new Date(t).toISOString()
+  return /^\d{4}-\d{2}-\d{2}/.test(iso) ? iso.slice(0, 10) : null
+}
+
+function isRealDate(y, mo, d) {
+  const t = new Date(Date.UTC(y, mo - 1, d))
+  return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d
+}
+
 // ---- Crop curves ---------------------------------------------------------
 //
 // A curve is four straight-line stages: start Kc, rising to peak Kc at full
@@ -109,6 +143,7 @@ function seasonDates(curve, plantDate, onDate) {
 export function kcOnDate(curveKey, plantDate, onDate) {
   const c = CURVES[curveKey]
   if (!c) return null
+  plantDate = normalizeIsoDate(plantDate)
   const s = seasonDates(c, plantDate, onDate)
   if (!s) return null
   if (onDate < s.start || onDate > s.end) return null
@@ -169,6 +204,7 @@ function mixedReferenceEt(stations, onDate, today) {
 // no plant date where one is needed, or no weather data at all.
 // Otherwise { inches, measuredDays, forecastDays, averageDays, growingDays }.
 export function weeklyEt({ weekStart, today, cropName, plantDate, stations }) {
+  plantDate = normalizeIsoDate(plantDate)
   const curveKey = curveKeyForCrop(cropName)
   if (!curveKey || !stations || !stations.length) return null
   const curve = CURVES[curveKey]
