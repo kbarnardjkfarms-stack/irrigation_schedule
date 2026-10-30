@@ -138,6 +138,8 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .cell-btn .tiny { font-size: 6.5px; opacity: 0.9; }
 
 .inches-cell { text-align: center; font-weight: 600; color: #3c5a3f; border-left: 1px solid #eee; }
+/* On a computer the three right-hand columns stay narrow instead of splitting the leftover width. */
+.inches-head, .inches-cell { width: 84px; min-width: 84px; max-width: 84px; padding-left: 3px; padding-right: 3px; }
 .inches-label-short { display: none; }
 
 @media (max-width: 700px) {
