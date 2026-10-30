@@ -5,6 +5,9 @@ import {
 } from 'firebase/firestore'
 import { auth, db } from './firebase.js'
 import { UNITS, acresToUnits, contractProgress, fieldMatchesContract, fmtNum } from './contractMath.js'
+import { canonCrop, fieldKey } from './yieldMath.js'
+import ContractsRotation, { RotationStrip, useRotation } from './ContractsRotation.jsx'
+import { seasonYear } from './rotationMath.js'
 
 // Contracts module — a quick view of the season's acres (from the same
 // Agworld-synced fields/{id}/seasons/{id} data Irrigation and Agronomy read),
@@ -154,16 +157,21 @@ export default function Contracts({ userRole }) {
         const sd = seasonDataByField[id] || {}
         return {
           id,
+          key: fieldKey(base.name), // name-based link to rotation / yield history
           name: base.name,
           farmId: base.farmId,
           farmName: base.farmName,
           crop: (sd.cropName || '').toUpperCase(),
+          rotCrop: canonCrop(sd.cropName), // same crop spelling as the rotation history
           variety: sd.varietyName || null,
           acres: Number(sd.acres) || 0
         }
       })
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
   }, [baseFieldsById, seasonDataByField])
+
+  const seasonYearNum = seasonYear(seasons.find((s) => String(s.id) === String(selectedSeasonId)))
+  const rotationData = useRotation(baseFieldsById, seasons, view === 'rotation' || view === 'allocate')
 
   const fields = useMemo(() => seasonFields.filter((f) => selectedFarmId === 'all' || String(f.farmId) === String(selectedFarmId)),
     [seasonFields, selectedFarmId])
@@ -251,6 +259,7 @@ export default function Contracts({ userRole }) {
         <button className={view === 'acres' ? 'active' : ''} onClick={() => setView('acres')}>Acres</button>
         <button className={view === 'contracts' ? 'active' : ''} onClick={() => setView('contracts')}>Contracts{contracts.length ? ` (${contracts.length})` : ''}</button>
         <button className={view === 'allocate' ? 'active' : ''} onClick={() => setView('allocate')}>{canEdit ? 'Allocate fields' : 'Field allocations'}</button>
+        <button className={view === 'rotation' ? 'active' : ''} onClick={() => setView('rotation')}>Rotation</button>
       </div>
 
       {error && <div className="agronomy-error-banner">{error}</div>}
@@ -268,7 +277,11 @@ export default function Contracts({ userRole }) {
         <AllocateView fields={fields} contracts={contracts} contractsById={contractsById} allocByField={allocByField}
           progressByContract={progressByContract} canEdit={canEdit} onAssign={assign}
           filter={allocFilter} setFilter={setAllocFilter} cropOptions={cropOptions}
-          seasonName={(seasons.find((s) => String(s.id) === String(selectedSeasonId)) || {}).name} />
+          seasonName={(seasons.find((s) => String(s.id) === String(selectedSeasonId)) || {}).name}
+          rotation={rotationData.rotation} refYear={seasonYearNum} />
+      )}
+      {view === 'rotation' && (
+        <ContractsRotation rotationData={rotationData} seasonFields={seasonFields} selectedFarmId={selectedFarmId} seasonYearNum={seasonYearNum} />
       )}
     </div>
   )
@@ -633,7 +646,7 @@ function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropO
 /* Allocate                                                           */
 /* ------------------------------------------------------------------ */
 
-function AllocateView({ fields, contracts, contractsById, allocByField, progressByContract, canEdit, onAssign, filter, setFilter, cropOptions, seasonName }) {
+function AllocateView({ fields, contracts, contractsById, allocByField, progressByContract, canEdit, onAssign, filter, setFilter, cropOptions, seasonName, rotation, refYear }) {
   const [selected, setSelected] = useState(new Set())
   const [bulkContract, setBulkContract] = useState('')
   const [busy, setBusy] = useState(false)
@@ -750,11 +763,11 @@ function AllocateView({ fields, contracts, contractsById, allocByField, progress
           <thead>
             <tr>
               {canEdit && <th><input type="checkbox" checked={allChecked} onChange={() => setSelected(allChecked ? new Set() : new Set(rows.map((r) => r.id)))} /></th>}
-              <th>Field</th><th className="hide-sm">Farm</th><th>Crop</th><th className="hide-sm">Variety</th><th className="num">Acres</th><th>Contract</th>
+              <th>Field</th><th className="hide-sm">Farm</th><th>Crop</th><th className="hide-sm">Variety</th><th className="hide-sm" title={refYear ? `Crops ${refYear - 6}–${refYear - 1}` : ''}>Last 6 yrs</th><th className="num">Acres</th><th>Contract</th>
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 && <tr><td colSpan={canEdit ? 7 : 6} className="contracts-empty">No fields match.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={canEdit ? 8 : 7} className="contracts-empty">No fields match.</td></tr>}
             {rows.map((f) => {
               const cid = allocByField[f.id]
               const c = cid ? contractsById[cid] : null
@@ -767,6 +780,7 @@ function AllocateView({ fields, contracts, contractsById, allocByField, progress
                   <td className="hide-sm">{f.farmName || '—'}</td>
                   <td><CropBadge crop={f.crop} /></td>
                   <td className="hide-sm">{f.variety || '—'}</td>
+                  <td className="hide-sm">{rotation && refYear ? <RotationStrip field={rotation[f.key]} from={refYear - 6} to={refYear - 1} highlight={f.rotCrop} /> : null}</td>
                   <td className="num">{fmtNum(f.acres, 1)}</td>
                   <td>
                     {canEdit ? (
@@ -790,7 +804,7 @@ function AllocateView({ fields, contracts, contractsById, allocByField, progress
               <tr>
                 {canEdit && <td />}
                 <td colSpan={2}><strong>{rows.length} field{rows.length === 1 ? '' : 's'}</strong></td>
-                <td className="hide-sm" /><td className="hide-sm" />
+                <td className="hide-sm" /><td className="hide-sm" /><td className="hide-sm" />
                 <td className="num"><strong>{fmtNum(totalAcres, 1)}</strong></td><td />
               </tr>
             </tfoot>
