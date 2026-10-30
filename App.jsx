@@ -1393,7 +1393,7 @@ export default function App() {
         <div
           ref={pivotDetailRef}
           onClick={(e) => e.stopPropagation()}
-          style={{ position: 'fixed', top: (pivotPanelPlace || pivotPanelPos).top, left: (pivotPanelPlace || pivotPanelPos).left, zIndex: 1000, boxShadow: '0 6px 16px rgba(0,0,0,0.12)', maxHeight: 'calc(100vh - 16px)', maxWidth: 'calc(100vw - 16px)', overflowY: 'auto' }}
+          style={{ position: 'fixed', top: (pivotPanelPlace || pivotPanelPos).top, left: (pivotPanelPlace || pivotPanelPos).left, zIndex: 1000, boxShadow: '0 6px 16px rgba(0,0,0,0.12)', width: 'min(320px, calc(100vw - 16px))', maxHeight: 'calc(100vh - 16px)', maxWidth: 'calc(100vw - 16px)', overflowY: 'auto' }}
         >
           {expandedPivotIsStuck && (
             <div style={{ padding: '10px 14px', background: '#FBEAEA', border: '1px solid #E8B4B4', borderRadius: '8px 8px 0 0' }}>
