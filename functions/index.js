@@ -2835,4 +2835,4 @@ exports.syncStorageYieldsNow = storageYields.syncStorageYieldsNow;
 // Layer via CropScape). Lives in its own file — see satelliteRotation.js.
 const satelliteExports = satelliteRotation.makeExports(AGWORLD_TOKEN);
 exports.syncSatelliteRotationNow = satelliteExports.syncSatelliteRotationNow;
-exports.syncSatelliteRotationWeekly = satelliteExports.syncSatelliteRotationWeekly;
+exports.satelliteRotationWeekly = satelliteExports.satelliteRotationWeekly;

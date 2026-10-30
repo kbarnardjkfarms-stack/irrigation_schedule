@@ -430,7 +430,10 @@ function makeExports(AGWORLD_TOKEN) {
       return runSatelliteRotation({ trigger: 'manual', agworldToken: token(), force });
     }),
     // Weekly: new fields, changed boundaries, and each new CDL year.
-    syncSatelliteRotationWeekly: onSchedule(
+    // Named satelliteRotationWeekly (not syncSatelliteRotationWeekly): the
+    // first deploy of that name was interrupted by two deploys running at
+    // once, which left a stray Cloud Run service holding the old name.
+    satelliteRotationWeekly: onSchedule(
       { schedule: 'every monday 03:40', timeZone: 'America/Denver', timeoutSeconds: 540, memory: '512MiB', secrets },
       async () => {
         const r = await runSatelliteRotation({ trigger: 'weekly', agworldToken: token() });
