@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { collection, collectionGroup, onSnapshot } from 'firebase/firestore'
+import { collection, collectionGroup, doc, onSnapshot, setDoc } from 'firebase/firestore'
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { httpsCallable } from 'firebase/functions'
 import { db, functions } from './firebase.js'
 import { effectiveYield, fmt, unitFor } from './yieldMath.js'
-import { buildRotation, fieldStats, seasonYear, yieldByGap } from './rotationMath.js'
+import { buildRotation, fieldStats, satelliteAgreement, seasonYear, yieldByGap } from './rotationMath.js'
 
 // Rotation tab for the Contracts module, plus the useRotation() hook the
 // Allocate view also uses for its "last 6 years" strip.
@@ -37,6 +37,7 @@ export function useRotation(baseFieldsById, seasons, enabled = true) {
   const [seasonDocs, setSeasonDocs] = useState([])
   const [satDocs, setSatDocs] = useState([])
   const [satStatus, setSatStatus] = useState(null)
+  const [satFirst, setSatFirst] = useState(false)
 
   // Only starts reading once a tab that needs it is opened, then stays live.
   const [on, setOn] = useState(enabled)
@@ -65,6 +66,14 @@ export function useRotation(baseFieldsById, seasons, enabled = true) {
       })
       setSeasonDocs(list)
     }, () => setSeasonDocs([]))
+  }, [on])
+
+  // Shared choice of which wins when the records and the satellite both have
+  // a crop: yieldSettings/rotation.satFirst (Admin/Owner set it on the
+  // Rotation tab). Unreadable (no Yields module) -> records first.
+  useEffect(() => {
+    if (!on) return undefined
+    return onSnapshot(doc(db, 'yieldSettings', 'rotation'), (d) => setSatFirst(!!(d.exists() && d.data().satFirst)), () => setSatFirst(false))
   }, [on])
 
   // USDA satellite crop history (rotationSat/{agworldFieldId}, written by the
@@ -99,12 +108,16 @@ export function useRotation(baseFieldsById, seasons, enabled = true) {
   }, [satDocs, baseFieldsById])
 
   // With and without the satellite fill, so the Rotation tab can toggle it.
-  const rotation = useMemo(() => buildRotation(historyDocs || [], agRows, satRows), [historyDocs, agRows, satRows])
+  // Records-first is always built too: the satellite-vs-records match check
+  // compares against the records' own crops.
+  const rotationRecordsFirst = useMemo(() => buildRotation(historyDocs || [], agRows, satRows), [historyDocs, agRows, satRows])
+  const rotationSatFirst = useMemo(() => (satFirst ? buildRotation(historyDocs || [], agRows, satRows, { satFirst: true }) : null), [historyDocs, agRows, satRows, satFirst])
+  const rotation = satFirst ? rotationSatFirst : rotationRecordsFirst
   const rotationNoSat = useMemo(() => buildRotation(historyDocs || [], agRows, []), [historyDocs, agRows])
 
   const yieldRecords = useMemo(() => (historyDocs || []).filter((d) => !d.deleted).map((d) => ({ ...d, _yield: effectiveYield(d).value })), [historyDocs])
 
-  return { rotation, rotationNoSat, yieldRecords, loading: historyDocs === null, historyError, satStatus, satFieldCount: satDocs.length }
+  return { rotation, rotationNoSat, rotationRecordsFirst, satFirst, yieldRecords, loading: historyDocs === null, historyError, satStatus, satFieldCount: satDocs.length }
 }
 
 // Small year strip used in tables.
@@ -116,7 +129,7 @@ export function RotationStrip({ field, from, to, highlight }) {
     cells.push(
       <span key={y} className={`rot-mini ${c ? '' : 'none'} ${highlight && v && v.crop === highlight ? 'hl' : ''} ${v && v.source === 'satellite' ? 'sat' : ''}`}
         style={c ? { background: c.bg, color: c.fg } : undefined}
-        title={`${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.source === 'satellite' ? ' (USDA satellite)' : ''}`}>
+        title={`${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.source === 'satellite' ? ' (USDA satellite)' : ''}${v && v.recordCrop ? ` · records say ${v.recordCrop}` : ''}`}>
         {c ? c.abbr.slice(0, 1) : ''}
       </span>
     )
@@ -151,7 +164,7 @@ function HBar({ title, sub, data, valueKey, color, labelFn, tipFn, empty, refX }
 
 export default function ContractsRotation({ rotationData, seasonFields, selectedFarmId, seasonYearNum, canEdit }) {
   const [useSat, setUseSat] = useState(true)
-  const { yieldRecords, loading, historyError, satStatus, satFieldCount } = rotationData
+  const { yieldRecords, loading, historyError, satStatus, satFieldCount, satFirst, rotationRecordsFirst } = rotationData
   const rotation = useSat ? rotationData.rotation : rotationData.rotationNoSat
   const [focus, setFocus] = useState('POTATO')
   const [compare, setCompare] = useState('BEETS')
@@ -285,7 +298,7 @@ export default function ContractsRotation({ rotationData, seasonFields, selected
         </label>
       </div>
 
-      <SatellitePanel status={satStatus} fieldCount={satFieldCount} canEdit={canEdit} />
+      <SatellitePanel status={satStatus} fieldCount={satFieldCount} canEdit={canEdit} satFirst={satFirst} rotationRecordsFirst={rotationRecordsFirst} />
 
       {historyError === 'no-access' && <div className="agronomy-error-banner">Only Agworld seasons are shown — your login doesn’t have the Yield history module, which holds the 2007-on rotation history.</div>}
 
@@ -339,7 +352,7 @@ export default function ContractsRotation({ rotationData, seasonFields, selected
         <div className="yields-card-head">
           <div>
             <div className="yields-card-title">Rotation history</div>
-            <div className="contracts-sub">One row per field, one cell per year. Click a column heading to sort. Faded, dashed cells come from the USDA satellite crop map (only where the workbook and Agworld have nothing); hover for the detail. Blank = no record.</div>
+            <div className="contracts-sub">One row per field, one cell per year. Click a column heading to sort. Faded, dashed cells come from the USDA satellite crop map{satFirst && useSat ? ' (satellite first: it wins wherever it has a year; a corner mark means your records said something else)' : ' (only where the workbook and Agworld have nothing)'}; hover for the detail. Blank = no record.</div>
           </div>
           <div className="rot-legend">
             {[focus, compare, ...cropChoices.filter((c) => c !== focus && c !== compare)].slice(0, 9).map((c) => {
@@ -369,8 +382,8 @@ export default function ContractsRotation({ rotationData, seasonFields, selected
                     const v = r.field.years[y]
                     const c = v && v.crop ? rotColor(v.crop) : null
                     return (
-                      <td key={y} className={`rot-cell ${y === refYear ? 'ref' : ''} ${v && v.crop === focus ? 'focus' : ''} ${v && v.source === 'satellite' ? 'sat' : ''}`}
-                        title={`${r.name} ${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.source === 'satellite' ? ` (USDA satellite: ${v.cdlName || v.crop}${v.share ? `, ${Math.round(v.share * 100)}% of field` : ''})` : ''}${v && v.leasedOut ? ' · leased out' : ''}${r.field.sat && r.field.sat[y] && v && v.source !== 'satellite' && r.field.sat[y].crop !== v.crop ? ` · satellite says ${r.field.sat[y].crop}` : ''}`}>
+                      <td key={y} className={`rot-cell ${y === refYear ? 'ref' : ''} ${v && v.crop === focus ? 'focus' : ''} ${v && v.source === 'satellite' ? 'sat' : ''} ${v && v.recordCrop ? 'override' : ''}`}
+                        title={`${r.name} ${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.source === 'satellite' ? ` (USDA satellite: ${v.cdlName || v.crop}${v.share ? `, ${Math.round(v.share * 100)}% of field` : ''})` : ''}${v && v.recordCrop ? ` · ${v.recordSource === 'agworld' ? 'Agworld' : 'records'} say ${v.recordCrop}` : ''}${v && v.leasedOut ? ' · leased out' : ''}${r.field.sat && r.field.sat[y] && v && v.source !== 'satellite' && r.field.sat[y].crop !== v.crop ? ` · satellite says ${r.field.sat[y].crop}` : ''}`}>
                         {c ? <span style={{ background: c.bg, color: c.fg }}>{c.abbr}</span> : <span className="none" />}
                       </td>
                     )
@@ -399,10 +412,21 @@ function k2label(k) {
 // Status of the USDA satellite crop history + the backfill button. The
 // Cloud Function works for ~7 minutes per call and reports what's left, so
 // the button keeps calling it until everything is filled.
-function SatellitePanel({ status, fieldCount, canEdit }) {
+function SatellitePanel({ status, fieldCount, canEdit, satFirst, rotationRecordsFirst }) {
   const [running, setRunning] = useState(false)
   const [msg, setMsg] = useState(null)
   const [open, setOpen] = useState(false)
+  const [showMatch, setShowMatch] = useState(false)
+  const [savingPri, setSavingPri] = useState(false)
+  const agree = useMemo(() => (rotationRecordsFirst ? satelliteAgreement(rotationRecordsFirst) : null), [rotationRecordsFirst])
+
+  async function setPriority(v) {
+    setSavingPri(true)
+    try { await setDoc(doc(db, 'yieldSettings', 'rotation'), { satFirst: v === 'satellite' }, { merge: true }) }
+    catch (e) { setMsg({ ok: false, text: e.code === 'permission-denied' ? 'Only an Admin or Owner can change this.' : e.message }) }
+    finally { setSavingPri(false) }
+  }
+  const pct = (x) => (x == null ? '—' : `${Math.round(x * 100)}%`)
 
   async function run(force) {
     setRunning(true); setMsg(null)
@@ -436,7 +460,14 @@ function SatellitePanel({ status, fieldCount, canEdit }) {
               : 'Not run yet. Fills the years before 2021 (and any other gaps) from the USDA Cropland Data Layer, using each field’s Agworld outline.'}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label className="rot-ctl" title="When the records and the satellite both have a crop for a year, which one the rotation uses">When both have a crop
+            <select value={satFirst ? 'satellite' : 'records'} disabled={!canEdit || savingPri} onChange={(e) => setPriority(e.target.value)}>
+              <option value="records">Records first</option>
+              <option value="satellite">Satellite first</option>
+            </select>
+          </label>
+          {agree && agree.n > 0 && <button className="clear-sort-btn" onClick={() => setShowMatch((o) => !o)}>{showMatch ? 'Hide match check' : `Matches records ${pct(agree.familyPct)}`}</button>}
           <button className="clear-sort-btn" onClick={() => setOpen((o) => !o)}>{open ? 'Hide' : 'About'}</button>
           {canEdit && <button className="save" disabled={running} onClick={() => run(false)}>{running ? 'Running…' : status ? 'Update now' : 'Run satellite backfill'}</button>}
         </div>
@@ -447,6 +478,48 @@ function SatellitePanel({ status, fieldCount, canEdit }) {
           USDA rates it about 85–95% accurate for major crops; small, narrow or double-cropped fields are less reliable, so it never overrides the yield workbook or Agworld — it only fills years they don’t have. Runs weekly on its own to pick up new fields and each new year (USDA publishes a year’s map early the following year).
           {status && status.errors && status.errors.length > 0 && <div style={{ marginTop: 6 }}>Last errors: {status.errors.slice(0, 3).join(' · ')}</div>}
           {canEdit && status && <div style={{ marginTop: 6 }}><button className="clear-sort-btn" disabled={running} onClick={() => { if (window.confirm('Look every field up again from scratch? This takes a while.')) run(true) }}>Re-check everything</button></div>}
+        </div>
+      )}
+      {showMatch && agree && agree.n > 0 && (
+        <div className="rot-match">
+          <p className="contracts-sub" style={{ marginTop: 8 }}>
+            Over <strong>{agree.n.toLocaleString()}</strong> field-years where both your records (workbook, entered, Agworld) and the satellite have a crop:
+            the satellite names the <strong>same crop {pct(agree.exactPct)}</strong> of the time, and the <strong>same rotation group {pct(agree.familyPct)}</strong>
+            (counting wheat / barley / “small grain” as one group, alfalfa / other hay as one, field / sweet corn as one).
+            If that second number is high for the crops you care about, “Satellite first” is a safe switch.
+          </p>
+          <div className="rot-match-grid">
+            <div className="table-scroll" style={{ maxHeight: 280 }}>
+              <table className="contracts-table contracts-table-auto">
+                <thead><tr><th>Records say</th><th className="num">Years</th><th className="num">Same crop</th><th className="num">Same group</th><th>When it differs, satellite says</th></tr></thead>
+                <tbody>
+                  {agree.crops.map((c) => (
+                    <tr key={c.crop}>
+                      <td><strong>{cropLabel(c.crop)}</strong></td>
+                      <td className="num">{c.n}</td>
+                      <td className="num">{pct(c.exact / c.n)}</td>
+                      <td className="num" style={{ color: c.family / c.n >= 0.85 ? '#3B6D11' : c.family / c.n < 0.7 ? '#A32D2D' : undefined }}><strong>{pct(c.family / c.n)}</strong></td>
+                      <td className="contracts-sub">{Object.entries(c.saidAs).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${cropLabel(k)} ${v}`).join(', ') || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="table-scroll" style={{ maxHeight: 280 }}>
+              <table className="contracts-table contracts-table-auto">
+                <thead><tr><th>Disagreements ({agree.misses.length})</th><th>Year</th><th>Records</th><th>Satellite</th></tr></thead>
+                <tbody>
+                  {agree.misses.slice(0, 200).map((m, i) => (
+                    <tr key={i}>
+                      <td>{m.field}</td><td>{m.year}</td>
+                      <td>{cropLabel(m.record)}{m.recordSource === 'agworld' ? ' (AW)' : ''}</td>
+                      <td>{cropLabel(m.satellite)}{m.share ? <span className="contracts-sub"> {Math.round(m.share * 100)}%</span> : null}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
       {msg && <div className={msg.ok ? 'yields-ok' : 'agronomy-error-banner'}>{msg.text}</div>}

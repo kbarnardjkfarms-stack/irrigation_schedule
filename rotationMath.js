@@ -10,7 +10,9 @@
 // Agworld wins for a year it has, since it's the live plan going forward.
 //   - USDA satellite crop map (Cropland Data Layer, 2008 on, per Agworld
 //     field outline; see functions/satelliteRotation.js) -> source
-//     'satellite'. Only fills years the two sources above have no crop for.
+//     'satellite'. By default it only fills years the two sources above have
+//     no crop for; with { satFirst: true } it wins for every year it covers
+//     (the record's own crop is kept as `recordCrop` for the tooltip).
 
 import { canonCrop, fieldKey } from './yieldMath.js'
 
@@ -24,7 +26,7 @@ export function seasonYear(s) {
 
 // historyDocs: yieldHistory docs (deleted ones skipped)
 // agworldRows: [{ name, farmName, year, crop }]
-export function buildRotation(historyDocs, agworldRows, satRows) {
+export function buildRotation(historyDocs, agworldRows, satRows, { satFirst = false } = {}) {
   const rot = {}
   const entry = (key, name, area) => {
     const e = (rot[key] = rot[key] || { key, name, area: area || null, years: {} })
@@ -65,6 +67,9 @@ export function buildRotation(historyDocs, agworldRows, satRows) {
     e.sat[r.year] = { crop: r.crop, share: r.share, cdlName: r.cdlName }
     const cur = e.years[r.year]
     if (!cur || !cur.crop) e.years[r.year] = { crop: r.crop, source: 'satellite', share: r.share, cdlName: r.cdlName }
+    // (Never let one satellite row override another — two Agworld fields
+    // whose names collapse to the same key, e.g. "18-D" and "18D".)
+    else if (satFirst && cur.source !== 'satellite' && cur.crop !== r.crop) e.years[r.year] = { crop: r.crop, source: 'satellite', share: r.share, cdlName: r.cdlName, recordCrop: cur.crop, recordSource: cur.source }
   })
   return rot
 }
@@ -127,4 +132,44 @@ export function yieldByGap(rotation, yieldRecords, crop) {
     out.push({ gap: r.year - prev[prev.length - 1], yield: r._yield, acres: r.acres || 0, field: r.fieldName, year: r.year })
   })
   return out
+}
+
+// Crops the records and the satellite name differently but that are the
+// same thing for rotation purposes (the workbook says "Small Grain" where the
+// satellite says wheat or barley, alfalfa vs other hay, etc.).
+const CROP_FAMILY = {
+  WHEAT: 'GRAIN', BARLEY: 'GRAIN', 'SMALL GRAIN': 'GRAIN', RYE: 'GRAIN', OATS: 'GRAIN',
+  HAY: 'HAY', PASTURE: 'HAY', 'GRASS SEED': 'HAY',
+  CORN: 'CORN', 'SWEET CORN': 'CORN',
+  POTATO: 'POTATO', 'MINI POTATOES': 'POTATO'
+}
+export const cropFamily = (c) => CROP_FAMILY[c] || c
+
+// How well the satellite matches the records, wherever both have a crop for
+// the same field-year (build the rotation records-first to call this).
+// Exact = same crop; family = same rotation group (wheat vs "small grain").
+export function satelliteAgreement(rotation, { fromYear = 0, toYear = 9999 } = {}) {
+  const byCrop = {}
+  const misses = []
+  let n = 0, exact = 0, family = 0
+  Object.values(rotation).forEach((f) => {
+    if (!f.sat) return
+    Object.entries(f.sat).forEach(([y, s]) => {
+      const yr = Number(y)
+      if (yr < fromYear || yr > toYear) return
+      const rec = f.years[y]
+      if (!rec || !rec.crop || rec.source === 'satellite' || !s.crop) return
+      if (rec.crop === 'FALLOW') return
+      n++
+      const ex = rec.crop === s.crop
+      const fam = ex || cropFamily(rec.crop) === cropFamily(s.crop)
+      if (ex) exact++
+      if (fam) family++
+      const b = (byCrop[rec.crop] = byCrop[rec.crop] || { crop: rec.crop, n: 0, exact: 0, family: 0, saidAs: {} })
+      b.n++; if (ex) b.exact++; if (fam) b.family++
+      if (!fam) { b.saidAs[s.crop] = (b.saidAs[s.crop] || 0) + 1; misses.push({ field: f.name, year: yr, record: rec.crop, recordSource: rec.source, satellite: s.crop, share: s.share }) }
+    })
+  })
+  const crops = Object.values(byCrop).sort((a, b) => b.n - a.n)
+  return { n, exact, family, exactPct: n ? exact / n : null, familyPct: n ? family / n : null, crops, misses: misses.sort((a, b) => b.year - a.year) }
 }

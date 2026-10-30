@@ -801,3 +801,7 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .rot-mini.sat { opacity: 0.55; outline: 1px dashed rgba(0,0,0,0.3); outline-offset: -1px; }
 .rot-sat .yields-card-head { align-items: center; }
 .rot-legend i.rot-legend-sat { background: #C8A27A; opacity: 0.55; outline: 1px dashed rgba(0,0,0,0.4); outline-offset: -2px; }
+/* Satellite-first: corner mark where the satellite overrode a record */
+.rot-cell.override { position: relative; }
+.rot-cell.override::after { content: ''; position: absolute; top: 2px; right: 2px; border-style: solid; border-width: 0 7px 7px 0; border-color: transparent #A32D2D transparent transparent; }
+.rot-match-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; }
