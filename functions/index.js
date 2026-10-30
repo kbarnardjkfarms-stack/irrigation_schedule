@@ -7,6 +7,8 @@ admin.initializeApp();
 // The token lives here, as a Firebase secret — never in client code.
 // Set it once with: firebase functions:secrets:set AGWORLD_API_TOKEN
 const AGWORLD_TOKEN = defineSecret('AGWORLD_API_TOKEN');
+// Satellite crop history (USDA Cropland Data Layer) — own file, see satelliteRotation.js.
+const satelliteRotation = require('./satelliteRotation');
 
 // Change this to match your Agworld region if you're not on the US instance:
 // Australia - https://my.agworld.com.au
@@ -317,11 +319,11 @@ async function syncFields() {
     }
     Object.assign(allFarmsById, farmsById);
 
-    // Firestore batches cap at 500 writes; each field can now write two
-    // docs (season + yield history), so chunk at 200.
+    // Firestore batches cap at 500 writes; each field can write three docs
+    // (season, yield history, boundary), so chunk at 150.
     const year = seasonYear(season);
-    for (let i = 0; i < fields.length; i += 200) {
-      const chunk = fields.slice(i, i + 200);
+    for (let i = 0; i < fields.length; i += 150) {
+      const chunk = fields.slice(i, i + 150);
       const batch = db.batch();
       chunk.forEach((f) => {
         if (EXCLUDED_FARM_IDS.has(String(f.attributes.farm_id))) {
@@ -371,6 +373,16 @@ async function syncFields() {
           { merge: true }
         );
         totalFieldSeasonDocs++;
+
+        // Field outline for the satellite crop history (satelliteRotation.js).
+        // Its own small collection so the season docs every screen reads stay small.
+        const compact = satelliteRotation.compactBoundary(f.attributes.boundary);
+        if (compact) {
+          batch.set(db.collection('fieldBoundaries').doc(String(f.id)), {
+            boundary: compact, seasonId: String(season.id), source: 'agworld-sync',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+        }
 
         // Harvest recorded in Agworld -> yield history for that field-year.
         const crop = canonCrop(primaryCrop ? primaryCrop.crop_name : null);
@@ -2818,3 +2830,9 @@ const storageYields = require('./storageYields');
 exports.syncStorageYieldsEvery15 = storageYields.syncStorageYieldsEvery15;
 exports.syncStorageYieldsNightly = storageYields.syncStorageYieldsNightly;
 exports.syncStorageYieldsNow = storageYields.syncStorageYieldsNow;
+
+// Satellite crop history for Contracts > Rotation (USDA NASS Cropland Data
+// Layer via CropScape). Lives in its own file — see satelliteRotation.js.
+const satelliteExports = satelliteRotation.makeExports(AGWORLD_TOKEN);
+exports.syncSatelliteRotationNow = satelliteExports.syncSatelliteRotationNow;
+exports.syncSatelliteRotationWeekly = satelliteExports.syncSatelliteRotationWeekly;
