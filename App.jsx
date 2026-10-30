@@ -819,8 +819,7 @@ export default function App() {
 
   // Everything the Scheduled / Applied / ET cells and the ET detail sheet
   // need for one field this week. Scheduled inches need the pivot's GPM and
-  // the field's acres; without them we show scheduled hours instead and the
-  // cell stays gray.
+  // the field's acres; without them the Scheduled cell is left blank.
   const todayIso = localIso(new Date())
   // Never throws: anything unexpected in one field's data gives that field a
   // plain gray Scheduled cell and a blank ET instead of a blank schedule.
@@ -1461,9 +1460,11 @@ export default function App() {
                           })
                         ))}
                         <td className="inches-cell">
-                          <button className={`sched-cell sched-${etInfo.band}`} onClick={() => setEtDetailFieldId(field.id)} aria-label={`Scheduled inches for ${field.fieldName}, tap for details`}>
-                            {etInfo.scheduled != null ? etInfo.scheduled.toFixed(2) : (etInfo.hours > 0 ? `${Math.round(etInfo.hours)} h` : '—')}
-                          </button>
+                          {etInfo.scheduled != null && (
+                            <button className={`sched-cell sched-${etInfo.band}`} onClick={() => setEtDetailFieldId(field.id)} aria-label={`Scheduled inches for ${field.fieldName}, tap for details`}>
+                              {etInfo.scheduled.toFixed(2)}
+                            </button>
+                          )}
                         </td>
                         <td className="inches-cell applied-cell" title="Applied inches need pivot run history, which AIO doesn't keep yet">—</td>
                         <td className="inches-cell et-cell" onClick={() => setEtDetailFieldId(field.id)}>
