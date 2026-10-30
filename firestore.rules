@@ -284,6 +284,15 @@ service cloud.firestore {
     // written only by the satelliteRotation Cloud Functions (Admin key).
     // fieldBoundaries (field outlines from the Agworld sync) has no rule on
     // purpose: only the Cloud Functions read it, so the default deny applies.
+    // Field history links (Contracts > Rotation, Yields > Field history):
+    // which old field names a current field takes history from. Same
+    // audience as Contracts/Yields to read; Admin/Owner edit. The map-based
+    // suggestions (_suggestions) are written by the suggestFieldLineageByMap
+    // Cloud Function with an Admin key.
+    match /fieldLineage/{childKey} {
+      allow read: if signedIn() && canViewContracts() && (hasModule('contracts') || hasModule('yields'));
+      allow write: if signedIn() && isAdminOrOwner();
+    }
     match /rotationSat/{fieldId} {
       allow read: if signedIn() && canViewContracts() && hasModule('contracts');
       allow write: if false;

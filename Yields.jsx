@@ -174,6 +174,14 @@ export default function Yields({ userRole }) {
   const [dims, setDims] = useState({ variety: [], area: [], manager: [], previousCrop: [], irrigation: [] })
   const [selFields, setSelFields] = useState([]) // fieldKeys, in the order picked (keeps each field's color)
   const [includeLeased, setIncludeLeased] = useState(false)
+  // Field history links (set on Contracts > Rotation): a current field shows
+  // its linked old field's records for years it has none of its own.
+  const [lineage, setLineage] = useState({})
+  useEffect(() => onSnapshot(collection(db, 'fieldLineage'), (snap) => {
+    const m = {}
+    snap.forEach((d) => { if (!d.id.startsWith('_')) m[d.id] = d.data() })
+    setLineage(m)
+  }, () => setLineage({})), [])
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'yieldHistory'), (snap) => {
@@ -336,7 +344,7 @@ export default function Yields({ userRole }) {
       )}
 
       {!empty && view === 'trends' && <TrendsView base={base} focus={focus} selFields={selFields} fieldNameByKey={fieldNameByKey} unit={unit} crop={crop} yFrom={yFrom} yTo={yTo} />}
-      {!empty && view === 'field' && <FieldHistoryView records={records} fieldNameByKey={fieldNameByKey} initialKey={selFields[0]} includeLeased={includeLeased} preferCrop={crop} />}
+      {!empty && view === 'field' && <FieldHistoryView records={records} fieldNameByKey={fieldNameByKey} initialKey={selFields[0]} includeLeased={includeLeased} preferCrop={crop} lineage={lineage} />}
       {!empty && view === 'compare' && <CompareView base={base} focus={focus} selFields={selFields} fieldNameByKey={fieldNameByKey} unit={unit} />}
       {!empty && view === 'records' && <RecordsView rows={focus} canDelete={canImport} deletedDocs={deletedDocs} />}
     </div>
@@ -472,7 +480,7 @@ function TrendsView({ base, focus, selFields, fieldNameByKey, unit, crop, yFrom,
 /* Field history                                                      */
 /* ------------------------------------------------------------------ */
 
-function FieldHistoryView({ records, fieldNameByKey, initialKey, includeLeased, preferCrop }) {
+function FieldHistoryView({ records, fieldNameByKey, initialKey, includeLeased, preferCrop, lineage = {} }) {
   const [key, setKey] = useState(initialKey || null)
   const [q, setQ] = useState('')
   const [chartCrop, setChartCrop] = useState(null)
@@ -483,10 +491,23 @@ function FieldHistoryView({ records, fieldNameByKey, initialKey, includeLeased, 
       const e = (m[r.fieldKey] = m[r.fieldKey] || { key: r.fieldKey, name: r.fieldName, area: r.area, years: 0, crops: new Set() })
       e.years++; if (r.crop) e.crops.add(r.crop); if (r.area) e.area = r.area
     })
+    // Linked fields show up even before they have records of their own.
+    Object.entries(lineage).forEach(([k, l]) => {
+      const e = (m[k] = m[k] || { key: k, name: l.childName || k, area: null, years: 0, crops: new Set() })
+      e.linked = (l.parents || []).map((p) => p.name)
+    })
     return Object.values(m).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
-  }, [records])
+  }, [records, lineage])
 
-  const hist = useMemo(() => records.filter((r) => r.fieldKey === key).sort((a, b) => a.year - b.year), [records, key])
+  // Own records, plus a linked old field's records for any year without one.
+  const hist = useMemo(() => {
+    const own = records.filter((r) => r.fieldKey === key)
+    const ownYears = new Set(own.map((r) => r.year))
+    const parents = ((lineage[key] && lineage[key].parents) || []).map((p) => p.key)
+    const inherited = records.filter((r) => parents.includes(r.fieldKey) && !ownYears.has(r.year))
+      .map((r) => ({ ...r, _inheritedFrom: r.fieldName, id: `${r.id}~${key}` }))
+    return [...own, ...inherited].sort((a, b) => a.year - b.year)
+  }, [records, key, lineage])
   const harvestedCrops = useMemo(() => {
     const m = {}
     hist.forEach((r) => { if (r._yield > 0 && r.crop) m[r.crop] = (m[r.crop] || 0) + 1 })
@@ -530,7 +551,7 @@ function FieldHistoryView({ records, fieldNameByKey, initialKey, includeLeased, 
           <>
             <div className="yields-card">
               <div className="yields-card-title" style={{ fontSize: 16 }}>{fieldNameByKey[key]}</div>
-              <div className="contracts-sub">{fieldInfo && fieldInfo.area ? fieldInfo.area + ' · ' : ''}{hist.length} year{hist.length === 1 ? '' : 's'} on record ({hist[0] && hist[0].year}–{hist[hist.length - 1] && hist[hist.length - 1].year})</div>
+              <div className="contracts-sub">{fieldInfo && fieldInfo.area ? fieldInfo.area + ' · ' : ''}{hist.length} year{hist.length === 1 ? '' : 's'} on record ({hist[0] && hist[0].year}–{hist[hist.length - 1] && hist[hist.length - 1].year}){fieldInfo && fieldInfo.linked && fieldInfo.linked.length ? ` · includes history recorded as ${fieldInfo.linked.join(', ')}` : ''}</div>
               <div className="yields-rotation" role="list" aria-label="Rotation by year">
                 {hist.map((r) => {
                   const c = cropColor(r.crop)
@@ -587,7 +608,7 @@ function FieldHistoryView({ records, fieldNameByKey, initialKey, includeLeased, 
                     const idx = r._yield > 0 && avg ? (r._yield / avg) * 100 : null
                     return (
                       <tr key={r.id}>
-                        <td><strong>{r.year}</strong></td>
+                        <td><strong>{r.year}</strong>{r._inheritedFrom && <span className="yields-src inherited" title={`Recorded under ${r._inheritedFrom} (linked history, whole field before it was split/renamed)`}>{r._inheritedFrom}</span>}</td>
                         <td><CropBadge crop={r.crop} /></td>
                         <td className="hide-sm">{r.variety || '—'}</td>
                         <td className="num">{fmt(r.acres, 1)}</td>

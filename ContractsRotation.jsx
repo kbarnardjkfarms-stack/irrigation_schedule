@@ -3,7 +3,8 @@ import { collection, collectionGroup, doc, onSnapshot, setDoc } from 'firebase/f
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { httpsCallable } from 'firebase/functions'
 import { db, functions } from './firebase.js'
-import { effectiveYield, fmt, unitFor } from './yieldMath.js'
+import FieldLinks from './FieldLinks.jsx'
+import { effectiveYield, fieldKey, fmt, unitFor } from './yieldMath.js'
 import { buildRotation, fieldStats, satelliteAgreement, seasonYear, yieldByGap } from './rotationMath.js'
 
 // Rotation tab for the Contracts module, plus the useRotation() hook the
@@ -38,6 +39,7 @@ export function useRotation(baseFieldsById, seasons, enabled = true) {
   const [satDocs, setSatDocs] = useState([])
   const [satStatus, setSatStatus] = useState(null)
   const [satFirst, setSatFirst] = useState(false)
+  const [lineageDocs, setLineageDocs] = useState({ links: {}, suggestions: null, dismissed: [] })
 
   // Only starts reading once a tab that needs it is opened, then stays live.
   const [on, setOn] = useState(enabled)
@@ -76,6 +78,22 @@ export function useRotation(baseFieldsById, seasons, enabled = true) {
     return onSnapshot(doc(db, 'yieldSettings', 'rotation'), (d) => setSatFirst(!!(d.exists() && d.data().satFirst)), () => setSatFirst(false))
   }, [on])
 
+  // Field history links (fieldLineage/{currentFieldKey}) + the map
+  // suggestions and dismissed list kept in the same collection.
+  useEffect(() => {
+    if (!on) return undefined
+    return onSnapshot(collection(db, 'fieldLineage'), (snap) => {
+      const links = {}
+      let suggestions = null, dismissed = []
+      snap.forEach((d) => {
+        if (d.id === '_suggestions') suggestions = d.data()
+        else if (d.id === '_dismissed') dismissed = d.data().pairs || []
+        else links[d.id] = d.data()
+      })
+      setLineageDocs({ links, suggestions, dismissed })
+    }, () => setLineageDocs({ links: {}, suggestions: null, dismissed: [] }))
+  }, [on])
+
   // USDA satellite crop history (rotationSat/{agworldFieldId}, written by the
   // satelliteRotation Cloud Functions; "_status" holds the last run).
   useEffect(() => {
@@ -110,14 +128,39 @@ export function useRotation(baseFieldsById, seasons, enabled = true) {
   // With and without the satellite fill, so the Rotation tab can toggle it.
   // Records-first is always built too: the satellite-vs-records match check
   // compares against the records' own crops.
-  const rotationRecordsFirst = useMemo(() => buildRotation(historyDocs || [], agRows, satRows), [historyDocs, agRows, satRows])
-  const rotationSatFirst = useMemo(() => (satFirst ? buildRotation(historyDocs || [], agRows, satRows, { satFirst: true }) : null), [historyDocs, agRows, satRows, satFirst])
+  const lineage = lineageDocs.links
+  const rotationRecordsFirst = useMemo(() => buildRotation(historyDocs || [], agRows, satRows, { lineage }), [historyDocs, agRows, satRows, lineage])
+  const rotationSatFirst = useMemo(() => (satFirst ? buildRotation(historyDocs || [], agRows, satRows, { satFirst: true, lineage }) : null), [historyDocs, agRows, satRows, satFirst, lineage])
   const rotation = satFirst ? rotationSatFirst : rotationRecordsFirst
-  const rotationNoSat = useMemo(() => buildRotation(historyDocs || [], agRows, []), [historyDocs, agRows])
+  const rotationNoSat = useMemo(() => buildRotation(historyDocs || [], agRows, [], { lineage }), [historyDocs, agRows, lineage])
+
+  // Names history was recorded under (workbook / entered / synced yields),
+  // with how many years each has — the choices for a history link.
+  const historyFields = useMemo(() => {
+    const m = {}
+    ;(historyDocs || []).forEach((d) => {
+      if (d.deleted) return
+      const k = d.fieldKey || fieldKey(d.fieldName)
+      if (!k) return
+      const e = (m[k] = m[k] || { key: k, name: d.fieldName || k, yrs: new Set() })
+      if (d.crop || (d.agworld && d.agworld.crop)) e.yrs.add(d.year)
+    })
+    return Object.values(m).map((e) => ({ key: e.key, name: e.name, years: e.yrs.size })).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+  }, [historyDocs])
+  const satYearsByKey = useMemo(() => {
+    const m = {}
+    satDocs.forEach((d) => {
+      const base = baseFieldsById[d.fieldId || d.id]
+      const k = fieldKey(base ? base.name : d.fieldName)
+      m[k] = Object.values(d.years || {}).filter((v) => v && v.crop).length
+    })
+    return m
+  }, [satDocs, baseFieldsById])
 
   const yieldRecords = useMemo(() => (historyDocs || []).filter((d) => !d.deleted).map((d) => ({ ...d, _yield: effectiveYield(d).value })), [historyDocs])
 
-  return { rotation, rotationNoSat, rotationRecordsFirst, satFirst, yieldRecords, loading: historyDocs === null, historyError, satStatus, satFieldCount: satDocs.length }
+  return { rotation, rotationNoSat, rotationRecordsFirst, satFirst, yieldRecords, loading: historyDocs === null, historyError, satStatus, satFieldCount: satDocs.length,
+    lineage, lineageSuggestions: lineageDocs.suggestions, lineageDismissed: lineageDocs.dismissed, historyFields, satYearsByKey }
 }
 
 // Small year strip used in tables.
@@ -127,9 +170,9 @@ export function RotationStrip({ field, from, to, highlight }) {
     const v = field && field.years[y]
     const c = v && v.crop ? rotColor(v.crop) : null
     cells.push(
-      <span key={y} className={`rot-mini ${c ? '' : 'none'} ${highlight && v && v.crop === highlight ? 'hl' : ''} ${v && v.source === 'satellite' ? 'sat' : ''}`}
+      <span key={y} className={`rot-mini ${c ? '' : 'none'} ${highlight && v && v.crop === highlight ? 'hl' : ''} ${v && v.source === 'satellite' ? 'sat' : ''} ${v && v.inheritedFrom ? 'inh' : ''}`}
         style={c ? { background: c.bg, color: c.fg } : undefined}
-        title={`${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.source === 'satellite' ? ' (USDA satellite)' : ''}${v && v.recordCrop ? ` · records say ${v.recordCrop}` : ''}`}>
+        title={`${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.source === 'satellite' ? ' (USDA satellite)' : ''}${v && v.recordCrop ? ` · records say ${v.recordCrop}` : ''}${v && v.inheritedFrom ? ` · from ${v.inheritedFrom}` : ''}`}>
         {c ? c.abbr.slice(0, 1) : ''}
       </span>
     )
@@ -299,6 +342,9 @@ export default function ContractsRotation({ rotationData, seasonFields, selected
       </div>
 
       <SatellitePanel status={satStatus} fieldCount={satFieldCount} canEdit={canEdit} satFirst={satFirst} rotationRecordsFirst={rotationRecordsFirst} />
+      <FieldLinks currentFields={seasonFields.map((f) => ({ key: f.key, name: f.name, farmName: f.farmName }))} historyFields={rotationData.historyFields || []}
+        lineage={rotationData.lineage || {}} mapSuggestions={rotationData.lineageSuggestions} dismissed={rotationData.lineageDismissed}
+        satYearsByKey={rotationData.satYearsByKey || {}} canEdit={canEdit} />
 
       {historyError === 'no-access' && <div className="agronomy-error-banner">Only Agworld seasons are shown — your login doesn’t have the Yield history module, which holds the 2007-on rotation history.</div>}
 
@@ -360,6 +406,7 @@ export default function ContractsRotation({ rotationData, seasonFields, selected
               return <span key={c}><i style={{ background: col.bg }} />{cropLabel(c)}</span>
             })}
             {useSat && <span><i className="rot-legend-sat" />USDA satellite</span>}
+            <span><i className="rot-legend-inh" />Linked history</span>
           </div>
         </div>
         <div className="table-scroll" style={{ maxHeight: '70vh' }}>
@@ -377,13 +424,13 @@ export default function ContractsRotation({ rotationData, seasonFields, selected
             <tbody>
               {sorted.map((r) => (
                 <tr key={r.key}>
-                  <td className="rot-field"><strong>{r.name}</strong><div className="contracts-sub" style={{ marginTop: 0 }}>{r.farm || '—'}</div></td>
+                  <td className="rot-field"><strong>{r.name}</strong><div className="contracts-sub" style={{ marginTop: 0 }}>{r.farm || '—'}{r.field.linkedFrom && r.field.linkedFrom.length ? ` · + ${r.field.linkedFrom.join(', ')}` : ''}</div></td>
                   {years.map((y) => {
                     const v = r.field.years[y]
                     const c = v && v.crop ? rotColor(v.crop) : null
                     return (
-                      <td key={y} className={`rot-cell ${y === refYear ? 'ref' : ''} ${v && v.crop === focus ? 'focus' : ''} ${v && v.source === 'satellite' ? 'sat' : ''} ${v && v.recordCrop ? 'override' : ''}`}
-                        title={`${r.name} ${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.source === 'satellite' ? ` (USDA satellite: ${v.cdlName || v.crop}${v.share ? `, ${Math.round(v.share * 100)}% of field` : ''})` : ''}${v && v.recordCrop ? ` · ${v.recordSource === 'agworld' ? 'Agworld' : 'records'} say ${v.recordCrop}` : ''}${v && v.leasedOut ? ' · leased out' : ''}${r.field.sat && r.field.sat[y] && v && v.source !== 'satellite' && r.field.sat[y].crop !== v.crop ? ` · satellite says ${r.field.sat[y].crop}` : ''}`}>
+                      <td key={y} className={`rot-cell ${y === refYear ? 'ref' : ''} ${v && v.crop === focus ? 'focus' : ''} ${v && v.source === 'satellite' ? 'sat' : ''} ${v && v.recordCrop ? 'override' : ''} ${v && v.inheritedFrom ? 'inh' : ''}`}
+                        title={`${r.name} ${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.source === 'satellite' ? ` (USDA satellite: ${v.cdlName || v.crop}${v.share ? `, ${Math.round(v.share * 100)}% of field` : ''})` : ''}${v && v.recordCrop ? ` · ${v.recordSource === 'agworld' ? 'Agworld' : 'records'} say ${v.recordCrop}` : ''}${v && v.inheritedFrom ? ` · from ${v.inheritedFrom} (linked history)` : ''}${v && v.leasedOut ? ' · leased out' : ''}${r.field.sat && r.field.sat[y] && v && v.source !== 'satellite' && r.field.sat[y].crop !== v.crop ? ` · satellite says ${r.field.sat[y].crop}` : ''}`}>
                         {c ? <span style={{ background: c.bg, color: c.fg }}>{c.abbr}</span> : <span className="none" />}
                       </td>
                     )

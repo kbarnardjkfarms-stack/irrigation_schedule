@@ -847,3 +847,12 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .et-facts { border-top: 0.5px solid #ddd8cc; margin-top: 8px; padding-top: 8px; font-size: 12px; display: flex; flex-direction: column; gap: 4px; }
 .et-facts span { display: inline-block; min-width: 105px; color: #888; }
 .et-foot { font-size: 10px; color: #888; margin: 10px 0 0; line-height: 1.4; }
+
+/* Field history links (FieldLinks.jsx): inherited years get a small dot */
+.rot-cell.inh { position: relative; }
+.rot-cell.inh::before { content: ''; position: absolute; left: 4px; bottom: 4px; width: 5px; height: 5px; border-radius: 50%; background: rgba(0,0,0,0.55); }
+.rot-mini.inh { box-shadow: inset 0 -3px 0 rgba(0,0,0,0.35); }
+.rot-legend i.rot-legend-inh { background: #C8A27A; position: relative; }
+.rot-legend i.rot-legend-inh::after { content: ''; position: absolute; left: 2px; bottom: 2px; width: 4px; height: 4px; border-radius: 50%; background: rgba(0,0,0,0.6); }
+.rot-links .yields-chip button { padding: 0 4px; }
+.yields-src.inherited { color: #52514e; border-color: #b8b4a8; font-weight: 600; text-transform: none; }

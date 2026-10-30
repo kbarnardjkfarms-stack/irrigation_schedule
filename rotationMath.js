@@ -26,7 +26,7 @@ export function seasonYear(s) {
 
 // historyDocs: yieldHistory docs (deleted ones skipped)
 // agworldRows: [{ name, farmName, year, crop }]
-export function buildRotation(historyDocs, agworldRows, satRows, { satFirst = false } = {}) {
+export function buildRotation(historyDocs, agworldRows, satRows, { satFirst = false, lineage = null } = {}) {
   const rot = {}
   const entry = (key, name, area) => {
     const e = (rot[key] = rot[key] || { key, name, area: area || null, years: {} })
@@ -57,6 +57,12 @@ export function buildRotation(historyDocs, agworldRows, satRows, { satFirst = fa
     if (crop) e.years[r.year] = { crop, source: 'agworld' }
     else if (!e.years[r.year]) e.years[r.year] = { crop: null, source: 'agworld' }
   })
+  // Field history links (fieldLineage): a current field takes the crop of
+  // its linked old field(s) for any year it has no record of its own — e.g.
+  // COOK N and COOK S inherit the years the workbook only has as "COOK".
+  // Applied before the satellite, so the satellite still only fills what's
+  // left (or overrides everything, with satFirst).
+  if (lineage) applyLineage(rot, lineage, entry)
   // satRows: [{ name, farmName, year, crop, share, cdlName }] keyed by the
   // field's CURRENT Agworld name, so a renamed/split field still lines up.
   ;(satRows || []).forEach((r) => {
@@ -172,4 +178,47 @@ export function satelliteAgreement(rotation, { fromYear = 0, toYear = 9999 } = {
   })
   const crops = Object.values(byCrop).sort((a, b) => b.n - a.n)
   return { n, exact, family, exactPct: n ? exact / n : null, familyPct: n ? family / n : null, crops, misses: misses.sort((a, b) => b.year - a.year) }
+}
+
+// lineage: { [childKey]: { childName, parents: [{ key, name }] } }
+function applyLineage(rot, lineage, entry) {
+  // Snapshot each parent's own years first, so a chain (A -> B -> C) or two
+  // children of one parent can't feed off each other's inherited years.
+  const own = {}
+  Object.values(lineage).forEach((l) => (l.parents || []).forEach((p) => {
+    if (own[p.key] || !rot[p.key]) return
+    own[p.key] = Object.entries(rot[p.key].years).filter(([, v]) => v && v.crop && !v.inheritedFrom)
+  }))
+  Object.entries(lineage).forEach(([childKey, l]) => {
+    const c = entry(childKey, l.childName)
+    c.linkedFrom = (l.parents || []).map((p) => p.name || p.key)
+    ;(l.parents || []).forEach((p) => {
+      ;(own[p.key] || []).forEach(([y, v]) => {
+        const cur = c.years[y]
+        if (cur && cur.crop) return
+        c.years[y] = { ...v, inheritedFrom: (rot[p.key] && rot[p.key].name) || p.name || p.key }
+      })
+    })
+  })
+}
+
+// Name-based link suggestions: a current field whose name is an old field's
+// name plus a split suffix ("COOK N" <- "COOK", "CELLAR MINI" <- "CELLAR"),
+// or the other way round for fields that were merged. Keys are fieldKey()
+// form (letters and digits only). Old fields that are still current fields
+// themselves are skipped.
+const SPLIT_SUFFIX = /^(N|S|E|W|NE|NW|SE|SW|NORTH|SOUTH|EAST|WEST|MINI|BIG|MAIN|MIDDLE|MID|MDL|CORNER|CORNERS|LITTLE|SMALL|LARGE|UPPER|LOWER|TOP|BOTTOM|PIVOT\d*|PIV\d*|P\d{1,2}|\d{1,2}|[A-H])$/
+export function suggestLinksByName(currentFields, historyFields) {
+  const current = new Set(currentFields.map((f) => f.key))
+  const out = []
+  currentFields.forEach((cf) => {
+    historyFields.forEach((hf) => {
+      if (!hf.key || hf.key === cf.key || current.has(hf.key)) return
+      let how = null
+      if (cf.key.startsWith(hf.key) && SPLIT_SUFFIX.test(cf.key.slice(hf.key.length))) how = 'split'
+      else if (hf.key.startsWith(cf.key) && SPLIT_SUFFIX.test(hf.key.slice(cf.key.length))) how = 'merged'
+      if (how) out.push({ childKey: cf.key, childName: cf.name, parentKey: hf.key, parentName: hf.name, how, years: hf.years })
+    })
+  })
+  return out
 }
