@@ -72,8 +72,11 @@ function largestRing(boundary) {
   let g = boundary;
   if (!g) return null;
   if (typeof g === 'string') { try { g = JSON.parse(g); } catch (e) { return null; } }
-  if (Array.isArray(g)) return g.length >= 3 ? g : null; // compact ring as stored in fieldBoundaries
+  // Agworld sends "null" (or an empty geometry) for a field with no outline.
+  if (!g || typeof g !== 'object') return null;
+  if (Array.isArray(g)) return g.length >= 3 && g.every((p) => Array.isArray(p) && p.length >= 2) ? g : null; // compact ring as stored in fieldBoundaries
   if (g.type === 'Feature') g = g.geometry;
+  if (!g || typeof g !== 'object' || !Array.isArray(g.coordinates)) return null;
   const polys = g.type === 'Polygon' ? [g.coordinates] : g.type === 'MultiPolygon' ? g.coordinates : [];
   let best = null, bestArea = 0;
   polys.forEach((p) => {
@@ -392,7 +395,10 @@ async function runSatelliteRotation({ trigger, budgetMs = 3 * 60 * 1000, agworld
     let boundaryFetchesSkipped = 0;
     progress.stage = 'preparing field outlines';
     await heartbeat({ fields: fields.length });
+    const skippedFields = [];
     for (const f of fields) {
+     // One field's bad outline must never stop the round for everyone else.
+     try {
       let boundary = boundaryById[f.id] || null;
       // Fetching missing outlines from Agworld one by one can be slow; leave
       // the rest for the next round rather than eating the lookup time.
@@ -425,6 +431,10 @@ async function runSatelliteRotation({ trigger, budgetMs = 3 * 60 * 1000, agworld
         }));
       }
       todo.forEach((y) => queue.push({ f, y, albers, unavailable }));
+     } catch (e) {
+      noBoundary++;
+      if (skippedFields.length < 10) skippedFields.push(`${f.name}: ${String(e.message || e).slice(0, 100)}`);
+     }
     }
 
     progress.stage = 'looking up USDA crops';
@@ -455,7 +465,7 @@ async function runSatelliteRotation({ trigger, budgetMs = 3 * 60 * 1000, agworld
 
     const status = {
       lastRunMs: Date.now(), trigger, fieldsWithBoundary: fields.length - noBoundary, fieldsWithoutBoundary: noBoundary,
-      processed, filled, failed, remaining, latestYear, firstYear: FIRST_CDL_YEAR, errors, durationMs: Date.now() - started
+      processed, filled, failed, remaining, latestYear, firstYear: FIRST_CDL_YEAR, errors: [...skippedFields, ...errors].slice(0, 15), durationMs: Date.now() - started
     };
     progress.stage = 'done';
     await db.collection('rotationSat').doc(STATUS_ID).set(clean({ ...status, running: false, lastError: null }));
