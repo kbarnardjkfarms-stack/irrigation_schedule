@@ -340,7 +340,15 @@ async function syncFields() {
         // crop or blend for a given season) — take the primary entry
         // rather than assuming there's only one.
         const crops = f.attributes.crops || [];
-        const primaryCrop = crops.find((c) => c.crop_blend === 'primary') || crops[0] || null;
+        // Agworld also returns the field's own crop_name/variety_name for the
+        // season — the crop it shows next to the field (e.g. Pumpkin on State
+        // Park Middle). Prefer that one when it's in the list, so a field
+        // carrying a second crop (an established hay stand, a fall-planted
+        // wheat) doesn't show the wrong one; then 'primary', then the first.
+        const shownName = f.attributes.crop_name || null;
+        const primaryCrop = (shownName && crops.find((c) => c.crop_name === shownName))
+          || crops.find((c) => c.crop_blend === 'primary') || crops[0]
+          || (shownName ? { crop_name: shownName, variety_name: f.attributes.variety_name || null, crop_use: f.attributes.crop_use || null } : null);
         // Per-season crop/acreage data lives in a subcollection keyed by
         // season id, so the app can switch years without losing history.
         const seasonRef = db
@@ -356,6 +364,12 @@ async function syncFields() {
             cropName: primaryCrop ? primaryCrop.crop_name : null,
             varietyName: primaryCrop ? primaryCrop.variety_name : null,
             cropUse: primaryCrop ? primaryCrop.crop_use : null,
+            // Every crop on the field this season, for the Rotation tab's hover text.
+            crops: crops.map((c) => ({
+              name: c.crop_name || null, variety: c.variety_name || null,
+              blend: c.crop_blend || null, use: c.crop_use || null
+            })),
+            agworldFieldCropName: shownName,
             // planting_date lives on the field's own attributes, not
             // nested inside the crop object - confirmed via Agworld's docs
             // showing it as a sibling of area/irrigation/cropping_method
