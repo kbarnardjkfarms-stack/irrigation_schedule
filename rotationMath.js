@@ -48,14 +48,30 @@ export function buildRotation(historyDocs, agworldRows, satRows, { satFirst = fa
       e.years[year] = { crop: crop || null, source: 'history', leasedOut: !!d.leasedOut }
     }
   })
+  // agworldRows: [{ name, farmName, year, crop, seasonName, crops }]. An
+  // account can have more than one Agworld season for the same year (a
+  // row-crop season plus a hay/pasture or lease season, say). The season
+  // named exactly the year ("2026") wins; otherwise the first one stays,
+  // and the others are kept as `agAlso` for the hover text.
   ;(agworldRows || []).forEach((r) => {
     const key = fieldKey(r.name)
     if (!key || !r.year) return
     const crop = canonCrop(r.crop)
     const e = entry(key, r.name, r.farmName)
     if (r.farmName) e.farmName = r.farmName
-    if (crop) e.years[r.year] = { crop, source: 'agworld' }
-    else if (!e.years[r.year]) e.years[r.year] = { crop: null, source: 'agworld' }
+    const others = (r.crops || []).map((c) => canonCrop(c && c.name)).filter((c) => c && c !== crop)
+    const next = { crop: crop || null, source: 'agworld', season: r.seasonName || null, otherCrops: others.length ? [...new Set(others)] : null }
+    const cur = e.years[r.year]
+    if (!cur || cur.source !== 'agworld') {
+      if (crop || !cur) e.years[r.year] = next
+      return
+    }
+    const exact = (v) => String(v.season || '').trim() === String(r.year)
+    const keepNew = (!cur.crop && crop) || (exact(next) && !exact(cur))
+    const winner = keepNew ? next : cur
+    const loser = keepNew ? cur : next
+    if (loser.crop && loser.crop !== winner.crop) winner.agAlso = [...(winner.agAlso || []), `${loser.crop}${loser.season ? ` (season ${loser.season})` : ''}`]
+    e.years[r.year] = winner
   })
   // Field history links (fieldLineage): a current field takes the crop of
   // its linked old field(s) for any year it has no record of its own — e.g.

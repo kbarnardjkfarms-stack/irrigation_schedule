@@ -107,11 +107,15 @@ export function useRotation(baseFieldsById, seasons, enabled = true) {
   }, [on])
 
   const yearBySeasonId = useMemo(() => Object.fromEntries((seasons || []).map((s) => [String(s.id), seasonYear(s)])), [seasons])
+  const nameBySeasonId = useMemo(() => Object.fromEntries((seasons || []).map((s) => [String(s.id), s.name])), [seasons])
 
   const agRows = useMemo(() => seasonDocs.map((sd) => {
     const base = baseFieldsById[sd.fieldId]
-    return base ? { name: base.name, farmName: base.farmName, year: yearBySeasonId[String(sd.seasonId)] || seasonYear({ name: sd.seasonName }), crop: sd.cropName } : null
-  }).filter((r) => r && r.year), [seasonDocs, baseFieldsById, yearBySeasonId])
+    return base ? {
+      name: base.name, farmName: base.farmName, year: yearBySeasonId[String(sd.seasonId)] || seasonYear({ name: sd.seasonName }),
+      crop: sd.cropName, seasonName: nameBySeasonId[String(sd.seasonId)] || sd.seasonName || null, crops: sd.crops || null
+    } : null
+  }).filter((r) => r && r.year), [seasonDocs, baseFieldsById, yearBySeasonId, nameBySeasonId])
 
   const satRows = useMemo(() => {
     const out = []
@@ -163,6 +167,16 @@ export function useRotation(baseFieldsById, seasons, enabled = true) {
     lineage, lineageSuggestions: lineageDocs.suggestions, lineageDismissed: lineageDocs.dismissed, historyFields, satYearsByKey }
 }
 
+// Where a cell's crop came from, for hover text.
+function sourceNote(v) {
+  if (!v) return ''
+  let t = ''
+  if (v.source === 'agworld') t += ` (Agworld${v.season ? `, season “${v.season}”` : ''})`
+  if (v.otherCrops && v.otherCrops.length) t += ` · also on the field: ${v.otherCrops.join(', ')}`
+  if (v.agAlso && v.agAlso.length) t += ` · another Agworld season says ${v.agAlso.join(', ')}`
+  return t
+}
+
 // Small year strip used in tables.
 export function RotationStrip({ field, from, to, highlight }) {
   const cells = []
@@ -172,7 +186,7 @@ export function RotationStrip({ field, from, to, highlight }) {
     cells.push(
       <span key={y} className={`rot-mini ${c ? '' : 'none'} ${highlight && v && v.crop === highlight ? 'hl' : ''} ${v && v.source === 'satellite' ? 'sat' : ''} ${v && v.inheritedFrom ? 'inh' : ''}`}
         style={c ? { background: c.bg, color: c.fg } : undefined}
-        title={`${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.source === 'satellite' ? ' (USDA satellite)' : ''}${v && v.recordCrop ? ` · records say ${v.recordCrop}` : ''}${v && v.inheritedFrom ? ` · from ${v.inheritedFrom}` : ''}`}>
+        title={`${y}: ${v && v.crop ? v.crop : 'no record'}${sourceNote(v)}${v && v.source === 'satellite' ? ' (USDA satellite)' : ''}${v && v.recordCrop ? ` · records say ${v.recordCrop}` : ''}${v && v.inheritedFrom ? ` · from ${v.inheritedFrom}` : ''}`}>
         {c ? c.abbr.slice(0, 1) : ''}
       </span>
     )
@@ -430,7 +444,7 @@ export default function ContractsRotation({ rotationData, seasonFields, selected
                     const c = v && v.crop ? rotColor(v.crop) : null
                     return (
                       <td key={y} className={`rot-cell ${y === refYear ? 'ref' : ''} ${v && v.crop === focus ? 'focus' : ''} ${v && v.source === 'satellite' ? 'sat' : ''} ${v && v.recordCrop ? 'override' : ''} ${v && v.inheritedFrom ? 'inh' : ''}`}
-                        title={`${r.name} ${y}: ${v && v.crop ? v.crop : 'no record'}${v && v.source === 'agworld' ? ' (Agworld)' : ''}${v && v.source === 'satellite' ? ` (USDA satellite: ${v.cdlName || v.crop}${v.share ? `, ${Math.round(v.share * 100)}% of field` : ''})` : ''}${v && v.recordCrop ? ` · ${v.recordSource === 'agworld' ? 'Agworld' : 'records'} say ${v.recordCrop}` : ''}${v && v.inheritedFrom ? ` · from ${v.inheritedFrom} (linked history)` : ''}${v && v.leasedOut ? ' · leased out' : ''}${r.field.sat && r.field.sat[y] && v && v.source !== 'satellite' && r.field.sat[y].crop !== v.crop ? ` · satellite says ${r.field.sat[y].crop}` : ''}`}>
+                        title={`${r.name} ${y}: ${v && v.crop ? v.crop : 'no record'}${sourceNote(v)}${v && v.source === 'satellite' ? ` (USDA satellite: ${v.cdlName || v.crop}${v.share ? `, ${Math.round(v.share * 100)}% of field` : ''})` : ''}${v && v.recordCrop ? ` · ${v.recordSource === 'agworld' ? 'Agworld' : 'records'} say ${v.recordCrop}` : ''}${v && v.inheritedFrom ? ` · from ${v.inheritedFrom} (linked history)` : ''}${v && v.leasedOut ? ' · leased out' : ''}${r.field.sat && r.field.sat[y] && v && v.source !== 'satellite' && r.field.sat[y].crop !== v.crop ? ` · satellite says ${r.field.sat[y].crop}` : ''}`}>
                         {c ? <span style={{ background: c.bg, color: c.fg }}>{c.abbr}</span> : <span className="none" />}
                       </td>
                     )
