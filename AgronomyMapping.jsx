@@ -3,7 +3,7 @@ import { httpsCallable } from 'firebase/functions'
 import { functions } from './firebase.js'
 import { SAMPLE_TYPE_LABEL } from './AgronomyConfig.js'
 
-// Field mapping: Stukenholtz names its samples its own way ("WILSON SOUTH
+// Field mapping (replaces the old Cleanup tab): Stukenholtz names its samples its own way ("WILSON SOUTH
 // 2026", "Shop S pivot") and they will never line up perfectly with the Agworld
 // field names. This tab lists every distinct lab label, lets you pick the
 // label on the left and the field on the right, and links them. The choice is
@@ -14,6 +14,9 @@ import { SAMPLE_TYPE_LABEL } from './AgronomyConfig.js'
 // not-a-field / reset) in functions/index.js.
 const listSampleLabels = httpsCallable(functions, 'listSampleLabels', { timeout: 300000 })
 const setSampleLabelLink = httpsCallable(functions, 'setSampleLabelLink', { timeout: 300000 })
+// Bulk matcher (was the Cleanup tab's "Smart auto-match"): preview, then link
+// every label that clears the chosen confidence. Can take a while on a big backlog.
+const rematchUnmappedSamples = httpsCallable(functions, 'rematchUnmappedSamples', { timeout: 540000 })
 
 const STATUS = {
   unlinked: { text: 'Not linked', bg: '#fbe3e3', fg: '#9b1c1c', dot: '#D32F2F' },
@@ -58,6 +61,27 @@ export default function AgronomyMapping({ fields }) {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState(null)
   const [showAll, setShowAll] = useState(false)
+  const [year, setYear] = useState('all')
+  const [autoOpen, setAutoOpen] = useState(false)
+  const [minScore, setMinScore] = useState('0.9')
+  const [autoBusy, setAutoBusy] = useState(false)
+  const [autoResult, setAutoResult] = useState(null)
+  const [autoError, setAutoError] = useState(null)
+
+  async function runAuto(apply) {
+    setAutoBusy(true)
+    setAutoError(null)
+    try {
+      const res = await rematchUnmappedSamples({ apply, minScore: Number(minScore) })
+      setAutoResult(res.data)
+      if (apply) await load()
+    } catch (err) {
+      console.error('rematchUnmappedSamples failed:', err)
+      setAutoError(err.message || 'Auto-match failed.')
+    } finally {
+      setAutoBusy(false)
+    }
+  }
 
   async function load() {
     setLoading(true)
@@ -94,18 +118,37 @@ export default function AgronomyMapping({ fields }) {
     return m
   }, [labels])
 
+  // Years that have lab samples. Older server versions don't send per-year
+  // counts, so fall back to the first-to-last sample range.
+  const yearOptions = useMemo(() => {
+    const set = new Set()
+    labels.forEach((l) => {
+      if (l.years) Object.keys(l.years).forEach((y) => set.add(Number(y)))
+      else if (l.first != null) {
+        for (let y = new Date(l.first).getUTCFullYear(); y <= new Date(l.last).getUTCFullYear(); y++) set.add(y)
+      }
+    })
+    return [...set].sort((a, b) => b - a)
+  }, [labels])
+  const inYear = (l) => {
+    if (year === 'all') return l.count
+    if (l.years) return l.years[year] || 0
+    return l.first != null && new Date(l.first).getUTCFullYear() <= Number(year) && Number(year) <= new Date(l.last).getUTCFullYear() ? l.count : 0
+  }
+  const yearLabels = useMemo(() => labels.filter((l) => inYear(l) > 0), [labels, year]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const counts = useMemo(() => {
     const c = {}
-    FILTERS.forEach((f) => { c[f.id] = labels.filter(f.test).length })
+    FILTERS.forEach((f) => { c[f.id] = yearLabels.filter(f.test).length })
     return c
-  }, [labels])
+  }, [yearLabels])
 
   const shownLabels = useMemo(() => {
     const test = FILTERS.find((f) => f.id === filter).test
     const q = labelSearch.trim().toLowerCase()
-    return labels.filter((l) => test(l) && (!q || l.spellings.some((s) => s.toLowerCase().includes(q)) || nameOf(l.fieldId).toLowerCase().includes(q)))
+    return yearLabels.filter((l) => test(l) && (!q || l.spellings.some((s) => s.toLowerCase().includes(q)) || nameOf(l.fieldId).toLowerCase().includes(q)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [labels, filter, labelSearch, fieldById])
+  }, [yearLabels, filter, labelSearch, fieldById])
 
   const shownFields = useMemo(() => {
     const q = fieldSearch.trim().toLowerCase()
@@ -226,9 +269,53 @@ export default function AgronomyMapping({ fields }) {
             {f.label} ({counts[f.id]})
           </button>
         ))}
+        <label style={{ fontSize: 12, marginLeft: 6 }}>Year{' '}
+          <select value={year} onChange={(e) => { setYear(e.target.value); setShowAll(false) }}>
+            <option value="all">All years</option>
+            {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </label>
+        <button style={smallBtn} onClick={() => setAutoOpen((o) => !o)}>{autoOpen ? 'Hide auto-match' : 'Auto-match...'}</button>
         <button style={smallBtn} disabled={loading} onClick={load}>{loading ? 'Loading...' : 'Refresh'}</button>
-        <span style={{ fontSize: 11, color: '#777' }}>{labels.length} lab labels from {totalSamples} samples</span>
+        <span style={{ fontSize: 11, color: '#777' }}>
+          {year === 'all' ? `${labels.length} lab labels from ${totalSamples} samples` : `${yearLabels.length} labels with ${year} samples (a link applies to every year)`}
+        </span>
       </div>
+
+      {autoOpen && (
+        <div style={{ ...box, marginBottom: 10 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <strong style={{ fontSize: 13 }}>Auto-match the backlog</strong>
+            <label style={{ fontSize: 12 }}>Link when at least{' '}
+              <select value={minScore} onChange={(e) => { setMinScore(e.target.value); setAutoResult(null) }}>
+                <option value="0.95">95% alike</option>
+                <option value="0.9">90% alike</option>
+                <option value="0.85">85% alike</option>
+                <option value="0.8">80% alike</option>
+              </select>
+            </label>
+            <button style={smallBtn} disabled={autoBusy} onClick={() => runAuto(false)}>{autoBusy ? 'Working...' : 'Preview'}</button>
+            {autoResult && !autoResult.applied && autoResult.linkableSamples > 0 && (
+              <button style={primaryBtn} disabled={autoBusy} onClick={() => runAuto(true)}>Link {autoResult.linkableSamples} samples</button>
+            )}
+          </div>
+          <p className="agronomy-targets-hint" style={{ margin: '6px 0 0' }}>
+            Ignores words like "soil" and years, treats "SOUTH" and "S" as the same, forgives typos, and never links when a
+            direction or number differs (WILSON N will not match WILSON S). Anything it links shows as "Auto-matched" in the
+            list so you can confirm or correct it. Labels you have already decided are never touched.
+          </p>
+          {autoError && <p className="agronomy-error-banner">{autoError}</p>}
+          {autoResult && (
+            <p className="agronomy-automatch-summary" style={{ margin: '6px 0 0' }}>
+              {autoResult.applied ? `Linked ${autoResult.linkedSamples} samples. ` : ''}
+              {autoResult.totalUnmappedSamples} unlinked samples under {autoResult.uniqueLabels} labels;{' '}
+              {autoResult.applied
+                ? 'the rest need a manual pick below.'
+                : `${autoResult.linkableLabels} labels (${autoResult.linkableSamples} samples) clear ${Math.round(autoResult.threshold * 100)}%.`}
+            </p>
+          )}
+        </div>
+      )}
 
       {note && <p className={note.ok ? 'agronomy-automatch-summary' : 'agronomy-error-banner'} style={{ margin: '4px 0 8px' }}>{note.text}</p>}
 
@@ -249,6 +336,7 @@ export default function AgronomyMapping({ fields }) {
             <p style={{ margin: '2px 0 6px', fontSize: 11, color: '#777' }}>
               {sel.count} samples ({Object.entries(sel.types || {}).map(([t, n]) => `${SAMPLE_TYPE_LABEL[t] || t} ${n}`).join(', ')})
               {sel.first != null ? ` - ${fmtDay(sel.first)} to ${fmtDay(sel.last)}` : ''}
+              {sel.years ? ` - by year: ${Object.keys(sel.years).sort().map((y) => `${y} (${sel.years[y]})`).join(', ')}` : ''}
               {sel.spellings.length > 1 ? ` - also spelled: ${sel.spellings.slice(1, 4).join(', ')}${sel.spellings.length > 4 ? '...' : ''}` : ''}
             </p>
 
@@ -306,7 +394,9 @@ export default function AgronomyMapping({ fields }) {
                   style={{ ...rowBase, background: on ? '#e7efe3' : 'transparent', boxShadow: on ? 'inset 3px 0 0 #3c5a3f' : `inset 3px 0 0 ${c.dot}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                     <span style={{ fontWeight: 600, fontSize: 13 }}>{l.label}</span>
-                    <span style={{ fontSize: 11, color: '#777', whiteSpace: 'nowrap' }}>{l.count} samples</span>
+                    <span style={{ fontSize: 11, color: '#777', whiteSpace: 'nowrap' }}>
+                      {year === 'all' ? `${l.count} samples` : `${inYear(l)} in ${year} \u00b7 ${l.count} total`}
+                    </span>
                   </div>
                   <div style={{ fontSize: 11, color: '#777', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <span style={{ color: c.fg }}>{c.text}</span>
