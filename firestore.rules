@@ -193,9 +193,63 @@ service cloud.firestore {
     // pivots have no field mapped at all (Mills). Simpler and safer for
     // now to gate on role alone; can be tightened once/if a pivot's farm
     // ownership needs to be unambiguous.
+    //
+    // The GPM that feeds scheduled inches (currentGpm) can only be set one
+    // of three ways, so a number can't just be typed in or left over:
+    //   1. 'package'  - confirmed straight from the number the package
+    //      reader (scanSprinklerPackage) read off the PDF that is on the
+    //      profile right now.
+    //   2. 'manual'   - typed by hand, only while "No package printout
+    //      available" is ticked and no package is on file.
+    //   3. 'typedFromPackage' - typed off the PDF when a package is on file
+    //      but the reader couldn't find a GPM in it.
+    // packageScan is written only by the reader (it uses the admin SDK,
+    // which skips these rules), so nobody can fake a scan result.
+    function pivotProfileEditor() {
+      return signedIn() && hasModule('irrigation') && (isAdminOrOwner() || myRole() == 'farm_manager' || myRole() == 'irrigation_manager');
+    }
+    function gpmWriteOk() {
+      let n = request.resource.data;
+      return n.get('currentGpm', null) == (resource == null ? null : resource.data.get('currentGpm', null))
+        || (
+          n.get('currentGpm', null) is number && n.currentGpm > 0 && (
+            (
+              n.get('gpmSource', '') == 'package'
+              && n.get('packageScan', null) != null
+              && n.get('sprinklerPackage', null) != null
+              && n.packageScan.get('status', '') == 'read'
+              && n.packageScan.get('gpm', null) == n.currentGpm
+              && n.packageScan.get('storagePath', '') == n.sprinklerPackage.get('storagePath', null)
+            ) || (
+              n.get('gpmSource', '') == 'manual'
+              && n.get('noPackagePrintout', false) == true
+              && n.get('sprinklerPackage', null) == null
+            ) || (
+              n.get('gpmSource', '') == 'typedFromPackage'
+              && n.get('packageScan', null) != null
+              && n.get('sprinklerPackage', null) != null
+              && n.packageScan.get('status', '') in ['noGpm', 'failed']
+              && n.packageScan.get('storagePath', '') == n.sprinklerPackage.get('storagePath', null)
+            )
+          )
+        );
+    }
+    function packageScanUntouched() {
+      return request.resource.data.get('packageScan', null) == (resource == null ? null : resource.data.get('packageScan', null));
+    }
+    // Removing a package (the current one or a previous one) takes farm
+    // manager or above. Irrigation managers can still upload and replace.
+    function pkgCount(d) {
+      return (d.get('sprinklerPackage', null) != null ? 1 : 0) + d.get('sprinklerPackageHistory', []).size();
+    }
+    function packageDeleteOk() {
+      let before = resource == null ? 0 : pkgCount(resource.data);
+      return pkgCount(request.resource.data) >= before || isAdminOrOwner() || myRole() == 'farm_manager';
+    }
     match /pivotProfiles/{pivotId} {
       allow read: if signedIn() && hasModule('irrigation');
-      allow write: if signedIn() && hasModule('irrigation') && (isAdminOrOwner() || myRole() == 'farm_manager' || myRole() == 'irrigation_manager');
+      allow create, update: if pivotProfileEditor() && gpmWriteOk() && packageScanUntouched() && packageDeleteOk();
+      allow delete: if pivotProfileEditor();
     }
     // The actual irrigation schedule. Everyone signed in can view it (read
     // access isn't farm-scoped — farm/irrigation managers are explicitly
