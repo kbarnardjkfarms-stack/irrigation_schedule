@@ -3065,3 +3065,9 @@ exports.archiveAgrimetNow = agrimet.archiveAgrimetNow;
 // with today's). Lives in its own file — see fieldLineage.js.
 const fieldLineageExports = require('./fieldLineage').makeExports(AGWORLD_TOKEN, MIN_SEASON_YEAR);
 exports.suggestFieldLineageByMap = fieldLineageExports.suggestFieldLineageByMap;
+
+// Sprinkler package reader: reads the system GPM and pivot name off a
+// package PDF when it's uploaded to a pivot profile. Lives in its own
+// file — see packageScan.js.
+const packageScan = require('./packageScan');
+exports.scanSprinklerPackage = packageScan.scanSprinklerPackage;
