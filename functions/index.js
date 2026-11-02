@@ -1720,7 +1720,7 @@ exports.listSampleLabels = onCall({ timeoutSeconds: 300, memory: '1GiB' }, async
       if (!key) return;
       let g = groups.get(key);
       if (!g) {
-        g = { key, spellings: {}, count: 0, fieldCounts: {}, unlinked: 0, ignored: 0, auto: 0, types: {}, first: null, last: null };
+        g = { key, spellings: {}, count: 0, fieldCounts: {}, unlinked: 0, ignored: 0, auto: 0, types: {}, years: {}, first: null, last: null };
         groups.set(key, g);
       }
       g.count++;
@@ -1733,6 +1733,8 @@ exports.listSampleLabels = onCall({ timeoutSeconds: 300, memory: '1GiB' }, async
       if (d.type) g.types[d.type] = (g.types[d.type] || 0) + 1;
       const ms = d.receivedDt && d.receivedDt.toMillis ? d.receivedDt.toMillis() : null;
       if (ms != null) {
+        const yr = new Date(ms).getUTCFullYear();
+        g.years[yr] = (g.years[yr] || 0) + 1;
         if (g.first == null || ms < g.first) g.first = ms;
         if (g.last == null || ms > g.last) g.last = ms;
       }
@@ -1764,6 +1766,7 @@ exports.listSampleLabels = onCall({ timeoutSeconds: 300, memory: '1GiB' }, async
       fieldId: top,
       remembered: !!decision,
       types: g.types,
+      years: g.years,
       first: g.first,
       last: g.last,
       suggestions
