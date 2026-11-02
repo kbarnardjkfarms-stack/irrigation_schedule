@@ -825,7 +825,8 @@ export default function App() {
 
   // Everything the Scheduled / Applied / ET cells and the ET detail sheet
   // need for one field this week. Scheduled inches need the pivot's GPM and
-  // the field's acres; without them the Scheduled cell is left blank.
+  // the field's acres; without them the Scheduled cell is left blank (unless
+  // nothing is scheduled, which is 0.00).
   const todayIso = localIso(new Date())
   // Never throws: anything unexpected in one field's data gives that field a
   // plain gray Scheduled cell and a blank ET instead of a blank schedule.
@@ -842,7 +843,9 @@ export default function App() {
     const gpm = pivotProfilesByGuid[pivotGuidByFieldId[field.id]]?.currentGpm
     const hours = overlapHours(onIntervals(events), 0, 168)
     const haveInches = !!(gpm && field.acres)
-    const scheduled = haveInches ? weeklyInches(events, gpm, field.acres) : null
+    // Nothing scheduled this week is exactly 0.00 inches whether or not the
+    // pivot's GPM is known; only scheduled hours need the GPM to become inches.
+    const scheduled = hours <= 0 ? 0 : (haveInches ? weeklyInches(events, gpm, field.acres) : null)
     const stationInfo = stationsForField(field.farmName, etStationsByField[field.id])
     const stationData = stationInfo ? stationInfo.codes.map((c) => agrimetByStation[c]).filter(Boolean) : []
     // One field with odd data must never blank the whole schedule: if the ET
@@ -1492,7 +1495,7 @@ export default function App() {
                             </button>
                           )}
                         </td>
-                        <td className="inches-cell applied-cell" title="Applied inches need pivot run history, which AIO doesn't keep yet">—</td>
+                        <td className="inches-cell applied-cell" title="Applied inches aren't tracked yet: AIO doesn't keep pivot run history, so this shows 0.00 for now">0.00</td>
                         <td className="inches-cell et-cell" onClick={() => setEtDetailFieldId(field.id)}>
                           {etInfo.et ? <>{etInfo.et.inches.toFixed(2)}<span className="et-mark">{etInfo.stationInfo && etInfo.stationInfo.codes.length > 1 ? '*' : ''}{etInfo.et.approximate ? '~' : ''}</span></> : '—'}
                         </td>
