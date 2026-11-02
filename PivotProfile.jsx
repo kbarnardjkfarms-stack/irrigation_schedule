@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { collection, doc, getDoc, getDocs, onSnapshot, query, setDoc, where } from 'firebase/firestore'
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
-import { db, storage } from './firebase.js'
+import { db, storage, auth } from './firebase.js'
 import PivotIcon from './PivotIcon.jsx'
 
 // Layout helpers for the profile page: each data section sits in its own
@@ -32,6 +32,8 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState(null)
   const [gpmSaved, setGpmSaved] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [fieldNames, setFieldNames] = useState([])
   const [thresholdSaved, setThresholdSaved] = useState(false)
   const [currentSeasonId, setCurrentSeasonId] = useState(null)
   const [currentSeasonName, setCurrentSeasonName] = useState(null)
@@ -68,6 +70,13 @@ export default function PivotProfile({ pivotGuid, onBack }) {
       const fieldIds = new Set()
       mappingSnap.forEach((d) => { if (d.data().fieldId) fieldIds.add(d.data().fieldId) })
 
+      // The AgWorld field name(s) this pivot irrigates. These are the names
+      // managers know the pivot by, so the heading uses them (the name
+      // BaseStation gave the pivot can be out of date).
+      const fieldDocs = await Promise.all([...fieldIds].map((fid) => getDoc(doc(db, 'fields', fid))))
+      const names = fieldDocs.filter((s) => s.exists() && s.data().name).map((s) => s.data().name)
+      if (!cancelled) setFieldNames(names)
+
       if (!seasonId || fieldIds.size === 0) { if (!cancelled) setAcres(0); return }
       const seasonDocs = await Promise.all([...fieldIds].map((fid) => getDoc(doc(db, 'fields', fid, 'seasons', seasonId))))
       const total = seasonDocs.reduce((sum, snap) => sum + (snap.exists() ? (snap.data().acres || 0) : 0), 0)
@@ -88,7 +97,8 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     const unsub = onSnapshot(doc(db, 'pivotProfiles', pivotGuid), (snap) => {
       const data = snap.exists() ? snap.data() : null
       setProfile(data)
-      setGpmInput(data && data.currentGpm != null ? String(data.currentGpm) : '')
+      // Only a hand-typed GPM is shown back in the box; the others start blank.
+      setGpmInput(data && data.currentGpm != null && data.gpmSource === 'manual' ? String(data.currentGpm) : '')
       setThresholdInput(data && data.stuckAlertThresholdMinutes != null ? String(data.stuckAlertThresholdMinutes) : '60')
       setCornerLengthInput(data && data.cornerMachineLengthFt != null ? String(data.cornerMachineLengthFt) : '')
     })
@@ -109,9 +119,12 @@ export default function PivotProfile({ pivotGuid, onBack }) {
       const newEntry = { fileName: file.name, uploadedAt: new Date().toISOString(), downloadUrl, storagePath: path }
       const existingHistory = (profile && profile.sprinklerPackageHistory) || []
       const history = profile && profile.sprinklerPackage ? [profile.sprinklerPackage, ...existingHistory] : existingHistory
+      // A new package starts out unconfirmed. The GPM already in use (if
+      // any) is left alone until a manager confirms the new package's number.
       await setDoc(doc(db, 'pivotProfiles', pivotGuid), {
         sprinklerPackage: newEntry,
-        sprinklerPackageHistory: history
+        sprinklerPackageHistory: history,
+        noPackagePrintout: false
       }, { merge: true })
     } catch (err) {
       setError(err.message || 'Upload failed.')
@@ -121,13 +134,65 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     }
   }
 
-  async function handleSaveGpm() {
-    const n = parseFloat(gpmInput)
-    if (!gpmInput || isNaN(n) || n <= 0) { setError('Enter a valid GPM.'); return }
+  function whoAmI() {
+    return (auth.currentUser && auth.currentUser.email) || 'unknown'
+  }
+
+  // The manager taps Confirm on the number the package reader found. Only
+  // then does it become the GPM used for scheduled inches. (The Firestore
+  // rules also check the number really is the one read from this package.)
+  async function handleConfirmGpm() {
+    const pk = profile && profile.sprinklerPackage
+    const sc = profile && profile.packageScan
+    if (!pk || !sc || sc.storagePath !== pk.storagePath || sc.status !== 'read' || sc.gpm == null) return
+    setConfirming(true)
     setError(null)
-    await setDoc(doc(db, 'pivotProfiles', pivotGuid), { currentGpm: n }, { merge: true })
-    setGpmSaved(true)
-    setTimeout(() => setGpmSaved(false), 1500)
+    try {
+      await setDoc(doc(db, 'pivotProfiles', pivotGuid), {
+        currentGpm: sc.gpm,
+        gpmSource: 'package',
+        gpmConfirmedPath: pk.storagePath,
+        gpmConfirmedBy: whoAmI(),
+        gpmConfirmedAt: new Date().toISOString(),
+        noPackagePrintout: false
+      }, { merge: true })
+    } catch (err) {
+      setError(err.message || 'Could not confirm the GPM.')
+    } finally {
+      setConfirming(false)
+    }
+  }
+
+  async function handleToggleNoPackage(checked) {
+    setError(null)
+    try {
+      await setDoc(doc(db, 'pivotProfiles', pivotGuid), { noPackagePrintout: checked }, { merge: true })
+    } catch (err) {
+      setError(err.message || 'Could not save.')
+    }
+  }
+
+  // Typed-in GPM. Only offered when "No package printout available" is
+  // ticked (source 'manual'), or when a package is on file but the reader
+  // couldn't find a GPM in it (source 'typedFromPackage').
+  async function handleSaveTypedGpm(source) {
+    const n = parseFloat(gpmInput)
+    if (!gpmInput || isNaN(n) || n < 5 || n > 5000) { setError('Enter a valid GPM (between 5 and 5000).'); return }
+    setError(null)
+    const pk = profile && profile.sprinklerPackage
+    try {
+      await setDoc(doc(db, 'pivotProfiles', pivotGuid), {
+        currentGpm: n,
+        gpmSource: source,
+        gpmConfirmedPath: source === 'typedFromPackage' && pk ? pk.storagePath : null,
+        gpmConfirmedBy: whoAmI(),
+        gpmConfirmedAt: new Date().toISOString()
+      }, { merge: true })
+      setGpmSaved(true)
+      setTimeout(() => setGpmSaved(false), 1500)
+    } catch (err) {
+      setError(err.message || 'Could not save the GPM.')
+    }
   }
 
   async function handleSaveThreshold() {
@@ -210,6 +275,29 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const pkg = profile && profile.sprinklerPackage
   const historyCount = (profile && profile.sprinklerPackageHistory && profile.sprinklerPackageHistory.length) || 0
 
+  // Heading: the AgWorld field name(s) first, since that's what managers
+  // know the pivot by; the BaseStation name goes small underneath.
+  const baseStationName = pivot && pivot.name ? pivot.name : null
+  const headingName = fieldNames.length > 0 ? fieldNames.join(' + ') : (baseStationName || 'Pivot')
+  const showBaseStationName = !!(baseStationName && fieldNames.length > 0 && !fieldNames.includes(baseStationName))
+
+  // System GPM. The package reader's result only counts if it was read from
+  // the PDF that is on the profile right now.
+  const scanRaw = profile && profile.packageScan
+  const scan = pkg && scanRaw && scanRaw.storagePath === pkg.storagePath ? scanRaw : null
+  const noPackage = !!(profile && profile.noPackagePrintout) && !pkg
+  const currentGpm = profile && profile.currentGpm != null ? profile.currentGpm : null
+  const gpmSource = profile && profile.gpmSource
+  const confirmedForThisPackage = !!(
+    pkg && currentGpm != null && (gpmSource === 'package' || gpmSource === 'typedFromPackage') &&
+    profile.gpmConfirmedPath === pkg.storagePath
+  )
+  const gpmSourceText = gpmSource === 'package' ? 'from the previous package'
+    : gpmSource === 'typedFromPackage' ? 'typed from the package'
+    : gpmSource === 'manual' ? 'entered by hand'
+    : 'entered before package check'
+  const confirmedAtText = profile && profile.gpmConfirmedAt ? new Date(profile.gpmConfirmedAt).toLocaleDateString() : ''
+
   const episode = profile && profile.auditEpisode
   const episodeElapsedHours = episode ? (Date.now() - new Date(episode.startedAt).getTime()) / 3600000 : null
   const baseline = profile && profile.seasonBaselines && currentSeasonId ? profile.seasonBaselines[currentSeasonId] : null
@@ -262,8 +350,10 @@ export default function PivotProfile({ pivotGuid, onBack }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px', paddingBottom: '14px', borderBottom: '1px solid #e4e1d8' }}>
         <PivotIcon pivot={pivot} size={44} />
         <div>
-          <div style={{ fontSize: '16px', fontWeight: 600 }}>{(pivot && pivot.name) || 'Pivot'}</div>
-          <div style={{ fontSize: '11px', color: '#888' }}>Pivot profile</div>
+          <div style={{ fontSize: '16px', fontWeight: 600 }}>{headingName}</div>
+          <div style={{ fontSize: '11px', color: '#888' }}>
+            Pivot profile{showBaseStationName ? ` · BaseStation: ${baseStationName}` : ''}
+          </div>
         </div>
       </div>
 
@@ -282,23 +372,105 @@ export default function PivotProfile({ pivotGuid, onBack }) {
             </label>
           </div>
         ) : (
-          <label style={{ display: 'inline-block', fontSize: '13px', padding: '8px 14px', border: '1px dashed #ccc', borderRadius: '8px', cursor: uploading ? 'default' : 'pointer' }}>
-            {uploading ? 'Uploading\u2026' : 'Upload PDF'}
-            <input type="file" accept="application/pdf" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
-          </label>
+          <>
+            <label style={{ display: 'inline-block', fontSize: '13px', padding: '8px 14px', border: '1px dashed #ccc', borderRadius: '8px', cursor: uploading ? 'default' : 'pointer' }}>
+              {uploading ? 'Uploading\u2026' : 'Upload package PDF'}
+              <input type="file" accept="application/pdf" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#555', marginTop: '12px', cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!(profile && profile.noPackagePrintout)} onChange={(e) => handleToggleNoPackage(e.target.checked)} />
+              No package printout available
+            </label>
+          </>
         )}
         {historyCount > 0 && (
           <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>{historyCount} older version{historyCount > 1 ? 's' : ''} kept for reference</div>
         )}
       </Section>
 
-      <Section title="Current GPM">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <input type="number" value={gpmInput} onChange={(e) => setGpmInput(e.target.value)} style={{ width: '100px' }} />
-          <span style={{ fontSize: '13px', color: '#555' }}>GPM</span>
-          <button onClick={handleSaveGpm}>{gpmSaved ? 'Saved!' : 'Save'}</button>
-        </div>
-        <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Used for this pivot's scheduled-inches calculation</div>
+      <Section title="System GPM">
+        {/* A GPM already in use that isn't confirmed from the package now on file. */}
+        {currentGpm != null && !confirmedForThisPackage && !(noPackage && gpmSource === 'manual') && (
+          <div style={{ background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px', marginBottom: '10px' }}>
+            <div style={{ fontSize: '10px', color: '#888', marginBottom: '2px' }}>In use now</div>
+            <div style={{ fontSize: '18px', fontWeight: 600, color: '#2b2b26' }}>
+              {currentGpm} <span style={{ fontSize: '11px', fontWeight: 400, color: '#888' }}>GPM &middot; {gpmSourceText}</span>
+            </div>
+          </div>
+        )}
+
+        {confirmedForThisPackage ? (
+          <div>
+            <div style={{ fontSize: '24px', fontWeight: 600, color: '#2b2b26' }}>
+              {currentGpm} <span style={{ fontSize: '13px', fontWeight: 400, color: '#555' }}>GPM</span>
+            </div>
+            <div style={{ fontSize: '12px', color: '#2F6B2F', marginTop: '4px' }}>
+              {gpmSource === 'typedFromPackage' ? 'Typed from package' : 'From package'} &middot; confirmed by {profile.gpmConfirmedBy || 'unknown'}{confirmedAtText ? `, ${confirmedAtText}` : ''}
+            </div>
+            <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Used for this pivot's scheduled-inches calculation</div>
+          </div>
+        ) : pkg ? (
+          scan === null ? (
+            <div style={{ fontSize: '12px', color: '#888' }}>Reading the package&hellip; this usually takes under a minute (scanned packages take a little longer).</div>
+          ) : scan.status === 'read' ? (
+            <div>
+              <div style={{ fontSize: '13px', color: '#2b2b26' }}>
+                Package says <span style={{ fontWeight: 600 }}>{scan.gpm} GPM</span>
+              </div>
+              <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
+                Read from the &ldquo;{scan.gpmLabel}&rdquo; line{scan.method === 'ocr' ? ' of a scanned page' : ''}. Check it against the PDF above.
+              </div>
+              {scan.nameMatches ? (
+                <div style={{ fontSize: '11px', color: '#2F6B2F', marginTop: '8px' }}>Name on package matches this pivot</div>
+              ) : (
+                <div style={{ background: '#FBF3E2', border: '1px solid #F0D9A8', borderRadius: '8px', padding: '10px 12px', marginTop: '10px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#854F0B' }}>Name on package doesn't match this pivot</div>
+                  <div style={{ fontSize: '11px', color: '#6B4108', marginTop: '4px' }}>
+                    Package: &ldquo;{scan.nameOnPackage || 'no name found'}&rdquo;<br />
+                    This pivot: {(scan.aioNames && scan.aioNames.length ? scan.aioNames : [headingName]).map((n) => `“${n}”`).join(', ')}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#6B4108', marginTop: '4px' }}>If this is the wrong pivot's package, use Replace above.</div>
+                </div>
+              )}
+              <div style={{ marginTop: '12px' }}>
+                <button onClick={handleConfirmGpm} disabled={confirming} style={{ fontSize: '13px', padding: '8px 14px', background: '#2b2b26', color: '#fff', border: 'none', borderRadius: '6px', cursor: confirming ? 'default' : 'pointer' }}>
+                  {confirming ? 'Confirming…' : `Confirm ${scan.gpm} GPM`}
+                </button>
+              </div>
+              <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Not used for scheduled inches until confirmed.</div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ background: '#FBF3E2', border: '1px solid #F0D9A8', borderRadius: '8px', padding: '10px 12px', marginBottom: '10px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: '#854F0B' }}>
+                  {scan.status === 'failed' ? "Couldn't read this package" : "Couldn't find a GPM on this package"}
+                </div>
+                <div style={{ fontSize: '11px', color: '#6B4108', marginTop: '4px' }}>
+                  Open the PDF above and type in the system GPM it shows. Or use Replace to upload a clearer copy.
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input type="number" value={gpmInput} onChange={(e) => setGpmInput(e.target.value)} style={{ width: '100px' }} />
+                <span style={{ fontSize: '13px', color: '#555' }}>GPM</span>
+                <button onClick={() => handleSaveTypedGpm('typedFromPackage')}>{gpmSaved ? 'Saved!' : 'Save'}</button>
+              </div>
+              <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Saved as &ldquo;typed from package&rdquo;.</div>
+            </div>
+          )
+        ) : noPackage ? (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <input type="number" value={gpmInput} onChange={(e) => setGpmInput(e.target.value)} style={{ width: '100px' }} />
+              <span style={{ fontSize: '13px', color: '#555' }}>GPM</span>
+              <button onClick={() => handleSaveTypedGpm('manual')}>{gpmSaved ? 'Saved!' : 'Save'}</button>
+            </div>
+            <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Entered by hand &middot; no package on file. Used for this pivot's scheduled-inches calculation.</div>
+          </div>
+        ) : (
+          <div style={{ fontSize: '12px', color: '#888' }}>
+            Upload the sprinkler package PDF above and confirm the GPM AIO reads from it. If there's no printout, tick &ldquo;No package printout available&rdquo; to type the GPM in by hand.
+          </div>
+        )}
       </Section>
 
       <Section title="Corner machine">
