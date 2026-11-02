@@ -81,6 +81,8 @@ function usePaginatedSampleQuery(whereField, whereValue, excludeCompost) {
           // functions/index.js), so they'd otherwise sit here forever as
           // unresolvable noise. Not a cleanup task; excluded on purpose.
           if (excludeCompost && data.type === 'compost') return
+          // Labels marked "not a field" on the Field mapping tab aren't backlog.
+          if (data.fieldMatchType === 'ignored') return
           list.push({ id: d.id, ...data })
         })
         setItems(list)
@@ -111,6 +113,7 @@ function usePaginatedSampleQuery(whereField, whereValue, excludeCompost) {
       snap.forEach((d) => {
         const data = d.data()
         if (excludeCompost && data.type === 'compost') return
+        if (data.fieldMatchType === 'ignored') return
         list.push({ id: d.id, ...data })
       })
       setItems((prev) => [...prev, ...list])
