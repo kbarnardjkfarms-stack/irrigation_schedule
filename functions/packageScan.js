@@ -113,22 +113,48 @@ function findName(text) {
   return names.length ? names[0] : null;
 }
 
-// "35 E. MINI" -> "35emini". Spaces, punctuation and capitals don't count.
-function squash(s) {
-  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const DIRECTIONS = {
+  n: 'north', s: 'south', e: 'east', w: 'west',
+  ne: 'northeast', nw: 'northwest', se: 'southeast', sw: 'southwest'
+};
+// Words that don't help tell one pivot from another.
+const NOISE_WORDS = new Set([
+  'sec', 'section', 'pivot', 'field', 'system', 'updated', 'update', 'the',
+  'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec',
+  'january', 'february', 'march', 'april', 'june', 'july', 'august', 'september', 'october', 'november', 'december'
+]);
+
+// "SEC 35 EAST MINI" and "35E MINI" and "35 E. Mini" all become
+// ["35", "east", "mini"]: lowercase, punctuation out, numbers split from
+// letters, E/W/N/S spelled out, filler words and years dropped.
+function nameTokens(s) {
+  const spaced = String(s || '')
+    .toLowerCase()
+    .replace(/([0-9])([a-z])/g, '$1 $2')
+    .replace(/([a-z])([0-9])/g, '$1 $2')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+  if (!spaced) return [];
+  const out = [];
+  for (const t of spaced.split(' ')) {
+    if (NOISE_WORDS.has(t)) continue;
+    if (/^(19|20)\d\d$/.test(t)) continue; // a year, e.g. "2026"
+    out.push(DIRECTIONS[t] || t);
+  }
+  return out;
 }
 
-// The package name matches if any of the AIO names (pivot name or a linked
-// AgWorld field name) appears inside it, or it appears inside one of them.
-// So "Wilson South Big Pivot updated Feb. 2026" matches "Wilson South Big",
-// and "35E MINI" matches "35 E. Mini".
+// The package name matches if it works out to exactly the same words as the
+// pivot's name or one of its AgWorld field names. Exact on purpose: "35 E"
+// and "35 E Mini" are different pivots, so one must not pass for the other.
+// A miss only shows a warning to the manager; it never blocks anything.
 function nameMatches(packageName, aioNames) {
-  const p = squash(packageName);
-  if (p.length < 3) return { matches: false, matchedName: null };
+  const p = nameTokens(packageName);
+  if (!p.length) return { matches: false, matchedName: null };
+  const key = p.join(' ');
   for (const name of aioNames || []) {
-    const a = squash(name);
-    if (a.length < 3) continue;
-    if (p.includes(a) || a.includes(p)) return { matches: true, matchedName: name };
+    const a = nameTokens(name);
+    if (a.length && a.join(' ') === key) return { matches: true, matchedName: name };
   }
   return { matches: false, matchedName: null };
 }
@@ -308,6 +334,6 @@ module.exports = {
   findName,
   findNames,
   nameMatches,
-  squash,
+  nameTokens,
   extractPdfText
 };
