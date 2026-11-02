@@ -22,6 +22,7 @@ import Agronomy from './Agronomy.jsx'
 import CustomerPortal from './CustomerPortal.jsx'
 import Contracts from './Contracts.jsx'
 import Yields from './Yields.jsx'
+import Harvest from './Harvest.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
 
@@ -352,7 +353,7 @@ export default function App() {
   const [profileStatus, setProfileStatus] = useState('loading') // 'loading' | 'ready' | 'missing' | 'error'
   const [profileSlow, setProfileSlow] = useState(false)
   const [profileAttempt, setProfileAttempt] = useState(0)
-  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', 'contracts', or 'yields' — more modules join this list later
+  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', 'contracts', 'yields' or 'harvest' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
   const [online, setOnline] = useState(navigator.onLine)
@@ -614,6 +615,11 @@ export default function App() {
   // audience as Agronomy; only Admin/Owner can import.
   const yieldsModuleOn = !userProfile || !Array.isArray(userProfile.modules) || userProfile.modules.includes('yields')
   const canSeeYields = (userRole === 'admin' || userRole === 'owner') || (userRole === 'farm_manager' && yieldsModuleOn)
+
+  // Mirrors firestore.rules' canViewHarvest() + hasModule('harvest'): Admin,
+  // Owner and Farm manager — all three can build the schedule and log progress.
+  const harvestModuleOn = !userProfile || !Array.isArray(userProfile.modules) || userProfile.modules.includes('harvest')
+  const canSeeHarvest = (userRole === 'admin' || userRole === 'owner') || (userRole === 'farm_manager' && harvestModuleOn)
 
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
@@ -1165,6 +1171,25 @@ export default function App() {
               <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Yields</div>
             </div>
           )}
+          {canSeeHarvest && (
+            <div
+              onClick={() => setPage('harvest')}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            >
+              <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#F6EBDD', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="58" height="58" viewBox="0 0 48 48">
+                  <rect x="6" y="9" width="36" height="31" rx="3" fill="#fff" stroke="#7a5a32" strokeWidth="1.8" />
+                  <path d="M6 16h36" stroke="#7a5a32" strokeWidth="1.8" />
+                  <path d="M14 6v6M34 6v6" stroke="#7a5a32" strokeWidth="2" strokeLinecap="round" />
+                  <rect x="10" y="20" width="14" height="4" rx="2" fill="#7B4FC9" />
+                  <rect x="22" y="26" width="16" height="4" rx="2" fill="#E8801A" />
+                  <rect x="10" y="32" width="10" height="4" rx="2" fill="#2E9B4F" />
+                  <rect x="21" y="32" width="11" height="4" rx="2" fill="#D6B48C" />
+                </svg>
+              </div>
+              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Harvest</div>
+            </div>
+          )}
         </div>
       )}
       {page === 'potato-storage' && hasModule('potato-storage') && <PotatoStorage />}
@@ -1187,6 +1212,7 @@ export default function App() {
       {page === 'agronomy' && canSeeAgronomy && <Agronomy userRole={userRole} />}
       {page === 'contracts' && canSeeContracts && <Contracts userRole={userRole} />}
       {page === 'yields' && canSeeYields && <Yields userRole={userRole} />}
+      {page === 'harvest' && canSeeHarvest && <Harvest userRole={userRole} />}
       {page === 'irrigation' && hasModule('irrigation') && (
         <>
           {view === 'live-data' && <LiveData />}

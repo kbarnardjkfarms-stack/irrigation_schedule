@@ -48,7 +48,7 @@ service cloud.firestore {
     // can use at all. A profile with NO `modules` field keeps exactly what
     // its role already allowed, so deploying this changes nothing for
     // anyone until an Admin actually sets a list. Admin/Owner always have
-    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts', 'yields'.
+    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts', 'yields', 'harvest'.
     // This is the real enforcement — hiding a tile in the UI is only
     // cosmetic, since anyone could still query Firestore directly.
     function hasModule(m) {
@@ -311,6 +311,19 @@ service cloud.firestore {
     match /yieldSettings/{settingId} {
       allow read: if signedIn() && canViewContracts() && hasModule('yields');
       allow write: if signedIn() && isAdminOrOwner();
+    }
+    // Harvest Schedule module (Harvest.jsx). harvestPlans/{seasonId} holds
+    // the settings, harvestFields/{seasonId}__{key} one doc per field on the
+    // plan, harvestLogs/{seasonId}__{team}__{date}__{AM|PM} the half-day
+    // progress logs. Admin, Owner and Farm manager read and write.
+    match /harvestPlans/{planId} {
+      allow read, write: if signedIn() && canViewContracts() && hasModule('harvest');
+    }
+    match /harvestFields/{docId} {
+      allow read, write: if signedIn() && canViewContracts() && hasModule('harvest');
+    }
+    match /harvestLogs/{docId} {
+      allow read, write: if signedIn() && canViewContracts() && hasModule('harvest');
     }
     match /potatoStorage/{document} {
       allow read, write: if signedIn() && hasModule('potato-storage');
