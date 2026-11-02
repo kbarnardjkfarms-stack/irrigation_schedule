@@ -3227,6 +3227,87 @@ function latestByPipe(logs) {
     }))
     .sort((a, b) => a.pipeNumber - b.pipeNumber);
 }
+/* ---------------------------------------------------------------
+   Temperature summary — one row per bay with its latest plenum, return
+   and Δ T (return − plenum) from whichever monitor is linked (Agri-Stor
+   bin or IVI/Centurion panel; IVI's supply air stands in for plenum),
+   plus how long ago the reading came in. Each row listens to its own
+   bay's live doc, same as the cards in Bay Detail.
+----------------------------------------------------------------*/
+function TempSummaryRow({ bay, building, onOpen }) {
+  const ag = useAgristorReading(bay.agristorBinName);
+  const ivi = useIviReading(bay.iviPanelId);
+  let plenum = null, ret = null, delta = null, ts = null, source = null, offline = false;
+  if (bay.agristorBinName && ag) {
+    source = "Agri-Stor"; plenum = ag.plenumTempF ?? null; ret = ag.returnAirTempF ?? null;
+    delta = ag.returnVsPlenumF ?? (plenum != null && ret != null ? Math.round((ret - plenum) * 10) / 10 : null);
+    ts = ag.updatedAt; offline = ag.status === "network_error";
+  } else if (bay.iviPanelId && ivi) {
+    source = "IVI"; plenum = ivi.supplyTempF ?? null; ret = ivi.returnTempF ?? null;
+    delta = plenum != null && ret != null ? Math.round((ret - plenum) * 10) / 10 : null;
+    ts = ivi.panelLastUpdated; offline = ivi.status === "network_error";
+  }
+  const linked = !!(bay.agristorBinName || bay.iviPanelId);
+  const status = delta != null && !offline ? deltaStatus(delta, daysSince(bay.fillDate, todayStr())) : null;
+  const dim = offline || !linked;
+  const cell = { ...tdStyle, color: dim ? "#5b6478" : "#eef1f6" };
+  const products = Array.from(new Set(bay.zones.map((z) => z.variety).filter(Boolean)));
+  return (
+    <tr onClick={() => onOpen(bay.id)} style={{ borderTop: "1px solid #232d40", cursor: "pointer" }}>
+      <td style={tdStyle}><b style={{ color: "#eef1f6" }}>{bay.name}</b></td>
+      <td style={{ ...tdStyle, color: "#8790a3" }}>{building?.name || ""}</td>
+      <td style={{ ...tdStyle, color: "#8790a3" }}>{products.length ? products.join(", ") : "empty"}</td>
+      <td style={cell}>{plenum != null ? `${plenum}°F` : "—"}</td>
+      <td style={cell}>{ret != null ? `${ret}°F` : "—"}</td>
+      <td style={{ ...tdStyle, fontWeight: 700, color: dim ? "#5b6478" : (status?.color || "#eef1f6") }} title={status?.note || ""}>
+        {delta != null ? `${delta > 0 ? "+" : ""}${delta}°F` : "—"}
+      </td>
+      <td style={{ ...tdStyle, color: offline ? "#e08787" : "#8790a3" }}>
+        {!linked ? "no sensor linked" : offline ? `offline · last ${formatAgristorAge(ts)}` : (ag === undefined || ivi === undefined) ? "loading…" : source ? formatAgristorAge(ts) : "no reading yet"}
+      </td>
+      <td style={{ ...tdStyle, color: "#6f7890" }}>{source || ""}</td>
+    </tr>
+  );
+}
+function TempSummaryTab({ bays, buildingsById, onOpen }) {
+  const [onlyLinked, setOnlyLinked] = useState(false);
+  const rows = sortByNatural(
+    bays.filter((b) => !onlyLinked || b.agristorBinName || b.iviPanelId),
+    (b) => `${buildingsById[b.buildingId]?.name || ""} ${b.name}`
+  );
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+        <div style={{ color: "#8790a3", fontSize: 12.5 }}>
+          Latest plenum, return and Δ T (return − plenum) per bay. IVI panels report supply air, shown here as plenum. Click a row to open the bay.
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#c7cede", cursor: "pointer" }}>
+          <input type="checkbox" checked={onlyLinked} onChange={(e) => setOnlyLinked(e.target.checked)} /> Only bays with a sensor
+        </label>
+      </div>
+      <div style={{ overflowX: "auto", border: "1px solid #232d40", borderRadius: 10 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: "#141b28", textAlign: "left" }}>
+              <th style={thStyle}>Bay</th>
+              <th style={thStyle}>Building</th>
+              <th style={thStyle}>Variety</th>
+              <th style={thStyle}>Plenum</th>
+              <th style={thStyle}>Return</th>
+              <th style={thStyle}>Δ T</th>
+              <th style={thStyle}>Last reading</th>
+              <th style={thStyle}>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((b) => <TempSummaryRow key={b.id} bay={b} building={buildingsById[b.buildingId]} onOpen={onOpen} />)}
+            {rows.length === 0 && <tr><td colSpan={8} style={{ ...tdStyle, color: "#5b6478" }}>No bays to show.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 function TemperatureTab({ bays, dataById, onAddTemp, onDeleteTemp, readOnly }) {
   const [bayId, setBayId] = useState(bays[0]?.id);
   const bay = bays.find((b) => b.id === bayId);
@@ -5762,6 +5843,7 @@ export default function PotatoStorage() {
     { id: "yard", label: "3D Yard", icon: Warehouse },
     { id: "detail", label: "Bay Detail", icon: Package },
     { id: "temp", label: "Temperature", icon: Thermometer },
+    { id: "tempsummary", label: "Temp Summary", icon: Thermometer },
     { id: "notes", label: "Notes", icon: ClipboardCheck },
     { id: "sproutnip", label: "Sprout Nip", icon: FlaskConical },
   ];
@@ -6026,6 +6108,13 @@ export default function PotatoStorage() {
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
               <TemperatureTab bays={locationBays} dataById={displayDataById} onAddTemp={onAddTemp} onDeleteTemp={onDeleteTemp} readOnly={isReadOnly} />
+            )}
+          </div>
+        )}
+        {tab === "tempsummary" && (
+          <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+            {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
+              <TempSummaryTab bays={locationBays} buildingsById={buildingsById} onOpen={(id) => { setSelectedId(id); setTab("detail"); }} />
             )}
           </div>
         )}
