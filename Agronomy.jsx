@@ -5,7 +5,6 @@ import AgronomyByField from './AgronomyByField.jsx'
 import AgronomyByCriteria from './AgronomyByCriteria.jsx'
 import AgronomySampleDatabase from './AgronomySampleDatabase.jsx'
 import AgronomyCompostSources from './AgronomyCompostSources.jsx'
-import AgronomyCleanup from './AgronomyCleanup.jsx'
 import AgronomyTargets from './AgronomyTargets.jsx'
 import AgronomyScouting from './AgronomyScouting.jsx'
 import AgronomyMapping from './AgronomyMapping.jsx'
@@ -88,7 +87,7 @@ export default function Agronomy({ userRole }) {
     return () => unsub()
   }, [selectedSeasonId])
 
-  // Unfiltered by farm, on purpose - Cleanup needs every field selectable
+  // Unfiltered by farm, on purpose - Field mapping needs every field selectable
   // regardless of whatever farm the person happens to have picked, since
   // an orphaned sample could belong to a field in any farm. Also doesn't
   // depend on season, since matching a sample to a field is about the
@@ -171,9 +170,6 @@ export default function Agronomy({ userRole }) {
         <button className={view === 'mapping' ? 'active' : ''} onClick={() => setView('mapping')}>
           Field mapping
         </button>
-        <button className={view === 'cleanup' ? 'active' : ''} onClick={() => setView('cleanup')}>
-          Cleanup
-        </button>
         <button className={view === 'scouting' ? 'active' : ''} onClick={() => setView('scouting')}>
           Scouting
         </button>
@@ -190,7 +186,6 @@ export default function Agronomy({ userRole }) {
       {view === 'database' && <AgronomySampleDatabase fields={fields} />}
       {view === 'compost' && <AgronomyCompostSources />}
       {view === 'mapping' && <AgronomyMapping fields={allFields} />}
-      {view === 'cleanup' && <AgronomyCleanup fields={allFields} />}
       {view === 'scouting' && <AgronomyScouting fields={allFields} />}
       {view === 'targets' && canEditTargets && <AgronomyTargets />}
     </div>
