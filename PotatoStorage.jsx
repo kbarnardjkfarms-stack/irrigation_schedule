@@ -3234,7 +3234,7 @@ function latestByPipe(logs) {
    plus how long ago the reading came in. Each row listens to its own
    bay's live doc, same as the cards in Bay Detail.
 ----------------------------------------------------------------*/
-function TempSummaryRow({ bay, building, onOpen }) {
+function TempSummaryRow({ bay, building, location, onOpen }) {
   const ag = useAgristorReading(bay.agristorBinName);
   const ivi = useIviReading(bay.iviPanelId);
   let plenum = null, ret = null, delta = null, ts = null, source = null, offline = false;
@@ -3254,8 +3254,9 @@ function TempSummaryRow({ bay, building, onOpen }) {
   const products = Array.from(new Set(bay.zones.map((z) => z.variety).filter(Boolean)));
   return (
     <tr onClick={() => onOpen(bay.id)} style={{ borderTop: "1px solid #232d40", cursor: "pointer" }}>
-      <td style={tdStyle}><b style={{ color: "#eef1f6" }}>{bay.name}</b></td>
+      <td style={{ ...tdStyle, color: "#8790a3" }}>{location?.name || ""}</td>
       <td style={{ ...tdStyle, color: "#8790a3" }}>{building?.name || ""}</td>
+      <td style={tdStyle}><b style={{ color: "#eef1f6" }}>{bay.name}</b></td>
       <td style={{ ...tdStyle, color: "#8790a3" }}>{products.length ? products.join(", ") : "empty"}</td>
       <td style={cell}>{plenum != null ? `${plenum}°F` : "—"}</td>
       <td style={cell}>{ret != null ? `${ret}°F` : "—"}</td>
@@ -3269,17 +3270,17 @@ function TempSummaryRow({ bay, building, onOpen }) {
     </tr>
   );
 }
-function TempSummaryTab({ bays, buildingsById, onOpen }) {
+function TempSummaryTab({ bays, buildingsById, locationsById, onOpen }) {
   const [onlyLinked, setOnlyLinked] = useState(false);
   const rows = sortByNatural(
     bays.filter((b) => !onlyLinked || b.agristorBinName || b.iviPanelId),
-    (b) => `${buildingsById[b.buildingId]?.name || ""} ${b.name}`
+    (b) => `${locationsById[buildingsById[b.buildingId]?.locationId]?.name || ""} ${buildingsById[b.buildingId]?.name || ""} ${b.name}`
   );
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
         <div style={{ color: "#8790a3", fontSize: 12.5 }}>
-          Latest plenum, return and Δ T (return − plenum) per bay. IVI panels report supply air, shown here as plenum. Click a row to open the bay.
+          Latest plenum, return and Δ T (return − plenum) for every bay at every site. IVI panels report supply air, shown here as plenum. Click a row to open the bay.
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#c7cede", cursor: "pointer" }}>
           <input type="checkbox" checked={onlyLinked} onChange={(e) => setOnlyLinked(e.target.checked)} /> Only bays with a sensor
@@ -3289,8 +3290,9 @@ function TempSummaryTab({ bays, buildingsById, onOpen }) {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: "#141b28", textAlign: "left" }}>
-              <th style={thStyle}>Bay</th>
+              <th style={thStyle}>Site</th>
               <th style={thStyle}>Building</th>
+              <th style={thStyle}>Bay</th>
               <th style={thStyle}>Variety</th>
               <th style={thStyle}>Plenum</th>
               <th style={thStyle}>Return</th>
@@ -3300,8 +3302,8 @@ function TempSummaryTab({ bays, buildingsById, onOpen }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((b) => <TempSummaryRow key={b.id} bay={b} building={buildingsById[b.buildingId]} onOpen={onOpen} />)}
-            {rows.length === 0 && <tr><td colSpan={8} style={{ ...tdStyle, color: "#5b6478" }}>No bays to show.</td></tr>}
+            {rows.map((b) => <TempSummaryRow key={b.id} bay={b} building={buildingsById[b.buildingId]} location={locationsById[buildingsById[b.buildingId]?.locationId]} onOpen={onOpen} />)}
+            {rows.length === 0 && <tr><td colSpan={9} style={{ ...tdStyle, color: "#5b6478" }}>No bays to show.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -6113,8 +6115,9 @@ export default function PotatoStorage() {
         )}
         {tab === "tempsummary" && (
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-            {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
-              <TempSummaryTab bays={locationBays} buildingsById={buildingsById} onOpen={(id) => { setSelectedId(id); setTab("detail"); }} />
+            {displayBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
+              <TempSummaryTab bays={displayBays} buildingsById={buildingsById} locationsById={locationsById}
+                onOpen={(id) => { const bb = displayBays.find((x) => x.id === id); const lid = buildingsById[bb?.buildingId]?.locationId; if (lid) setSelectedLocationId(lid); setSelectedId(id); setTab("detail"); }} />
             )}
           </div>
         )}
