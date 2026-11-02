@@ -1142,6 +1142,7 @@ exports.rematchUnmappedSamples = onCall({ timeoutSeconds: 540, memory: '1GiB' },
   const lookup = buildFieldLookup(fieldSnap.docs);
   const nameByFieldId = {};
   fieldSnap.forEach((d) => { nameByFieldId[d.id] = d.data().name; });
+  const decidedLabels = await loadSampleAliases(db); // labels a person already decided: never re-guess
 
   // Pull every unmapped sample (in pages) and group by normalized label.
   const groups = new Map();
@@ -1154,9 +1155,10 @@ exports.rematchUnmappedSamples = onCall({ timeoutSeconds: 540, memory: '1GiB' },
     if (snap.empty) break;
     snap.forEach((doc) => {
       const data = doc.data();
-      if (data.type === 'compost' || !data.rawFieldLabel) return;
-      totalUnmapped++;
+      if (data.type === 'compost' || !data.rawFieldLabel || data.fieldMatchType === 'ignored') return;
       const key = normalizeFieldLabel(data.rawFieldLabel);
+      if (decidedLabels[key]) return;
+      totalUnmapped++;
       if (!groups.has(key)) groups.set(key, { label: data.rawFieldLabel, refs: [] });
       groups.get(key).refs.push(doc.ref);
     });
@@ -1233,7 +1235,23 @@ exports.rematchUnmappedSamples = onCall({ timeoutSeconds: 540, memory: '1GiB' },
 // Best-guess extraction of a usable sample doc from one raw Stukenholtz
 // result - see the file-level note above. Candidate property names are
 // checked in order; adjust once you've seen a real response.
-function mapResultToSample(result, fieldLookup) {
+// Remembered lab-label decisions (sampleLabelAliases/{normalized label}),
+// made on the Agronomy "Field mapping" tab. A saved decision always beats the
+// automatic matcher, for new samples and for the nightly re-sync alike:
+//   { fieldId: 'abc' }              -> this label is that field
+//   { fieldId: null, ignore: true } -> not a field (shop soil, test samples...)
+//   { fieldId: null }               -> deliberately left unlinked
+async function loadSampleAliases(db) {
+  const snap = await db.collection('sampleLabelAliases').get();
+  const map = {};
+  snap.forEach((d) => {
+    const v = d.data();
+    map[d.id] = { fieldId: v.fieldId || null, ignore: v.ignore === true };
+  });
+  return map;
+}
+
+function mapResultToSample(result, fieldLookup, aliases = {}) {
   const sourceId = result._id || result.id || null;
   if (!sourceId) return null; // can't upsert safely without a stable id
 
@@ -1265,7 +1283,12 @@ function mapResultToSample(result, fieldLookup) {
   // match from an auto-corrected guess worth a human glance, from
   // nothing found at all.
   let fieldMatchType = fieldId ? 'exact' : null;
-  if (!fieldId && normalizedLabel) {
+  const decided = normalizedLabel ? aliases[normalizedLabel] : null;
+  if (decided) {
+    // A person already decided what this label is - no guessing.
+    fieldId = decided.fieldId;
+    fieldMatchType = decided.ignore ? 'ignored' : (decided.fieldId ? 'manual' : null);
+  } else if (!fieldId && normalizedLabel) {
     const fuzzyMatch = findFuzzyFieldMatch(normalizedLabel, fieldLookup);
     if (fuzzyMatch) {
       fieldId = fuzzyMatch;
@@ -1407,6 +1430,7 @@ async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
     db.collection('fields').get()
   ]);
   const fieldLookup = buildFieldLookup(fieldDocsSnap.docs);
+  const aliases = await loadSampleAliases(db);
 
   let totalFetched = 0;
   let written = 0;
@@ -1425,10 +1449,29 @@ async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
     for (let i = 0; i < results.length; i += 400) {
       const chunk = results.slice(i, i + 400);
       const batch = db.batch();
+      // A sample someone already linked (or ignored) by hand keeps that
+      // choice: the rolling re-sync must not overwrite it with the
+      // matcher's guess.
+      const sampleRefs = chunk
+        .map((raw) => raw && (raw._id || raw.id))
+        .filter(Boolean)
+        .map((id) => db.collection('samples').doc(String(id)));
+      const humanChoice = new Set();
+      if (sampleRefs.length) {
+        const existing = await db.getAll(...sampleRefs, { fieldMask: ['fieldMatchType'] });
+        existing.forEach((snap) => {
+          if (!snap.exists) return;
+          const t = snap.get('fieldMatchType');
+          if (t === 'manual' || t === 'ignored') humanChoice.add(snap.id);
+        });
+      }
       chunk.forEach((raw) => {
-        const sample = mapResultToSample(raw, fieldLookup);
+        const sample = mapResultToSample(raw, fieldLookup, aliases);
         if (!sample) return;
-        if (!sample.type || !sample.fieldId) {
+        if (humanChoice.has(sample.sourceId)) {
+          delete sample.fieldId;
+          delete sample.fieldMatchType;
+        } else if (!sample.type || !sample.fieldId) {
           unmapped++;
           console.warn('Unmapped Stukenholtz sample, needs manual review:', JSON.stringify(raw));
         }
@@ -1634,6 +1677,166 @@ exports.reassignSampleField = onCall(async (request) => {
   );
 
   return { ok: true };
+});
+
+// ---------------------------------------------------------------------
+// Field mapping tool (Agronomy "Field mapping" tab) - Oct 2026
+//
+// Stukenholtz's sample names never quite match Agworld's field names, so the
+// fix has to be remembered at the LABEL level, not sample by sample:
+//   listSampleLabels   -> every distinct lab label with how many samples it
+//                         has, what field it points at, and suggestions.
+//   setSampleLabelLink -> link a label to a field, unlink it, mark it "not a
+//                         field", or reset it to automatic. The decision is
+//                         saved in sampleLabelAliases (so every future sync
+//                         uses it) AND applied to all samples already saved
+//                         under that label.
+// Labels that differ only in case, spacing or punctuation are one label
+// (same normalisation the matcher uses).
+// ---------------------------------------------------------------------
+exports.listSampleLabels = onCall({ timeoutSeconds: 300, memory: '1GiB' }, async (request) => {
+  await requireAgronomyAccess(request.auth);
+  const db = admin.firestore();
+
+  const [fieldSnap, aliases] = await Promise.all([db.collection('fields').get(), loadSampleAliases(db)]);
+  const lookup = buildFieldLookup(fieldSnap.docs);
+
+  const groups = new Map();
+  let total = 0;
+  let last = null;
+  for (;;) {
+    let q = db.collection('samples')
+      .select('rawFieldLabel', 'fieldId', 'fieldMatchType', 'type', 'receivedDt')
+      .orderBy(admin.firestore.FieldPath.documentId())
+      .limit(2000);
+    if (last) q = q.startAfter(last);
+    const snap = await q.get();
+    if (snap.empty) break;
+    snap.forEach((doc) => {
+      const d = doc.data();
+      if (d.type === 'compost' || !d.rawFieldLabel) return;
+      total++;
+      const key = normalizeFieldLabel(d.rawFieldLabel);
+      if (!key) return;
+      let g = groups.get(key);
+      if (!g) {
+        g = { key, spellings: {}, count: 0, fieldCounts: {}, unlinked: 0, ignored: 0, auto: 0, types: {}, first: null, last: null };
+        groups.set(key, g);
+      }
+      g.count++;
+      g.spellings[d.rawFieldLabel] = (g.spellings[d.rawFieldLabel] || 0) + 1;
+      if (d.fieldMatchType === 'ignored') g.ignored++;
+      else if (d.fieldId) {
+        g.fieldCounts[d.fieldId] = (g.fieldCounts[d.fieldId] || 0) + 1;
+        if (d.fieldMatchType === 'fuzzy') g.auto++;
+      } else g.unlinked++;
+      if (d.type) g.types[d.type] = (g.types[d.type] || 0) + 1;
+      const ms = d.receivedDt && d.receivedDt.toMillis ? d.receivedDt.toMillis() : null;
+      if (ms != null) {
+        if (g.first == null || ms < g.first) g.first = ms;
+        if (g.last == null || ms > g.last) g.last = ms;
+      }
+    });
+    last = snap.docs[snap.docs.length - 1];
+    if (snap.size < 2000) break;
+  }
+
+  const labels = [];
+  groups.forEach((g) => {
+    const fieldIds = Object.keys(g.fieldCounts);
+    const top = fieldIds.sort((a, b) => g.fieldCounts[b] - g.fieldCounts[a])[0] || null;
+    let status;
+    if (g.ignored === g.count) status = 'ignored';
+    else if (!fieldIds.length) status = 'unlinked';
+    else if (g.unlinked || g.ignored || fieldIds.length > 1) status = 'mixed';
+    else status = g.auto === g.count ? 'auto' : 'linked';
+    const decision = aliases[g.key] || null;
+    const suggestions = (status === 'unlinked' || status === 'mixed' || status === 'auto') && g.key.length >= 3
+      ? rankFieldMatches(g.key, lookup, 3).map((r) => ({ fieldId: r.fieldId, score: Math.round(r.score * 100) / 100 }))
+      : [];
+    const spellings = Object.entries(g.spellings).sort((a, b) => b[1] - a[1]).map(([name]) => name);
+    labels.push({
+      key: g.key,
+      label: spellings[0],
+      spellings,
+      count: g.count,
+      status,
+      fieldId: top,
+      remembered: !!decision,
+      types: g.types,
+      first: g.first,
+      last: g.last,
+      suggestions
+    });
+  });
+  labels.sort((a, b) => b.count - a.count);
+  return { totalSamples: total, labels };
+});
+
+exports.setSampleLabelLink = onCall({ timeoutSeconds: 300, memory: '512MiB' }, async (request) => {
+  await requireAgronomyAccess(request.auth);
+  const { label, fieldId, mode } = request.data || {};
+  const key = normalizeFieldLabel(label);
+  if (!key || key.length > 200) throw new HttpsError('invalid-argument', 'A lab label is required.');
+  if (!['link', 'unlink', 'ignore', 'reset'].includes(mode)) {
+    throw new HttpsError('invalid-argument', 'mode must be link, unlink, ignore or reset.');
+  }
+  const db = admin.firestore();
+  const aliasRef = db.collection('sampleLabelAliases').doc(key);
+  const by = request.auth.uid;
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  let samplePatch; // what every sample under this label becomes
+  if (mode === 'link') {
+    if (!fieldId) throw new HttpsError('invalid-argument', 'fieldId is required to link.');
+    const f = await db.doc(`fields/${fieldId}`).get();
+    if (!f.exists) throw new HttpsError('not-found', 'That field no longer exists.');
+    await aliasRef.set({ fieldId, ignore: false, label: String(label), updatedBy: by, updatedAt: now });
+    samplePatch = { fieldId, fieldMatchType: 'manual' };
+  } else if (mode === 'ignore') {
+    await aliasRef.set({ fieldId: null, ignore: true, label: String(label), updatedBy: by, updatedAt: now });
+    samplePatch = { fieldId: null, fieldMatchType: 'ignored' };
+  } else if (mode === 'unlink') {
+    // Remembered as "leave this one unlinked" so the automatic matcher
+    // doesn't quietly put it back.
+    await aliasRef.set({ fieldId: null, ignore: false, label: String(label), updatedBy: by, updatedAt: now });
+    samplePatch = { fieldId: null, fieldMatchType: null };
+  } else {
+    // reset: forget the decision and let the matcher have another go.
+    await aliasRef.delete();
+    const lookup = buildFieldLookup((await db.collection('fields').get()).docs);
+    let id = lookup[key] || null;
+    let type = id ? 'exact' : null;
+    if (!id) {
+      const guess = findFuzzyFieldMatch(key, lookup);
+      if (guess) { id = guess; type = 'fuzzy'; }
+    }
+    samplePatch = { fieldId: id, fieldMatchType: type };
+  }
+
+  let updated = 0;
+  let last = null;
+  for (;;) {
+    let q = db.collection('samples').select('rawFieldLabel', 'type')
+      .orderBy(admin.firestore.FieldPath.documentId()).limit(2000);
+    if (last) q = q.startAfter(last);
+    const snap = await q.get();
+    if (snap.empty) break;
+    const refs = [];
+    snap.forEach((doc) => {
+      const d = doc.data();
+      if (d.type !== 'compost' && d.rawFieldLabel && normalizeFieldLabel(d.rawFieldLabel) === key) refs.push(doc.ref);
+    });
+    for (let i = 0; i < refs.length; i += 400) {
+      const batch = db.batch();
+      refs.slice(i, i + 400).forEach((ref) => batch.update(ref, { ...samplePatch, reviewedBy: by, reviewedAt: now }));
+      await batch.commit();
+    }
+    updated += refs.length;
+    last = snap.docs[snap.docs.length - 1];
+    if (snap.size < 2000) break;
+  }
+  return { ok: true, updated, fieldId: samplePatch.fieldId, fieldMatchType: samplePatch.fieldMatchType };
 });
 
 // ---------------------------------------------------------------------
@@ -2862,9 +3065,3 @@ exports.archiveAgrimetNow = agrimet.archiveAgrimetNow;
 // with today's). Lives in its own file — see fieldLineage.js.
 const fieldLineageExports = require('./fieldLineage').makeExports(AGWORLD_TOKEN, MIN_SEASON_YEAR);
 exports.suggestFieldLineageByMap = fieldLineageExports.suggestFieldLineageByMap;
-
-// Sprinkler package reader: reads the system GPM and pivot name off a
-// package PDF when it's uploaded to a pivot profile. Lives in its own
-// file — see packageScan.js.
-const packageScan = require('./packageScan');
-exports.scanSprinklerPackage = packageScan.scanSprinklerPackage;
