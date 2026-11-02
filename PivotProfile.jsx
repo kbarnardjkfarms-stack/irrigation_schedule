@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { collection, doc, getDoc, getDocs, onSnapshot, query, setDoc, where } from 'firebase/firestore'
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 import { db, storage, auth } from './firebase.js'
 import PivotIcon from './PivotIcon.jsx'
 
@@ -34,6 +34,10 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const [gpmSaved, setGpmSaved] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [fieldNames, setFieldNames] = useState([])
+  const [role, setRole] = useState(null)
+  const [showHistory, setShowHistory] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleting, setDeleting] = useState(false)
   const [thresholdSaved, setThresholdSaved] = useState(false)
   const [currentSeasonId, setCurrentSeasonId] = useState(null)
   const [currentSeasonName, setCurrentSeasonName] = useState(null)
@@ -86,6 +90,19 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     return () => { cancelled = true }
   }, [pivotGuid])
 
+  // Who is looking at this page: deleting a package takes farm manager or
+  // above (the Firestore and Storage rules enforce it too; this just hides
+  // the button from everyone else).
+  useEffect(() => {
+    const uid = auth.currentUser && auth.currentUser.uid
+    if (!uid) return
+    let cancelled = false
+    getDoc(doc(db, 'users', uid))
+      .then((s) => { if (!cancelled && s.exists()) setRole(s.data().role || null) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
   useEffect(() => {
     if (!pivotGuid) return
     const unsub = onSnapshot(doc(db, 'pivots', pivotGuid), (snap) => setPivot(snap.exists() ? snap.data() : null))
@@ -118,7 +135,9 @@ export default function PivotProfile({ pivotGuid, onBack }) {
       const downloadUrl = await getDownloadURL(fileRef)
       const newEntry = { fileName: file.name, uploadedAt: new Date().toISOString(), downloadUrl, storagePath: path }
       const existingHistory = (profile && profile.sprinklerPackageHistory) || []
-      const history = profile && profile.sprinklerPackage ? [profile.sprinklerPackage, ...existingHistory] : existingHistory
+      const history = profile && profile.sprinklerPackage
+        ? [{ ...profile.sprinklerPackage, replacedAt: new Date().toISOString() }, ...existingHistory]
+        : existingHistory
       // A new package starts out unconfirmed. The GPM already in use (if
       // any) is left alone until a manager confirms the new package's number.
       await setDoc(doc(db, 'pivotProfiles', pivotGuid), {
@@ -160,6 +179,36 @@ export default function PivotProfile({ pivotGuid, onBack }) {
       setError(err.message || 'Could not confirm the GPM.')
     } finally {
       setConfirming(false)
+    }
+  }
+
+  // Deletes a package for good: the PDF file itself, then its entry on the
+  // profile. Deleting the current package leaves the GPM already confirmed
+  // in use (shown as "from the previous package").
+  async function handleConfirmDelete() {
+    if (!deleteTarget) return
+    const { kind, entry } = deleteTarget
+    setDeleting(true)
+    setError(null)
+    try {
+      if (entry.storagePath) {
+        try {
+          await deleteObject(ref(storage, entry.storagePath))
+        } catch (err) {
+          // Already gone from storage is fine; anything else stops here.
+          if (!(err && err.code === 'storage/object-not-found')) throw err
+        }
+      }
+      const keyOf = (h) => h.storagePath || h.downloadUrl
+      const update = kind === 'current'
+        ? { sprinklerPackage: null }
+        : { sprinklerPackageHistory: ((profile && profile.sprinklerPackageHistory) || []).filter((h) => keyOf(h) !== keyOf(entry)) }
+      await setDoc(doc(db, 'pivotProfiles', pivotGuid), update, { merge: true })
+    } catch (err) {
+      setError(err.message || 'Could not delete the package.')
+    } finally {
+      setDeleting(false)
+      setDeleteTarget(null)
     }
   }
 
@@ -273,7 +322,9 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   if (!pivotGuid) return null
 
   const pkg = profile && profile.sprinklerPackage
-  const historyCount = (profile && profile.sprinklerPackageHistory && profile.sprinklerPackageHistory.length) || 0
+  const history = (profile && profile.sprinklerPackageHistory) || []
+  const historyCount = history.length
+  const canDelete = ['admin', 'owner', 'farm_manager'].includes(role)
 
   // Heading: the AgWorld field name(s) first, since that's what managers
   // know the pivot by; the BaseStation name goes small underneath.
@@ -370,6 +421,9 @@ export default function PivotProfile({ pivotGuid, onBack }) {
               {uploading ? 'Uploading\u2026' : 'Replace'}
               <input type="file" accept="application/pdf" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
             </label>
+            {canDelete && (
+              <button onClick={() => setDeleteTarget({ kind: 'current', entry: pkg })} style={{ fontSize: '12px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: '#A32D2D' }}>Delete</button>
+            )}
           </div>
         ) : (
           <>
@@ -384,7 +438,29 @@ export default function PivotProfile({ pivotGuid, onBack }) {
           </>
         )}
         {historyCount > 0 && (
-          <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>{historyCount} older version{historyCount > 1 ? 's' : ''} kept for reference</div>
+          <div style={{ marginTop: '14px', borderTop: '1px solid #e4e1d8', paddingTop: '10px' }}>
+            <button onClick={() => setShowHistory(!showHistory)} style={{ fontSize: '12px', border: 'none', background: 'transparent', padding: 0, color: '#555', cursor: 'pointer' }}>
+              {showHistory ? '\u25be' : '\u25b8'} Previous packages ({historyCount})
+            </button>
+            {showHistory && (
+              <div style={{ marginTop: '8px', border: '1px solid #e4e1d8', borderRadius: '8px' }}>
+                {history.map((h, i) => (
+                  <div key={h.storagePath || h.downloadUrl || i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', borderBottom: i < history.length - 1 ? '1px solid #e4e1d8' : 'none' }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: '13px', color: '#2b2b26', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.fileName}</div>
+                      <div style={{ fontSize: '10px', color: '#888' }}>
+                        Uploaded {new Date(h.uploadedAt).toLocaleDateString()}{h.replacedAt ? ` \u00b7 replaced ${new Date(h.replacedAt).toLocaleDateString()}` : ''}
+                      </div>
+                    </div>
+                    <a href={h.downloadUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: '12px', padding: '6px 10px', border: '1px solid #ccc', borderRadius: '6px', background: '#fff', color: '#2b2b26', textDecoration: 'none' }}>View</a>
+                    {canDelete && (
+                      <button onClick={() => setDeleteTarget({ kind: 'history', entry: h })} style={{ fontSize: '12px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: '#A32D2D' }}>Delete</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </Section>
 
@@ -643,6 +719,28 @@ export default function PivotProfile({ pivotGuid, onBack }) {
       </Section>
 
       {error && <p style={{ color: '#A32D2D', fontSize: '13px', marginTop: '16px' }}>{error}</p>}
+
+      {deleteTarget && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#fff', borderRadius: '10px', padding: '20px', width: '320px', boxShadow: '0 4px 20px rgba(0,0,0,0.2)' }}>
+            <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '8px', color: '#2b2b26' }}>Delete this package?</div>
+            <div style={{ fontSize: '13px', color: '#2b2b26', fontWeight: 600, wordBreak: 'break-all' }}>{deleteTarget.entry.fileName}</div>
+            <div style={{ fontSize: '12px', color: '#888', marginBottom: '10px' }}>Uploaded {new Date(deleteTarget.entry.uploadedAt).toLocaleDateString()}</div>
+            <div style={{ fontSize: '13px', color: '#555', lineHeight: 1.5, marginBottom: deleteTarget.kind === 'current' ? '8px' : '16px' }}>
+              This deletes the PDF for good. You won't be able to get it back.
+            </div>
+            {deleteTarget.kind === 'current' && (
+              <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.5, marginBottom: '16px' }}>
+                This is the current package. The GPM already confirmed stays in use until a new package is uploaded and confirmed.
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setDeleteTarget(null)} disabled={deleting} style={{ fontSize: '13px' }}>Cancel</button>
+              <button onClick={handleConfirmDelete} disabled={deleting} style={{ fontSize: '13px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: '#A32D2D' }}>{deleting ? 'Deleting\u2026' : 'Delete package'}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showResetConfirm && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
