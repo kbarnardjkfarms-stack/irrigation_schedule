@@ -8,6 +8,7 @@ import AgronomyCompostSources from './AgronomyCompostSources.jsx'
 import AgronomyCleanup from './AgronomyCleanup.jsx'
 import AgronomyTargets from './AgronomyTargets.jsx'
 import AgronomyScouting from './AgronomyScouting.jsx'
+import AgronomyMapping from './AgronomyMapping.jsx'
 import AgronomyCompare from './AgronomyCompare.jsx'
 
 // Targets tab (editing the agronomyCriteria/agronomyCurves config that used
@@ -167,6 +168,9 @@ export default function Agronomy({ userRole }) {
         <button className={view === 'compost' ? 'active' : ''} onClick={() => setView('compost')}>
           Compost sources
         </button>
+        <button className={view === 'mapping' ? 'active' : ''} onClick={() => setView('mapping')}>
+          Field mapping
+        </button>
         <button className={view === 'cleanup' ? 'active' : ''} onClick={() => setView('cleanup')}>
           Cleanup
         </button>
@@ -185,6 +189,7 @@ export default function Agronomy({ userRole }) {
       {view === 'compare' && <AgronomyCompare fields={fields} />}
       {view === 'database' && <AgronomySampleDatabase fields={fields} />}
       {view === 'compost' && <AgronomyCompostSources />}
+      {view === 'mapping' && <AgronomyMapping fields={allFields} />}
       {view === 'cleanup' && <AgronomyCleanup fields={allFields} />}
       {view === 'scouting' && <AgronomyScouting fields={allFields} />}
       {view === 'targets' && canEditTargets && <AgronomyTargets />}
