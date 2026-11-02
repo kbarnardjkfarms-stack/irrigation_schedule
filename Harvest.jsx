@@ -3,7 +3,7 @@ import { collection, collectionGroup, deleteDoc, doc, onSnapshot, query, setDoc,
 import { auth, db } from './firebase.js'
 import { canonCrop, effectiveYield, fieldKey } from './yieldMath.js'
 import {
-  buildSchedule, defaultSettings, fmtDate, fmtDays, fmtN, isoToday, orderBetween, resourcesAt
+  buildSchedule, defaultSettings, fmtDate, fmtDays, fmtN, isoToday, orderBetween, resourcesAt, slotOf
 } from './harvestMath.js'
 import HarvestBoard from './HarvestBoard.jsx'
 import HarvestTimeline from './HarvestTimeline.jsx'
@@ -193,7 +193,7 @@ export default function Harvest({ userRole }) {
   // Move one or more fields to a team (or back to the pool with teamId
   // null), placed before `beforeKey` (null = end of the line). Only the moved
   // docs are rewritten: they get orders spaced between their new neighbours.
-  function moveField(keys, teamId, beforeKey = null) {
+  function moveField(keys, teamId, beforeKey = null, extra = null) {
     keys = (Array.isArray(keys) ? keys : [keys]).filter((k) => byKey[k])
     if (!keys.length || !canEdit) return
     const lane = allFields.filter((x) => x.teamId === teamId && !keys.includes(x.key)).sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
@@ -209,7 +209,7 @@ export default function Harvest({ userRole }) {
         const f = byKey[k]
         const ref = doc(db, 'harvestFields', hfId(sid, k))
         if (!teamId && f.source === 'agworld' && isBare(f)) b.delete(ref)
-        else b.set(ref, { ...ident(f), teamId: teamId || null, order: teamId ? orders[j] : null }, { merge: true })
+        else b.set(ref, { ...ident(f), teamId: teamId || null, order: teamId ? orders[j] : null, ...(teamId ? extra || {} : { startOn: null }) }, { merge: true })
       })
       await b.commit()
     })
@@ -253,12 +253,31 @@ export default function Harvest({ userRole }) {
     if (!f) return
     run(() => (f.source === 'agworld' ? setDoc(doc(db, 'harvestFields', hfId(sid, key)), { ...ident(f), teamId: null, order: null }, { merge: true }) : deleteDoc(doc(db, 'harvestFields', hfId(sid, key)))))
   }
-  function addBlock(teamId, label, days) {
+  // Move day / rain day / down time. Goes before `beforeKey` (null = end of line),
+  // optionally held to a start date like a field.
+  function addBlock(teamId, label, days, beforeKey = null, startOn = null) {
     const key = `blk_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
     const lane = allFields.filter((x) => x.teamId === teamId).sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-    const order = orderBetween(lane.length ? lane[lane.length - 1].order ?? 0 : null, null)
-    return run(() => setDoc(doc(db, 'harvestFields', hfId(sid, key)), { seasonId: sid, key, kind: 'block', name: label || 'Move day', blockDays: days || 1, crop: null, teamId, order, updatedBy: who(), updatedAt: Date.now() }))
+    const i = beforeKey ? lane.findIndex((x) => x.key === beforeKey) : -1
+    const order = i < 0 ? orderBetween(lane.length ? lane[lane.length - 1].order ?? 0 : null, null)
+      : orderBetween(i > 0 ? lane[i - 1].order ?? 0 : null, lane[i].order ?? 0)
+    return run(() => setDoc(doc(db, 'harvestFields', hfId(sid, key)), { seasonId: sid, key, kind: 'block', name: label || 'Move day', blockDays: days || 1, crop: null, teamId, order, startOn: startOn || null, updatedBy: who(), updatedAt: Date.now() }))
   }
+  // The field in a team's line that starts at or after a half-day — i.e. where
+  // something starting then belongs in the order.
+  function keyStartingFrom(teamId, slot, exceptKey) {
+    const t = schedule.teams[teamId]
+    if (!t) return null
+    const hit = t.rows.find((r) => r.key !== exceptKey && r.startSlot != null && r.startSlot >= slot - 1e-9)
+    return hit ? hit.key : null
+  }
+  // Put a field on a team so it starts on a given half-day; the fields after
+  // it follow in sequence.
+  function placeAt(key, teamId, date, half) {
+    const slot = slotOf(schedule.startDate, date, half)
+    moveField([key], teamId, keyStartingFrom(teamId, slot, key), { startOn: { date, half } })
+  }
+  function clearStart(key) { return saveField(key, { startOn: null }) }
   function addCustom(name, crop, acres) {
     const key = `x_${fieldKey(name)}`
     if (!fieldKey(name)) return Promise.resolve()
@@ -285,7 +304,7 @@ export default function Harvest({ userRole }) {
   }
   function deleteLog(id) { return run(() => deleteDoc(doc(db, 'harvestLogs', id))) }
 
-  const writes = { moveField, addMany, assignMany, saveField, removeField, addBlock, addCustom, saveSettings, saveLog, saveLogs, deleteLog, run, sid }
+  const writes = { moveField, placeAt, clearStart, keyStartingFrom, addMany, assignMany, saveField, removeField, addBlock, addCustom, saveSettings, saveLog, saveLogs, deleteLog, run, sid }
 
   const nowRes = useMemo(() => resourcesAt(schedule, schedule.nowSlot), [schedule])
   const scheduledCount = allFields.filter((f) => f.teamId && f.kind !== 'block').length

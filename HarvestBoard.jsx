@@ -9,6 +9,10 @@ import { paceChip } from './Harvest.jsx'
 // any one of them to move the lot. On a phone/tablet use the tick boxes +
 // "Add to team", or open a card to move it.
 
+// Things that take a crew's time but aren't a field. Drag one into a line,
+// or use the lane's "+ Add" menu.
+export const BLOCKS = [['Move day', 1], ['Move ½ day', 0.5], ['Rain day', 1], ['Rain ½ day', 0.5], ['Down ½ day', 0.5]]
+
 const CROP_TINT = { POTATO: '#D6B48C', BEETS: '#C9B8EE', ONIONS: '#F4C0D1', CORN: '#FCE9A8', 'MINI POTATOES': '#E8CFAE' }
 
 export default function HarvestBoard({ allFields, schedule, settings, canEdit, writes, onOpen }) {
@@ -74,13 +78,14 @@ export default function HarvestBoard({ allFields, schedule, settings, canEdit, w
     e.preventDefault()
     if (!drag) return
     const beforeKey = dropAt && dropAt.teamId === teamId ? dropAt.beforeKey : null
-    if (!drag.keys.includes(beforeKey)) writes.moveField(drag.keys, teamId, beforeKey)
+    if (drag.block) { writes.addBlock(teamId, drag.block[0], drag.block[1], beforeKey); endDrag(); return }
+    if (!drag.keys.includes(beforeKey)) writes.moveField(drag.keys, teamId, beforeKey, { startOn: null })
     if (drag.keys.length > 1) setSel(new Set())
     endDrag()
   }
   function dropPool(e) {
     e.preventDefault()
-    if (drag && drag.from !== 'pool') {
+    if (drag && drag.from !== 'pool' && !drag.block) {
       const blocks = drag.keys.filter((k) => (allFields.find((x) => x.key === k) || {}).kind === 'block')
       blocks.forEach((k) => writes.removeField(k))
       const rest = drag.keys.filter((k) => !blocks.includes(k))
@@ -105,6 +110,16 @@ export default function HarvestBoard({ allFields, schedule, settings, canEdit, w
           <div className="yields-card-title">Unscheduled fields</div>
           <div className="contracts-sub">{shown.length} shown · {fmtN(shownAcres)} ac{drag && drag.from !== 'pool' ? ' — drop here to take off the schedule' : ''}</div>
         </div>
+        {canEdit && (
+          <div className="hb-blocks">
+            <span className="contracts-sub" style={{ marginTop: 0 }}>Drag into a line:</span>
+            {BLOCKS.map((b) => (
+              <span key={b[0]} className="hb-block-chip" draggable
+                onDragStart={(e) => { setDrag({ keys: [], from: 'palette', block: b }); e.dataTransfer.effectAllowed = 'copy'; try { e.dataTransfer.setData('text/plain', b[0]) } catch { /* */ } }}
+                onDragEnd={endDrag}>{b[0]}</span>
+            ))}
+          </div>
+        )}
         <div className="hb-crops">
           <button className={crop === 'default' ? 'active' : ''} onClick={() => setCrop('default')} title="Potatoes, beets and onions">Harvest crops</button>
           {cropCounts.map(([c, n]) => (
@@ -200,7 +215,7 @@ export default function HarvestBoard({ allFields, schedule, settings, canEdit, w
                     {isDropLane && dropAt.beforeKey === r.key && <div className="hb-drop-line" />}
                     <LaneCard r={r} startDate={schedule.startDate} canEdit={canEdit} dragging={drag && drag.keys.includes(r.key)}
                       onDragStart={(e) => startDrag(e, r, team.id)} onDragEnd={endDrag} onDragOver={(e) => overCard(e, team.id, rows, i)}
-                      onClick={() => onOpen(r.key)} />
+                      onClick={() => onOpen(r.key)} onUnpin={() => writes.clearStart(r.key)} />
                   </div>
                 ))}
                 {isDropLane && dropAt.beforeKey == null && <div className="hb-drop-line" />}
@@ -208,8 +223,10 @@ export default function HarvestBoard({ allFields, schedule, settings, canEdit, w
               </div>
               {canEdit && (
                 <div className="hb-lane-foot">
-                  <button className="clear-sort-btn" onClick={() => writes.addBlock(team.id, 'Move day', 1)} title="Adds a 1-day move block to the end of the line — drag it where it belongs">+ Move day</button>
-                  <button className="clear-sort-btn" onClick={() => writes.addBlock(team.id, 'Down time', 0.5)}>+ Down ½ day</button>
+                  <select value="" onChange={(e) => { const b = BLOCKS[Number(e.target.value)]; if (b) writes.addBlock(team.id, b[0], b[1]) }} title="Adds to the end of the line — drag it where it belongs, or open it to set a date">
+                    <option value="">+ Add move / rain day…</option>
+                    {BLOCKS.map((b, i) => <option key={b[0]} value={i}>{b[0]}</option>)}
+                  </select>
                 </div>
               )}
             </div>
@@ -220,7 +237,7 @@ export default function HarvestBoard({ allFields, schedule, settings, canEdit, w
   )
 }
 
-function LaneCard({ r, startDate, canEdit, dragging, onDragStart, onDragEnd, onDragOver, onClick }) {
+function LaneCard({ r, startDate, canEdit, dragging, onDragStart, onDragEnd, onDragOver, onClick, onUnpin }) {
   const block = r.kind === 'block'
   return (
     <div className={`hb-card lane ${r.status}${block ? ' block' : ''}${dragging ? ' dragging' : ''}`} draggable={canEdit}
@@ -234,10 +251,17 @@ function LaneCard({ r, startDate, canEdit, dragging, onDragStart, onDragEnd, onD
           {r.killStatus === 'overdue' && <span className="hb-tag warn" title={`Kill date was ${r.killDate}`}>kill overdue</span>}
           {r.killStatus === 'soon' && <span className="hb-tag soon" title={`Kill by ${r.killDate}`}>kill {r.killDate.slice(5).replace('-', '/')}</span>}
           {r.source === 'missing' && <span className="hb-tag warn">not in Agworld this season</span>}
+          {r.pinSlot != null && (
+            <span className={`hb-tag ${r.pinLate ? 'warn' : 'pin'}`} title={r.pinLate ? 'The fields ahead of it run past this date' : 'Held to start on this date'}>
+              📌 {r.startOn.date.slice(5).replace('-', '/')} {r.startOn.half}{r.pinLate ? ' — late' : ''}
+              {canEdit && onUnpin && <button className="hb-unpin" title="Clear the start date" onClick={(e) => { e.stopPropagation(); onUnpin() }}>×</button>}
+            </span>
+          )}
         </div>
         <div className="hb-card-sub">
           {block ? `${fmtDays(r.days)}` : `${r.variety || r.crop.toLowerCase()} · ${fmtN(r.acres)} ac · ${fmtN(r.total)} ${r.unit} · ${fmtDays(r.days)}`}
         </div>
+        {r.waitFrom != null && <div className="hb-wait">waits from {fmtSlot(startDate, Math.floor(r.waitFrom))}</div>}
         <div className="hb-card-when">
           {r.startSlot != null ? fmtSlot(startDate, r.startSlot) : '—'} → {r.endSlot != null ? fmtSlot(startDate, Math.ceil(r.endSlot) - 1) : '—'}
           {r.trucks != null && !block && <span title="10-wheelers needed"> · {r.trucks} trucks</span>}

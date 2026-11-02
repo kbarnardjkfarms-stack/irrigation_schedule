@@ -959,7 +959,7 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .ht-bar.dragging { opacity: 0.3; }
 .ht-bar-prog { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(60, 90, 63, 0.28); }
 .ht-kill { position: absolute; right: 3px; top: 1px; color: #A32D2D; }
-.ht-drop { position: absolute; top: 2px; bottom: 2px; width: 3px; background: #3c5a3f; border-radius: 2px; }
+.ht-drop { position: absolute; top: 2px; bottom: 2px; width: 3px; background: #3c5a3f; border-radius: 2px; z-index: 5; }
 .ht-now { position: absolute; top: 0; bottom: 0; width: 2px; background: #D23B3B; pointer-events: none; }
 .ht-res-row { height: 18px; position: relative; border-top: 0.5px solid #eee9de; }
 .ht-res { position: absolute; top: 0; bottom: 0; font-size: 9px; text-align: center; line-height: 18px; color: #666; font-variant-numeric: tabular-nums; }
@@ -1012,3 +1012,15 @@ thead th.sticky-col { top: 0; z-index: 4; }
   .hb-lanes { grid-template-columns: 1fr; }
   .ht-labels { width: 92px; }
 }
+
+.hb-blocks { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-bottom: 6px; }
+.hb-block-chip { font-size: 11px; padding: 3px 8px; border-radius: 12px; cursor: grab; border: 0.5px solid #c9c4b6; background: repeating-linear-gradient(135deg, #f4f2ec 0 5px, #e6e2d7 5px 10px); user-select: none; }
+.hb-tag.pin { background: #E3EDF7; color: #185FA5; }
+.hb-unpin { border: none; background: none; padding: 0 0 0 3px; font-size: 12px; line-height: 1; color: inherit; cursor: pointer; }
+.hb-wait { font-size: 10px; color: #854F0B; }
+.hb-lane-foot select { font-size: 11px; padding: 3px 4px; }
+.ht-wait { position: absolute; top: 18px; height: 4px; border-top: 2px dotted #b8a27a; }
+.ht-drop-label { position: absolute; top: -18px; left: 4px; font-size: 10px; font-weight: 700; color: #fff; background: #3c5a3f; padding: 1px 5px; border-radius: 4px; white-space: nowrap; }
+.ht-pin { position: absolute; left: 2px; top: -1px; font-size: 9px; }
+.ht-pick-ins { display: flex; flex-wrap: wrap; gap: 3px; margin: 4px 0 6px; padding-top: 6px; border-top: 0.5px solid #eee9de; }
+.ht-pick { width: 260px; }

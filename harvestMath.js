@@ -240,6 +240,20 @@ export function buildSchedule({ fields, settings, logs = [], now = new Date(), h
       }
       let need = r.remainingDays
       let startPos = null
+      // "Start on" date: hold the line until then (the crew waits / works
+      // elsewhere); everything after it follows in sequence. Only for a
+      // field that hasn't been started.
+      r.pinSlot = null; r.pinLate = false; r.waitFrom = null
+      if (r.startOn && r.startOn.date && r.dug <= 0) {
+        const pin = slotOf(startDate, r.startOn.date, r.startOn.half || 'AM')
+        r.pinSlot = pin
+        const pos = slot + (used > 0 ? used / Math.max(capAt(slot), 1e-9) : 0)
+        if (pin > pos + 1e-9) {
+          r.waitFrom = pos
+          slot = pin; used = 0
+          while (loggedSlots.has(slot)) slot++
+        }
+      }
       while (need > 1e-9 && guard < horizon) {
         const cap = capAt(slot)
         const free = cap - used
@@ -251,6 +265,8 @@ export function buildSchedule({ fields, settings, logs = [], now = new Date(), h
       }
       if (need > 1e-9) r.projEnd = null // ran past the horizon (e.g. every day set to off)
       r.projStart = startPos
+      // asked for a date but the fields ahead of it run past it
+      if (r.pinSlot != null && startPos != null && Math.floor(startPos + 1e-9) > r.pinSlot) r.pinLate = true
       r.startSlot = r.firstSlot != null ? r.firstSlot : startPos
       r.endSlot = r.projEnd
       r.status = r.dug > 0 ? 'active' : 'planned'

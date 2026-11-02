@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { DEFAULT_LIMITS, fmtDate, fmtDays, fmtN, fmtSlot, resourcesAt, slotFactor, slotInfo, weekday } from './harvestMath.js'
-import { CROP_TINT } from './HarvestBoard.jsx'
+import { BLOCKS, CROP_TINT } from './HarvestBoard.jsx'
 
 // Timeline: the sheet's half-day dashboard turned sideways. One row per
 // team, one column per half-day. Drag a bar along its row (or onto another
@@ -24,6 +24,7 @@ export default function HarvestTimeline({ schedule, settings, canEdit, writes, o
   const [pick, setPick] = useState(null) // { slot, x }
   const [pickTeam, setPickTeam] = useState('all')
   const [showRes, setShowRes] = useState(true)
+  const [dropMode, setDropMode] = useState('date') // 'date' = start on the day you drop it; 'order' = just slot it in line
   const scroller = useRef(null)
 
   const teams = settings.teams
@@ -48,6 +49,12 @@ export default function HarvestTimeline({ schedule, settings, canEdit, writes, o
     if (!drag) return
     e.preventDefault()
     const pos = posFromEvent(e, e.currentTarget)
+    if (dropMode === 'date') {
+      // snap to the half-day under the pointer; it'll start there
+      const slot = Math.max(0, Math.floor(pos))
+      if (!drop || drop.teamId !== teamId || drop.slot !== slot) setDrop({ teamId, slot, x: slot })
+      return
+    }
     const rows = (schedule.teams[teamId] ? schedule.teams[teamId].rows : []).filter((r) => r.key !== drag && r.startSlot != null && r.endSlot != null)
     const before = rows.find((r) => (r.startSlot + r.endSlot) / 2 > pos)
     const beforeKey = before ? before.key : null
@@ -56,7 +63,10 @@ export default function HarvestTimeline({ schedule, settings, canEdit, writes, o
   }
   function onRowDrop(e, teamId) {
     e.preventDefault()
-    if (drag && drop) writes.moveField([drag], teamId, drop.beforeKey)
+    if (drag && drop) {
+      if (drop.slot != null) { const { date, half } = slotInfo(startDate, drop.slot); writes.placeAt(drag, teamId, date, half) }
+      else writes.moveField([drag], teamId, drop.beforeKey)
+    }
     setDrag(null); setDrop(null)
   }
   function setFactor(slot, value, whole) {
@@ -88,9 +98,13 @@ export default function HarvestTimeline({ schedule, settings, canEdit, writes, o
       <div className="yields-card-head">
         <div>
           <div className="yields-card-title">Half-day timeline</div>
-          <div className="contracts-sub">Drag a bar to move it (onto another row to change team). {canEdit ? 'Click a day to mark rain / off / short days.' : ''} Hatched = off, pale = partial day.</div>
+          <div className="contracts-sub">Drag a bar onto a day to start it then — the fields after it follow in sequence (onto another row to change team). 📌 = held to a start date. {canEdit ? 'Click a day to mark rain / off / short days.' : ''} Hatched = off, pale = partial day.</div>
         </div>
         <div className="agronomy-filter-bar" style={{ margin: 0 }}>
+          <select value={dropMode} onChange={(e) => setDropMode(e.target.value)} title="What dropping a bar does">
+            <option value="date">Drop = start on that half-day</option>
+            <option value="order">Drop = just put it in line</option>
+          </select>
           <label className="hb-check"><input type="checkbox" checked={showRes} onChange={(e) => setShowRes(e.target.checked)} /> Resources</label>
           <select value={W} onChange={(e) => setW(Number(e.target.value))}>
             <option value={12}>Zoom: season</option><option value={22}>Zoom: weeks</option><option value={40}>Zoom: days</option>
@@ -149,14 +163,21 @@ export default function HarvestTimeline({ schedule, settings, canEdit, writes, o
                         onDragEnd={() => { setDrag(null); setDrop(null) }}
                         onClick={() => onOpen(r.key)}
                         style={{ left, width: w, background: block ? undefined : CROP_TINT[r.crop] || '#D3D1C7', borderColor: team.color }}
-                        title={`${r.name} — ${fmtSlot(startDate, r.startSlot)} → ${fmtSlot(startDate, Math.ceil(r.endSlot) - 1)} · ${fmtDays(r.days)}${block ? '' : ` · ${fmtN(r.acres)} ac`}${r.killDate ? ` · kill ${r.killDate}` : ''}`}>
+                        title={`${r.pinLate ? `Wanted ${fmtSlot(startDate, r.pinSlot)} but the fields ahead run late — ` : ''}${r.name} — ${fmtSlot(startDate, r.startSlot)} → ${fmtSlot(startDate, Math.ceil(r.endSlot) - 1)} · ${fmtDays(r.days)}${block ? '' : ` · ${fmtN(r.acres)} ac`}${r.killDate ? ` · kill ${r.killDate}` : ''}`}>
                         {r.status === 'active' && <div className="ht-bar-prog" style={{ width: `${r.pct * 100}%` }} />}
-                        <span>{r.status === 'done' ? '✓ ' : ''}{r.name}</span>
+                        <span>{r.status === 'done' ? '✓ ' : ''}{r.pinSlot != null ? '📌' : ''}{r.name}</span>
                         {r.killStatus === 'overdue' && <b className="ht-kill" title="Kill date passed">!</b>}
                       </div>
                     )
                   })}
-                  {drop && drop.teamId === team.id && <div className="ht-drop" style={{ left: (drop.x - range.from) * W - 1 }} />}
+                  {drop && drop.teamId === team.id && (
+                    <div className="ht-drop" style={{ left: (drop.x - range.from) * W - 1 }}>
+                      {drop.slot != null && <span className="ht-drop-label">Start {fmtSlot(startDate, drop.slot, true)}</span>}
+                    </div>
+                  )}
+                  {rows.filter((r) => r.waitFrom != null && r.startSlot != null).map((r) => (
+                    <div key={'w' + r.key} className="ht-wait" style={{ left: (r.waitFrom - range.from) * W, width: Math.max(2, (r.startSlot - r.waitFrom) * W) }} title={`Waiting for ${r.name} to start ${fmtSlot(startDate, r.pinSlot)}`} />
+                  ))}
                 </div>
               )
             })}
@@ -184,6 +205,18 @@ export default function HarvestTimeline({ schedule, settings, canEdit, writes, o
                     {FACTORS.map(([v, l]) => <button key={l} className="clear-sort-btn" onClick={() => setFactor(pick.slot + (i === 2 ? 1 : 0), v, i === 0)}>{l}</button>)}
                   </div>
                 ))}
+                {pickTeam !== 'all' && (
+                  <div className="ht-pick-ins">
+                    <div className="contracts-sub" style={{ marginTop: 0 }}>Or put a block in {teams.find((t) => t.id === pickTeam).name}’s line starting this day:</div>
+                    {BLOCKS.map(([l, d]) => (
+                      <button key={l} className="clear-sort-btn" onClick={() => {
+                        const { date } = slotInfo(startDate, pick.slot)
+                        writes.addBlock(pickTeam, l, d, writes.keyStartingFrom(pickTeam, pick.slot, null), { date, half: 'AM' }); setPick(null)
+                      }}>{l}</button>
+                    ))}
+                  </div>
+                )}
+                <div className="contracts-sub" style={{ margin: '2px 0 6px' }}>Off / partial pushes everything back without splitting the line — best for rain.</div>
                 <div className="ht-pick-row"><button className="clear-sort-btn" onClick={() => { setFactor(pick.slot, null, true) }}>Reset to normal</button><button className="clear-sort-btn" onClick={() => setPick(null)}>Close</button></div>
               </div>
             )}

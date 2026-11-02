@@ -32,6 +32,9 @@ export function FieldDrawer({ field, schedule, settings, canEdit, writes, onClos
     resources: { generators: '', pilers: '', cleaningUnit: '', pullTractor: '', bruiseSamples: '', airknife: '', pickers: '', ...(f.resources || {}) }
   }))
   const set = (k, v) => setForm((x) => ({ ...x, [k]: v }))
+  const [startTeam, setStartTeam] = useState(f.teamId || '')
+  const [startDate, setStartDate] = useState(() => (f.startOn && f.startOn.date) || (f.startSlot != null ? slotInfo(schedule.startDate, f.startSlot).date : ''))
+  const [startHalf, setStartHalf] = useState(() => (f.startOn && f.startOn.half) || (f.startSlot != null ? slotInfo(schedule.startDate, f.startSlot).half : 'AM'))
   const setR = (k, v) => setForm((x) => ({ ...x, resources: { ...x.resources, [k]: v } }))
   const n = (v) => (v === '' || v == null ? null : Number(v))
   const s = (v) => (v === '' || v == null ? null : String(v).trim() || null)
@@ -100,6 +103,23 @@ export function FieldDrawer({ field, schedule, settings, canEdit, writes, onClos
                 <button onClick={() => moveTo(f.teamId, 'down')}>↓ Down</button>
                 <button onClick={() => moveTo(f.teamId, 'bottom')}>⤓ Last</button>
               </>}
+            </div>
+            <div className="agronomy-section-label">Start on a date</div>
+            <div className="agronomy-filter-bar">
+              <select value={startTeam} onChange={(e) => setStartTeam(e.target.value)}>
+                <option value="">Team…</option>
+                {settings.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <div className="agronomy-view-toggle" style={{ margin: 0 }}>
+                {['AM', 'PM'].map((h) => <button key={h} className={startHalf === h ? 'active' : ''} onClick={() => setStartHalf(h)}>{h}</button>)}
+              </div>
+              <button className="save" disabled={!startTeam || !startDate} onClick={() => { writes.placeAt(f.key, startTeam, startDate, startHalf); onClose() }}>Start here</button>
+              {f.startOn && <button onClick={() => { writes.clearStart(f.key); onClose() }}>Clear date</button>}
+            </div>
+            <div className="contracts-sub" style={{ marginTop: 0 }}>
+              Slots it into the line at that date and holds it until then; everything after it follows in sequence.
+              {f.pinLate ? ` ⚠ The fields ahead of it run past ${fmtSlot(schedule.startDate, f.pinSlot, true)}, so it can’t start until ${fmtSlot(schedule.startDate, f.startSlot, true)} — move something or open a gap.` : ''}
             </div>
           </div>
         )}
