@@ -23,6 +23,7 @@ import CustomerPortal from './CustomerPortal.jsx'
 import Contracts from './Contracts.jsx'
 import Yields from './Yields.jsx'
 import Harvest from './Harvest.jsx'
+import Seed from './Seed.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
 
@@ -159,6 +160,7 @@ const ROLE_LABELS = {
   farm_manager: 'Farm manager',
   irrigation_manager: 'Irrigation manager',
   irrigator: 'Irrigator',
+  planting_staff: 'Potato planting staff',
   customer: 'Customer'
 }
 
@@ -353,7 +355,7 @@ export default function App() {
   const [profileStatus, setProfileStatus] = useState('loading') // 'loading' | 'ready' | 'missing' | 'error'
   const [profileSlow, setProfileSlow] = useState(false)
   const [profileAttempt, setProfileAttempt] = useState(0)
-  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', 'contracts', 'yields' or 'harvest' — more modules join this list later
+  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', 'contracts', 'yields', 'harvest' or 'seed' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
   const [online, setOnline] = useState(navigator.onLine)
@@ -585,6 +587,7 @@ export default function App() {
   const hasModule = (id) => {
     if (userRole === 'admin' || userRole === 'owner') return true
     if (userRole === 'customer') return false
+    if (userRole === 'planting_staff') return id === 'seed'
     if (!userProfile) return false
     return !Array.isArray(userProfile.modules) || userProfile.modules.includes(id)
   }
@@ -620,6 +623,10 @@ export default function App() {
   // Owner and Farm manager — all three can build the schedule and log progress.
   const harvestModuleOn = !userProfile || !Array.isArray(userProfile.modules) || userProfile.modules.includes('harvest')
   const canSeeHarvest = (userRole === 'admin' || userRole === 'owner') || (userRole === 'farm_manager' && harvestModuleOn)
+
+  // Mirrors firestore.rules' canSeed(): any staff login with the 'seed'
+  // module. Potato planting staff get nothing else (see their layout below).
+  const canSeeSeed = !!userRole && userRole !== 'customer' && hasModule('seed')
 
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
@@ -972,6 +979,32 @@ export default function App() {
     return <Login />
   }
 
+  // Potato planting staff (drivers, cutter crew) open straight into the seed
+  // ticket portals — no tiles, no other modules.
+  if (userRole === 'planting_staff') {
+    return (
+      <div className="app">
+        {needRefresh && (
+          <div className="update-banner">
+            <span>A new version of AIO is available.</span>
+            <button onClick={() => updateServiceWorker(true)}>Reload</button>
+          </div>
+        )}
+        <header className="topbar">
+          <div className="brand" style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <img src={aioLogoIcon} alt="AIO — All In One" style={{ height: '40px' }} />
+            <span className={`status ${online ? 'online' : 'offline'}`}>{online ? 'Online' : 'Offline — tickets will send when you have signal'}</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: 'auto' }}>
+            <span style={{ fontSize: '13px', color: '#888' }}>{user.email}</span>
+            <button onClick={handleSignOut}>Sign out</button>
+          </div>
+        </header>
+        <Seed userRole={userRole} />
+      </div>
+    )
+  }
+
   // Customer logins see nothing but their own portal — no module tiles, no
   // internal data. (firestore.rules enforces this too; this is just the UI.)
   if (userRole === 'customer') {
@@ -1193,6 +1226,25 @@ export default function App() {
               <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Harvest</div>
             </div>
           )}
+          {canSeeSeed && (
+            <div
+              onClick={() => setPage('seed')}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            >
+              <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#EFE6D6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="58" height="58" viewBox="0 0 48 48">
+                  <ellipse cx="17" cy="26" rx="10" ry="8" fill="#C9A26B" stroke="#7a5a32" strokeWidth="1.6" />
+                  <path d="M17 18v16" stroke="#7a5a32" strokeWidth="1.4" />
+                  <circle cx="13" cy="24" r="1.2" fill="#7a5a32" /><circle cx="21" cy="29" r="1.2" fill="#7a5a32" />
+                  <path d="M17 18c0-5 3-8 7-9" fill="none" stroke="#3B6D11" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M24 9c2 3 1 6-2 7" fill="#7FB04F" stroke="#3B6D11" strokeWidth="1.2" />
+                  <rect x="29" y="27" width="14" height="9" rx="1.5" fill="#fff" stroke="#7a5a32" strokeWidth="1.6" />
+                  <path d="M31 30h10M31 33h6" stroke="#7a5a32" strokeWidth="1.2" />
+                </svg>
+              </div>
+              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato Seed</div>
+            </div>
+          )}
         </div>
       )}
       {page === 'potato-storage' && hasModule('potato-storage') && <PotatoStorage />}
@@ -1216,6 +1268,7 @@ export default function App() {
       {page === 'contracts' && canSeeContracts && <Contracts userRole={userRole} />}
       {page === 'yields' && canSeeYields && <Yields userRole={userRole} />}
       {page === 'harvest' && canSeeHarvest && <Harvest userRole={userRole} />}
+      {page === 'seed' && canSeeSeed && <Seed userRole={userRole} />}
       {page === 'irrigation' && hasModule('irrigation') && (
         <>
           {view === 'live-data' && <LiveData />}

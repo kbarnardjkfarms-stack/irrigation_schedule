@@ -11,6 +11,7 @@ const ROLE_LABELS = {
   farm_manager: 'Farm manager',
   irrigation_manager: 'Irrigation manager',
   irrigator: 'Irrigator',
+  planting_staff: 'Potato planting staff',
   customer: 'Customer'
 }
 const FARM_SCOPED_ROLES = ['farm_manager', 'irrigation_manager', 'irrigator']
@@ -25,15 +26,19 @@ const MODULES = [
   { id: 'agronomy', label: 'Agronomy', note: 'Only Admin, Owner and Farm manager roles can ever see this one.' },
   { id: 'contracts', label: 'Contracts', note: 'Farm managers can view; only Admin and Owner can edit.' },
   { id: 'yields', label: 'Yield history', note: 'Farm managers can view; only Admin and Owner can import.' },
-  { id: 'harvest', label: 'Harvest schedule', note: 'Admin, Owner and Farm manager can build the schedule and log progress.' }
+  { id: 'harvest', label: 'Harvest schedule', note: 'Admin, Owner and Farm manager can build the schedule and log progress.' },
+  { id: 'seed', label: 'Potato seed', note: 'Ticket portals for anyone with it; contracts, edits and reports for Admin, Owner and Farm manager.' }
 ]
 const ALL_MODULE_IDS = MODULES.map((m) => m.id)
 const FULL_ACCESS_ROLES = ['admin', 'owner']
 // Customers are outside staff modules entirely: they get a read-only portal
 // limited to the customer names linked to their login (customers/customerKeys).
 const CUSTOMER_ROLE = 'customer'
+// Potato planting staff (drivers, cutter crew) only ever get the seed portals.
+const PLANTING_ROLE = 'planting_staff'
 function modulesToSave(role, modules) {
   if (FULL_ACCESS_ROLES.includes(role)) return null
+  if (role === PLANTING_ROLE) return ['seed']
   const allChecked = ALL_MODULE_IDS.every((id) => modules.includes(id))
   return allChecked ? null : modules
 }
@@ -72,7 +77,7 @@ function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabe
       setError('Pick at least one customer for this login to see.')
       return
     }
-    if (!FULL_ACCESS_ROLES.includes(form.role) && form.role !== CUSTOMER_ROLE && form.modules.length === 0) {
+    if (!FULL_ACCESS_ROLES.includes(form.role) && form.role !== CUSTOMER_ROLE && form.role !== PLANTING_ROLE && form.modules.length === 0) {
       setError('Pick at least one module, or this person will have nothing to open.')
       return
     }
@@ -191,7 +196,12 @@ function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabe
           </p>
         </>
       )}
-      {!FULL_ACCESS_ROLES.includes(form.role) && form.role !== CUSTOMER_ROLE && (
+      {form.role === PLANTING_ROLE && (
+        <p style={{ fontSize: '11px', color: '#888', margin: '0 0 12px' }}>
+          Potato planting staff open straight into the seed ticket portals (pickup, unload at cutter, cut seed, field unload) and nothing else in AIO.
+        </p>
+      )}
+      {!FULL_ACCESS_ROLES.includes(form.role) && form.role !== CUSTOMER_ROLE && form.role !== PLANTING_ROLE && (
         <>
           <div className="editor-label">Modules</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '6px' }}>

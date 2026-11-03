@@ -1024,3 +1024,82 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .ht-pin { position: absolute; left: 2px; top: -1px; font-size: 9px; }
 .ht-pick-ins { display: flex; flex-wrap: wrap; gap: 3px; margin: 4px 0 6px; padding-top: 6px; border-top: 0.5px solid #eee9de; }
 .ht-pick { width: 260px; }
+
+/* ------------------------------------------------------------------
+   Potato Seed module (Seed*.jsx)
+   ------------------------------------------------------------------ */
+.seed-banner { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.seed-stat { background: #fff; border: 0.5px solid #ddd8cc; border-top: 4px solid #9A6A12; border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; }
+.seed-stat span { font-size: 11px; color: #777; text-transform: uppercase; letter-spacing: 0.04em; }
+.seed-stat strong { font-size: 24px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.seed-stat small { font-size: 11px; color: #777; }
+.seed-stat.warn { border-top-color: #E8A33A; background: #FDF6EA; }
+.seed-stat.alarm { border-top-color: #A32D2D; background: #FBEDEC; }
+.seed-zone-num { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.seed-zone-num small { font-size: 12px; font-weight: 500; color: #888; }
+.seed-zone-num.warn { color: #B26B00; } .seed-zone-num.alarm { color: #A32D2D; }
+.seed-gauge { height: 14px; background: #eee9de; border-radius: 7px; overflow: hidden; }
+.seed-gauge div { height: 100%; background: #9A6A12; border-radius: 7px; transition: width .3s; }
+.seed-gauge div.warn { background: #E8A33A; } .seed-gauge div.alarm { background: #A32D2D; }
+.seed-bar { position: relative; height: 14px; background: #eee9de; border-radius: 7px; overflow: hidden; min-width: 80px; }
+.seed-bar div { height: 100%; background: #3c5a3f; }
+.seed-bar div.over { background: #E8A33A; }
+.seed-bar span { position: absolute; right: 6px; top: 0; font-size: 10px; line-height: 14px; font-weight: 700; color: #333; }
+.seed-type { font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 6px; border-radius: 8px; background: #f0eee8; color: #666; white-space: nowrap; }
+.seed-type.pickup { background: #E3EDF7; color: #185FA5; }
+.seed-type.cut { background: #FAEEDA; color: #854F0B; }
+.seed-type.plant { background: #EAF3DE; color: #3B6D11; }
+.seed-type.writeoff { background: #F5DCDA; color: #A32D2D; }
+.seed-trucks { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin-top: 8px; }
+.seed-truck { text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 0.5px solid #ddd8cc; border-left: 4px solid #9A6A12; border-radius: 8px; background: #fff; color: inherit; }
+.seed-truck:disabled { cursor: default; }
+.seed-truck:not(:disabled):hover { border-color: #b9b3a3; }
+.seed-truck.warn { border-left-color: #E8A33A; } .seed-truck.alarm { border-left-color: #A32D2D; }
+.seed-truck.picked { outline: 3px solid #3c5a3f; background: #F3F6EE; }
+.seed-truck-head { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 13px; }
+.seed-age { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 8px; background: #f0eee8; color: #666; }
+.seed-age.warn { background: #FAEEDA; color: #854F0B; } .seed-age.alarm { background: #F5DCDA; color: #A32D2D; }
+.seed-truck-cwt { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.seed-truck-cwt small { font-size: 11px; font-weight: 500; color: #777; }
+.seed-truck-lot { font-size: 11px; color: #555; }
+.seed-truck-when { font-size: 10px; color: #999; }
+.seed-portal-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.seed-portal-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 14px; border-radius: 12px; border: 1px solid #ddd8cc; background: #fff; text-align: left; min-height: 96px; }
+.seed-portal-btn strong { font-size: 16px; }
+.seed-portal-btn small { font-size: 12px; color: #777; }
+.seed-portal-btn.active { border-color: #3c5a3f; background: #F3F6EE; box-shadow: inset 0 0 0 1px #3c5a3f; }
+.seed-portal-n { width: 26px; height: 26px; border-radius: 50%; background: #9A6A12; color: #fff; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; }
+.seed-form { max-width: 760px; }
+.seed-form-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.seed-form-row > * { flex: 1 1 160px; }
+.seed-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #666; margin-top: 8px; }
+.seed-form-row .seed-field { margin-top: 0; }
+.seed-field input, .seed-field select { font-family: inherit; font-size: 16px; padding: 10px 12px; border: 1px solid #ccc5b5; border-radius: 8px; background: #fff; min-height: 44px; }
+.seed-new-light input { border-color: #E8A33A; background: #FDF6EA; }
+.seed-readout { font-size: 16px; padding: 10px 0; color: #333; }
+.seed-mode { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 10px; font-size: 12px; color: #666; }
+.seed-mode button { padding: 9px 12px; font-size: 13px; }
+.seed-net { margin-top: 10px; padding: 10px 12px; background: #F3F6EE; border-radius: 8px; font-size: 15px; }
+.seed-net.empty { background: #f4f2ec; color: #999; font-size: 13px; }
+.seed-photo { display: flex; align-items: center; justify-content: center; margin-top: 10px; min-height: 64px; border: 1.5px dashed #c9c4b6; border-radius: 10px; cursor: pointer; font-size: 15px; color: #555; background: #FBFAF7; overflow: hidden; }
+.seed-photo input { display: none; }
+.seed-photo img { max-width: 100%; max-height: 260px; display: block; }
+.seed-check { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-top: 10px; }
+.seed-check input { width: 20px; height: 20px; }
+.seed-submit { width: 100%; margin-top: 14px; padding: 14px; font-size: 16px; border-radius: 10px; }
+.seed-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.seed-field-list { max-height: 300px; overflow-y: auto; }
+.seed-list-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border: 0.5px solid #ddd8cc; border-radius: 8px; background: #fff; width: 100%; font-size: 14px; }
+.seed-list-row .save { padding: 10px 14px; font-size: 14px; }
+.seed-picked { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #3c5a3f; background: #F3F6EE; border-radius: 8px; font-size: 15px; }
+.seed-lot-detail { background: #FBFAF7; font-size: 12px; }
+.seed-photo-view { background: #fff; margin: auto; padding: 12px; border-radius: 10px; max-width: min(900px, 96vw); max-height: 94vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.seed-photo-view img { max-width: 100%; max-height: 80vh; }
+@media (max-width: 860px) {
+  .seed-portal-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .seed-banner { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .seed-stat strong { font-size: 20px; }
+}
+.seed-sync { border-radius: 8px; padding: 10px 14px; font-size: 13px; font-weight: 600; margin-bottom: 10px; }
+.seed-sync.offline { background: #FAEEDA; color: #854F0B; }
+.seed-sync.sending { background: #E3EDF7; color: #185FA5; }
