@@ -3074,3 +3074,10 @@ exports.suggestFieldLineageByMap = fieldLineageExports.suggestFieldLineageByMap;
 // file — see packageScan.js.
 const packageScan = require('./packageScan');
 exports.scanSprinklerPackage = packageScan.scanSprinklerPackage;
+
+// FieldNET (Lindsay) pivot reader: every 10 minutes reads the pivots
+// registered with statusSource 'fieldnet' and writes them into the same
+// pivots list the BaseStation3 sync uses. Lives in its own file for the same
+// reason as pivotWatcher. See fieldnetSync.js.
+const fieldnetSync = require('./fieldnetSync');
+exports.syncFieldnetPivots = fieldnetSync.syncFieldnetPivots;
