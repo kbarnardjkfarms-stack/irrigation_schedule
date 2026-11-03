@@ -48,12 +48,13 @@ service cloud.firestore {
     // can use at all. A profile with NO `modules` field keeps exactly what
     // its role already allowed, so deploying this changes nothing for
     // anyone until an Admin actually sets a list. Admin/Owner always have
-    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts', 'yields', 'harvest'.
+    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts', 'yields', 'harvest', 'seed'.
     // This is the real enforcement — hiding a tile in the UI is only
     // cosmetic, since anyone could still query Firestore directly.
+    // Potato planting staff only ever get the seed module.
     function hasModule(m) {
       let mods = myData().get('modules', null);
-      return isAdminOrOwner() || (!isCustomer() && (mods == null || m in mods));
+      return isAdminOrOwner() || (!isCustomer() && (myRole() != 'planting_staff' || m == 'seed') && (mods == null || m in mods));
     }
     function myFarmIds() {
       return myData().farmIds;
@@ -378,6 +379,42 @@ service cloud.firestore {
     }
     match /harvestLogs/{docId} {
       allow read, write: if signedIn() && canViewContracts() && hasModule('harvest');
+    }
+    // Potato Seed module (Seed.jsx). Every staff login with the 'seed'
+    // module (incl. Potato planting staff) can enter tickets and read the
+    // live inventory; contracts, settings, edits and deletes are Admin,
+    // Owner and Farm manager. Staff may only flip a pickup to "unloaded".
+    function canSeed() {
+      return isStaff() && hasModule('seed');
+    }
+    function canSeedManage() {
+      return canSeed() && (isAdminOrOwner() || myRole() == 'farm_manager');
+    }
+    match /seedContracts/{id} {
+      allow read: if canSeed();
+      allow write: if canSeedManage();
+    }
+    match /seedSettings/{id} {
+      allow read: if canSeed();
+      allow write: if canSeedManage();
+    }
+    match /seedLotClose/{id} {
+      allow read: if canSeed();
+      allow write: if canSeedManage();
+    }
+    match /seedTrucks/{id} {
+      allow read, create, update: if canSeed();
+      allow delete: if canSeedManage();
+    }
+    match /seedTickets/{id} {
+      allow read, create: if canSeed();
+      allow update: if canSeedManage() || (canSeed() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'unloadedAt', 'unloadedBy']));
+      allow delete: if canSeedManage();
+    }
+    match /seedPhotos/{id} {
+      allow read, create: if canSeed();
+      allow update, delete: if canSeedManage();
     }
     match /potatoStorage/{document} {
       allow read, write: if signedIn() && hasModule('potato-storage');
