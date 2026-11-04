@@ -48,7 +48,7 @@ service cloud.firestore {
     // can use at all. A profile with NO `modules` field keeps exactly what
     // its role already allowed, so deploying this changes nothing for
     // anyone until an Admin actually sets a list. Admin/Owner always have
-    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts', 'yields', 'harvest', 'seed'.
+    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts', 'yields', 'harvest', 'seed', 'map'.
     // This is the real enforcement — hiding a tile in the UI is only
     // cosmetic, since anyone could still query Firestore directly.
     // Potato planting staff only ever get the seed module.
@@ -415,6 +415,28 @@ service cloud.firestore {
     match /seedPhotos/{id} {
       allow read, create: if canSeed();
       allow update, delete: if canSeedManage();
+    }
+    // Farm Map module (FarmMap.jsx): field outlines, points (cellars, shops,
+    // dumps…) and the imported Main Field Plan rows. Any staff login with
+    // the 'map' module can view (Farm managers included); only Admin and
+    // Owner write, for now.
+    function canMap() {
+      return isStaff() && hasModule('map');
+    }
+    function canMapEdit() {
+      return canMap() && isAdminOrOwner();
+    }
+    match /farmFields/{id} {
+      allow read: if canMap();
+      allow write: if canMapEdit();
+    }
+    match /farmPoints/{id} {
+      allow read: if canMap();
+      allow write: if canMapEdit();
+    }
+    match /fieldPlanRows/{id} {
+      allow read: if canMap();
+      allow write: if canMapEdit();
     }
     match /potatoStorage/{document} {
       allow read, write: if signedIn() && hasModule('potato-storage');
