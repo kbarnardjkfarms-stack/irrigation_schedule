@@ -24,6 +24,7 @@ import Contracts from './Contracts.jsx'
 import Yields from './Yields.jsx'
 import Harvest from './Harvest.jsx'
 import Seed from './Seed.jsx'
+import FarmMap from './FarmMap.jsx'
 
 import potatoStorageLogo from './potato-storage-logo.jpg'
 
@@ -355,7 +356,7 @@ export default function App() {
   const [profileStatus, setProfileStatus] = useState('loading') // 'loading' | 'ready' | 'missing' | 'error'
   const [profileSlow, setProfileSlow] = useState(false)
   const [profileAttempt, setProfileAttempt] = useState(0)
-  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', 'contracts', 'yields', 'harvest' or 'seed' — more modules join this list later
+  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', 'contracts', 'yields', 'harvest', 'seed' or 'map' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
   const [online, setOnline] = useState(navigator.onLine)
@@ -627,6 +628,10 @@ export default function App() {
   // Mirrors firestore.rules' canSeed(): any staff login with the 'seed'
   // module. Potato planting staff get nothing else (see their layout below).
   const canSeeSeed = !!userRole && userRole !== 'customer' && hasModule('seed')
+
+  // Mirrors firestore.rules' farmFields read: any staff login with the 'map'
+  // module. Editing (import, boundaries, links) is Admin and Owner.
+  const canSeeMap = !!userRole && userRole !== 'customer' && hasModule('map')
 
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
@@ -1245,6 +1250,24 @@ export default function App() {
               <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato Seed</div>
             </div>
           )}
+          {canSeeMap && (
+            <div
+              onClick={() => setPage('map')}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            >
+              <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#E4EBDD', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="58" height="58" viewBox="0 0 48 48">
+                  <path d="M6 10l11-4 14 5 11-4v31l-11 4-14-5-11 4z" fill="#fff" stroke="#3c5a3f" strokeWidth="1.8" strokeLinejoin="round" />
+                  <circle cx="14" cy="19" r="5.5" fill="#795548" />
+                  <circle cx="26" cy="17" r="5" fill="#097138" />
+                  <circle cx="35" cy="24" r="5.5" fill="#9C27B0" />
+                  <circle cx="20" cy="31" r="5" fill="#A52714" />
+                  <circle cx="32" cy="35" r="4" fill="#F9A825" />
+                </svg>
+              </div>
+              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Farm Map</div>
+            </div>
+          )}
         </div>
       )}
       {page === 'potato-storage' && hasModule('potato-storage') && <PotatoStorage />}
@@ -1269,6 +1292,7 @@ export default function App() {
       {page === 'yields' && canSeeYields && <Yields userRole={userRole} />}
       {page === 'harvest' && canSeeHarvest && <Harvest userRole={userRole} />}
       {page === 'seed' && canSeeSeed && <Seed userRole={userRole} />}
+      {page === 'map' && canSeeMap && <FarmMap userRole={userRole} />}
       {page === 'irrigation' && hasModule('irrigation') && (
         <>
           {view === 'live-data' && <LiveData />}
