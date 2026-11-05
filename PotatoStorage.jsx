@@ -3816,7 +3816,7 @@ function ApplicatorsTab({ applicators, readOnly, onAddApplicator, onRenameApplic
     </div>
   );
 }
-function SproutNipTab({ bays, dataById, statsById, products, applicators, readOnly, onAddSproutApplication, onDeleteSproutApplication }) {
+function SproutNipTab({ bays, dataById, statsById, products, applicators, readOnly, onAddSproutApplication, onDeleteSproutApplication, onUpdateSproutDate }) {
   // Every field across every bay at this site, flattened into one list with
   // its bay attached and its current cwt looked up from statsById — this is
   // what both the field picker and the "pull the cwt from inventory" math
@@ -4073,7 +4073,10 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
                                   {fg.apps.map((a) => (
                                     <tr key={a.id} style={{ borderTop: "1px solid #1c2434" }}>
                                       <td style={{ ...tdStyle, paddingLeft: 24 }}>
-                                        {a.date}
+                        <span title={a.fieldCount > 1 ? "Changing the date updates every field in this application" : "Edit the application date"}>
+                          <EditableInline value={a.date} type="date" disabled={readOnly} width={135}
+                            onSave={(v) => onUpdateSproutDate(g.bay.id, fg.zone.id, a.id, v)} />
+                        </span>
                                         {a.fieldCount > 1 && <span style={{ color: "#6f7890" }}> · 1 of {a.fieldCount} fields</span>}
                                       </td>
                                       <td style={tdStyle}>{a.productName}</td>
@@ -5639,6 +5642,28 @@ export default function PotatoStorage() {
   const onAddSproutApplication = useCallback((bayId, zoneId, entry) => {
     updateZoneData(bayId, zoneId, (zd) => ({ ...zd, sproutApplications: [...(zd.sproutApplications || []), entry] }));
   }, [updateZoneData]);
+  // Editing the date of a multi-field application moves every field's record
+  // in that batch together, since they were entered as one application.
+  const onUpdateSproutDate = useCallback((bayId, zoneId, appId, date) => {
+    if (isReadOnly || !date) return;
+    setDataById((prev) => {
+      const src = prev[bayId]?.zones?.[zoneId]?.sproutApplications?.find((a) => a.id === appId);
+      if (!src) return prev;
+      const next = { ...prev };
+      Object.entries(prev).forEach(([bid, bd]) => {
+        const zones = { ...(bd?.zones || {}) };
+        let changed = false;
+        Object.entries(zones).forEach(([zid, zd]) => {
+          const apps = zd?.sproutApplications;
+          if (!apps) return;
+          const upd = apps.map((a) => (a.id === appId || (src.batchId && a.batchId === src.batchId)) ? { ...a, date } : a);
+          if (upd.some((a, i) => a !== apps[i])) { zones[zid] = { ...zd, sproutApplications: upd }; changed = true; }
+        });
+        if (changed) { const nb = { ...bd, zones }; next[bid] = nb; saveJSON(bayDataKey(bid), nb); }
+      });
+      return next;
+    });
+  }, [isReadOnly]);
   const onDeleteSproutApplication = useCallback((bayId, zoneId, appId) => {
     updateZoneData(bayId, zoneId, (zd) => ({ ...zd, sproutApplications: (zd.sproutApplications || []).filter((a) => a.id !== appId) }));
   }, [updateZoneData]);
@@ -6148,7 +6173,7 @@ export default function PotatoStorage() {
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
               <SproutNipTab bays={locationBays} dataById={displayDataById} statsById={statsById} products={sortedProducts} applicators={sortedApplicators}
-                readOnly={isReadOnly} onAddSproutApplication={onAddSproutApplication} onDeleteSproutApplication={onDeleteSproutApplication} />
+                readOnly={isReadOnly} onAddSproutApplication={onAddSproutApplication} onDeleteSproutApplication={onDeleteSproutApplication} onUpdateSproutDate={onUpdateSproutDate} />
             )}
           </div>
         )}
