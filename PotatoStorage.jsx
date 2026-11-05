@@ -2829,7 +2829,7 @@ function LiveStat({ label, value, sub }) {
 /* ---------------------------------------------------------------
    Bay detail panel (per-zone pipe checks + cwt runs) + interior 3D
 ----------------------------------------------------------------*/
-function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipeCheck, onAddCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay, onUpdateZoneMeta, onUpdateBayMeta, onEmptyBay, onDeleteZone, invFilter = EMPTY_INV_FILTER, buildingsById, locationsById }) {
+function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipeCheck, onAddCwtRun, onDeleteCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay, onUpdateZoneMeta, onUpdateBayMeta, onEmptyBay, onDeleteZone, invFilter = EMPTY_INV_FILTER, buildingsById, locationsById }) {
   const [zoneId, setZoneId] = useState(bay.zones[0]?.id ?? null);
   useEffect(() => { setZoneId(bay.zones[0]?.id ?? null); }, [bay.id]);
   const [showAddZone, setShowAddZone] = useState(false);
@@ -3156,7 +3156,20 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
                 {cwtRuns.map((r, i) => (
                   <div key={i} style={{ fontSize: 12, color: "#c7cede", padding: "6px 0", borderTop: "1px solid #232d40", display: "flex", justifyContent: "space-between" }}>
                     <span><b>{r.date}</b> — {r.dest}</span>
-                    <span style={{ color: "#f2c14e" }}>{fmt(r.cwt)} cwt</span>
+                    <span style={{ color: "#f2c14e", display: "flex", alignItems: "center", gap: 10 }}>
+                      {fmt(r.cwt)} cwt
+                      {!readOnly && (
+                        <button type="button" title="Delete this load"
+                          onClick={() => {
+                            if (window.confirm(`Delete the ${fmt(r.cwt)} cwt load from ${r.date} (${r.dest})?`)) {
+                              onDeleteCwtRun(bay.id, zoneId, cwtRuns.length - 1 - i);
+                            }
+                          }}
+                          style={{ border: "none", background: "transparent", color: "#e08787", cursor: "pointer", padding: 0, display: "flex" }}>
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -5467,6 +5480,9 @@ export default function PotatoStorage() {
       });
     }
   }, [updateZoneData, isReadOnly, bays]);
+  const onDeleteCwtRun = useCallback((bayId, zoneId, index) => {
+    updateZoneData(bayId, zoneId, (zd) => ({ ...zd, cwtRuns: (zd.cwtRuns || []).filter((_, i) => i !== index) }));
+  }, [updateZoneData]);
   const onAddCwtRun = useCallback((bayId, zoneId, entry) => {
     updateZoneData(bayId, zoneId, (zd) => ({ ...zd, cwtRuns: [...(zd.cwtRuns || []), entry] }));
   }, [updateZoneData]);
@@ -6060,7 +6076,7 @@ export default function PotatoStorage() {
                   );})}
                 </div>
                 <BayDetail bay={selectedBay} data={displayDataById[selectedBay.id] || emptyBayData(selectedBay)} stats={statsById[selectedBay.id]}
-                  customers={sortedCustomers} varieties={sortedVarieties} readOnly={isReadOnly} onAddPipeCheck={onAddPipeCheck} onAddCwtRun={onAddCwtRun}
+                  customers={sortedCustomers} varieties={sortedVarieties} readOnly={isReadOnly} onAddPipeCheck={onAddPipeCheck} onAddCwtRun={onAddCwtRun} onDeleteCwtRun={onDeleteCwtRun}
                   onUpdateZoneCustomer={onUpdateZoneCustomer} onUpdateZoneVariety={onUpdateZoneVariety} onAddZoneToBay={onAddZoneToBay}
                   onUpdateZoneMeta={onUpdateZoneMeta} onUpdateBayMeta={onUpdateBayMeta} onEmptyBay={onEmptyBay} onDeleteZone={onDeleteZone}
                   invFilter={invFilter} buildingsById={buildingsById} locationsById={locationsById} />
