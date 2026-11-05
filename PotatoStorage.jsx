@@ -3816,7 +3816,7 @@ function ApplicatorsTab({ applicators, readOnly, onAddApplicator, onRenameApplic
     </div>
   );
 }
-function SproutNipTab({ bays, dataById, statsById, products, applicators, readOnly, onAddSproutApplication, onDeleteSproutApplication, onUpdateSproutDate }) {
+function SproutNipTab({ bays, dataById, statsById, products, applicators, readOnly, onAddSproutApplication, onDeleteSproutApplication, onUpdateSproutDate, onUpdateSproutApplication }) {
   // Every field across every bay at this site, flattened into one list with
   // its bay attached and its current cwt looked up from statsById — this is
   // what both the field picker and the "pull the cwt from inventory" math
@@ -3847,6 +3847,7 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
   const [rateUnit, setRateUnit] = useState("fl oz/cwt");
   const [applicator, setApplicator] = useState("Unassigned");
   const [appError, setAppError] = useState("");
+  const [totalCost, setTotalCost] = useState(""); // optional, whole application ($)
 
   // Pulled straight from inventory, not typed in — the sum of whatever's
   // actually sitting in the selected fields right now. Recomputes any time
@@ -3881,9 +3882,11 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
         id: uid("app"), batchId, date, productId, productName: selectedProduct?.name || "Unknown product",
         rate: rate.trim(), rateUnit, cwtApplied: Math.round(share * 100) / 100, applicator,
         fieldCount: selectedFields.length,
+        // total cost is split across fields in the same proportion as cwt
+        ...(totalCost !== "" && Number.isFinite(Number(totalCost)) ? { cost: Math.round((totalCwt > 0 ? (share / totalCwt) * Number(totalCost) : Number(totalCost) / selectedFields.length) * 100) / 100 } : {}),
       });
     });
-    setRate(""); setAppError("");
+    setRate(""); setTotalCost(""); setAppError("");
   };
   // History summarized by bay: one row per bay (fields treated, number of
   // applications, products, last date, total cwt), expandable down to each
@@ -3899,7 +3902,13 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
       bay.zones.forEach((zone) => {
         const apps = (dataById[bay.id]?.zones?.[zone.id]?.sproutApplications || [])
           .slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-        if (apps.length) fieldGroups.push({ zone, apps, cwt: apps.reduce((sum, a) => sum + Number(a.cwtApplied || 0), 0) });
+        if (apps.length) fieldGroups.push({
+          zone, apps, cwt: apps.reduce((sum, a) => sum + Number(a.cwtApplied || 0), 0),
+          // only applications with a cost entered count toward $/cwt, so a
+          // cost-less one doesn't drag the average down
+          cost: apps.reduce((sum, a) => sum + Number(a.cost || 0), 0),
+          costedCwt: apps.reduce((sum, a) => sum + (a.cost != null && a.cost !== "" ? Number(a.cwtApplied || 0) : 0), 0),
+        });
       });
       if (!fieldGroups.length) return;
       const all = fieldGroups.flatMap((g) => g.apps);
@@ -3910,6 +3919,8 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
         products: Array.from(new Set(all.map((a) => a.productName))).filter(Boolean),
         lastDate: all.reduce((m, a) => ((a.date || "") > m ? a.date : m), ""),
         cwt: fieldGroups.reduce((sum, g) => sum + g.cwt, 0),
+        cost: fieldGroups.reduce((sum, g) => sum + g.cost, 0),
+        costedCwt: fieldGroups.reduce((sum, g) => sum + g.costedCwt, 0),
       });
     });
     return sortByNatural(groups, (g) => g.bay.name);
@@ -3985,6 +3996,14 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
               {applicatorOptions(applicators, applicator).map((a) => <option key={a} value={a}>{a}</option>)}
             </select>
           </Field>
+          <Field label="Total cost of application ($, optional)">
+            <input type="number" min="0" step="0.01" value={totalCost} onChange={(e) => setTotalCost(e.target.value)} style={{ ...inputStyle, width: 200 }} placeholder="e.g. 1250" />
+          </Field>
+          {totalCost !== "" && Number(cwtApplied) > 0 && (
+            <div style={{ alignSelf: "center", fontSize: 12.5, color: "#8fd19e", fontWeight: 700 }}>
+              ≈ ${(Number(totalCost) / Number(cwtApplied)).toFixed(3)} / cwt
+            </div>
+          )}
         </div>
         {selectedFields.length > 1 && (
           <div style={{ fontSize: 11.5, color: "#6f7890", margin: "4px 0 10px" }}>
@@ -4022,11 +4041,13 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
                 <th style={thStyle}>Products</th>
                 <th style={thStyle}>Last applied</th>
                 <th style={thStyle}>Cwt applied</th>
+                <th style={thStyle}>Cost</th>
+                <th style={thStyle}>$/cwt</th>
               </tr>
             </thead>
             <tbody>
               {historyByBay.length === 0 && (
-                <tr><td colSpan={6} style={{ ...tdStyle, color: "#5b6478" }}>No applications logged at this site yet.</td></tr>
+                <tr><td colSpan={8} style={{ ...tdStyle, color: "#5b6478" }}>No applications logged at this site yet.</td></tr>
               )}
               {historyByBay.map((g) => {
                 const open = expandedBays.has(g.bay.id);
@@ -4044,10 +4065,12 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
                       <td style={tdStyle}>{g.products.join(", ")}</td>
                       <td style={tdStyle}>{g.lastDate || "—"}</td>
                       <td style={tdStyle}><b style={{ color: "#eef1f6" }}>{fmt(g.cwt)} cwt</b></td>
+                      <td style={tdStyle}>{g.costedCwt > 0 ? `$${Math.round(g.cost).toLocaleString()}` : "—"}</td>
+                      <td style={tdStyle}>{g.costedCwt > 0 ? `$${(g.cost / g.costedCwt).toFixed(3)}` : "—"}</td>
                     </tr>
                     {open && (
                       <tr>
-                        <td colSpan={6} style={{ padding: "4px 0 10px 28px", background: "#0e1420" }}>
+                        <td colSpan={8} style={{ padding: "4px 0 10px 28px", background: "#0e1420" }}>
                           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
                             <thead>
                               <tr style={{ textAlign: "left" }}>
@@ -4056,6 +4079,8 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
                                 <th style={thStyle}>Rate</th>
                                 <th style={thStyle}>Applicator</th>
                                 <th style={{ ...thStyle, textAlign: "right" }}>Cwt applied</th>
+                                <th style={thStyle}>Cost ($)</th>
+                                <th style={thStyle}>$/cwt</th>
                                 <th style={thStyle}></th>
                               </tr>
                             </thead>
@@ -4068,6 +4093,8 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
                                       <span style={{ color: "#8790a3" }}> · {fg.apps.length} application{fg.apps.length === 1 ? "" : "s"}</span>
                                     </td>
                                     <td style={{ ...tdStyle, textAlign: "right" }}><b style={{ color: "#f2c14e" }}>{fmt(fg.cwt)} cwt</b></td>
+                                    <td style={tdStyle}>{fg.costedCwt > 0 ? <b style={{ color: "#8fd19e" }}>${Math.round(fg.cost).toLocaleString()}</b> : ""}</td>
+                                    <td style={tdStyle}>{fg.costedCwt > 0 ? `$${(fg.cost / fg.costedCwt).toFixed(3)}` : ""}</td>
                                     <td style={tdStyle}></td>
                                   </tr>
                                   {fg.apps.map((a) => (
@@ -4083,6 +4110,11 @@ function SproutNipTab({ bays, dataById, statsById, products, applicators, readOn
                                       <td style={tdStyle}>{a.rate} {a.rateUnit}</td>
                                       <td style={tdStyle}>{a.applicator}</td>
                                       <td style={{ ...tdStyle, textAlign: "right" }}>{fmt(a.cwtApplied)} cwt</td>
+                                      <td style={tdStyle}>
+                                        <EditableInline value={a.cost ?? ""} type="number" allowClear disabled={readOnly} width={80} placeholder="add"
+                                          onSave={(v) => onUpdateSproutApplication(g.bay.id, fg.zone.id, a.id, { cost: v == null ? null : Number(v) })} />
+                                      </td>
+                                      <td style={tdStyle}>{a.cost != null && a.cost !== "" && Number(a.cwtApplied) > 0 ? `$${(Number(a.cost) / Number(a.cwtApplied)).toFixed(3)}` : "—"}</td>
                                       <td style={tdStyle}>
                                         <DeleteButton
                                           disabled={readOnly}
@@ -5664,6 +5696,9 @@ export default function PotatoStorage() {
       return next;
     });
   }, [isReadOnly]);
+  const onUpdateSproutApplication = useCallback((bayId, zoneId, appId, patch) => {
+    updateZoneData(bayId, zoneId, (zd) => ({ ...zd, sproutApplications: (zd.sproutApplications || []).map((a) => a.id === appId ? { ...a, ...patch } : a) }));
+  }, [updateZoneData]);
   const onDeleteSproutApplication = useCallback((bayId, zoneId, appId) => {
     updateZoneData(bayId, zoneId, (zd) => ({ ...zd, sproutApplications: (zd.sproutApplications || []).filter((a) => a.id !== appId) }));
   }, [updateZoneData]);
@@ -6173,7 +6208,7 @@ export default function PotatoStorage() {
           <div style={{ flex: 1, overflowY: "auto", padding: 20 }}>
             {locationBays.length === 0 ? <EmptySiteNotice onManage={() => setTab("manage")} /> : (
               <SproutNipTab bays={locationBays} dataById={displayDataById} statsById={statsById} products={sortedProducts} applicators={sortedApplicators}
-                readOnly={isReadOnly} onAddSproutApplication={onAddSproutApplication} onDeleteSproutApplication={onDeleteSproutApplication} onUpdateSproutDate={onUpdateSproutDate} />
+                readOnly={isReadOnly} onAddSproutApplication={onAddSproutApplication} onDeleteSproutApplication={onDeleteSproutApplication} onUpdateSproutDate={onUpdateSproutDate} onUpdateSproutApplication={onUpdateSproutApplication} />
             )}
           </div>
         )}
