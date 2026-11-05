@@ -155,7 +155,7 @@ function SeedBanner({ seed, settings }) {
   const zonePct = settings.zoneCapacity > 0 ? seed.zoneCwt / settings.zoneCapacity : 0
   const transit = seed.transit.reduce((s, x) => s + (x.cwt || 0), 0)
   const cards = [
-    ['Picked up', t.contracted ? `${Math.round((t.picked / t.contracted) * 100)}%` : fmtCwt(t.picked), t.contracted ? `${fmtCwt(t.picked)} of ${fmtCwt(t.contracted)} cwt` : 'cwt'],
+    ['Picked up', t.contracted ? `${Math.round((t.picked / t.contracted) * 100)}%` : fmtCwt(t.picked), t.contracted ? `${fmtCwt(t.picked)} of ${fmtCwt(t.contracted)} cwt${t.acres > 0 ? ` · ≈ ${fmtCwt(t.acres)} ac contracted` : ''}` : 'cwt'],
     ['In transit', fmtCwt(transit), `cwt · ${seed.transit.length} truck${seed.transit.length === 1 ? '' : 's'}`],
     ['At the cutter', fmtCwt(seed.zoneCwt), `of ${fmtCwt(settings.zoneCapacity)} cwt`, zonePct > 1 ? 'alarm' : zonePct > 0.85 ? 'warn' : ''],
     ['Cut seed loaded', fmtCwt(seed.loadedCwt), `cwt · ${seed.loadedTrucks.length} truck${seed.loadedTrucks.length === 1 ? '' : 's'}`],
@@ -243,20 +243,23 @@ function SeedOverview({ ctx }) {
         <div className="yields-card">
           <div className="yields-card-title">Picked up by variety</div>
           <table className="contracts-table contracts-table-auto" style={{ marginTop: 8 }}>
-            <thead><tr><th>Variety</th><th className="num">Contracted</th><th className="num">Picked up</th><th style={{ width: '32%' }} /><th className="num">Planted</th></tr></thead>
+            <thead><tr><th>Variety</th><th className="num">Contracted</th><th className="num">≈ Acres</th><th className="num">Picked up</th><th style={{ width: '28%' }} /><th className="num">Planted</th></tr></thead>
             <tbody>
               {seed.byVariety.map((v) => {
                 const pct = v.contracted > 0 ? v.picked / v.contracted : null
                 return (
                   <tr key={v.variety}>
-                    <td><strong>{v.variety}</strong></td><td className="num">{fmtCwt(v.contracted)}</td><td className="num">{fmtCwt(v.picked)}</td>
+                    <td><strong>{v.variety}</strong></td><td className="num">{fmtCwt(v.contracted)}</td>
+                    <td className="num" title={v.acresKnown ? '' : 'Some contracts for this variety have no seeding rate'}>{v.acres > 0 ? `${fmtCwt(v.acres)}${v.acresKnown ? '' : '+'}` : '—'}</td>
+                    <td className="num">{fmtCwt(v.picked)}</td>
                     <td>{pct != null && <div className="seed-bar"><div style={{ width: `${Math.min(100, pct * 100)}%` }} className={pct > 1.02 ? 'over' : ''} /><span>{Math.round(pct * 100)}%</span></div>}</td>
                     <td className="num">{fmtCwt(v.planted)}</td>
                   </tr>
                 )
               })}
-              {!seed.byVariety.length && <tr><td colSpan={5} className="contracts-sub">Add your seed contracts on the Contracts tab.</td></tr>}
+              {!seed.byVariety.length && <tr><td colSpan={6} className="contracts-sub">Add your seed contracts on the Contracts tab.</td></tr>}
             </tbody>
+            {seed.byVariety.length > 0 && <tfoot><tr><td><strong>Total</strong></td><td className="num"><strong>{fmtCwt(seed.totals.contracted)}</strong></td><td className="num"><strong>{seed.totals.acres > 0 ? fmtCwt(seed.totals.acres) : '—'}</strong></td><td className="num"><strong>{fmtCwt(seed.totals.picked)}</strong></td><td /><td className="num"><strong>{fmtCwt(seed.totals.planted)}</strong></td></tr></tfoot>}
           </table>
         </div>
         <CuttingZone ctx={ctx} />
@@ -266,14 +269,16 @@ function SeedOverview({ ctx }) {
         <div className="contracts-sub">Live from pickup tickets. In transit = picked up but not yet tipped at the cutter.</div>
         <div className="table-scroll" style={{ marginTop: 8 }}>
           <table className="contracts-table contracts-table-auto">
-            <thead><tr><th>Supplier</th><th>Variety</th><th>Lots</th><th className="num">Contracted</th><th className="num">Picked up</th><th style={{ width: '22%' }} /><th className="num">Remaining</th><th className="num">In transit</th><th className="num">Loads</th></tr></thead>
+            <thead><tr><th>Supplier</th><th>Variety</th><th>Lots</th><th className="num">Contracted</th><th className="num">≈ Acres</th><th className="num">Picked up</th><th style={{ width: '20%' }} /><th className="num">Remaining</th><th className="num">In transit</th><th className="num">Loads</th></tr></thead>
             <tbody>
               {Object.entries(bySupplier).sort(([a], [b]) => a.localeCompare(b)).map(([sup, rows]) => rows.map((c, i) => (
                 <tr key={c.id}>
                   <td>{i === 0 ? <strong>{sup}</strong> : ''}</td><td>{c.variety}</td><td className="contracts-sub">{(c.lots || []).join(', ')}</td>
-                  <td className="num">{fmtCwt(c.contractedCwt)}</td><td className="num">{fmtCwt(c.picked)}</td>
+                  <td className="num">{fmtCwt(c.contractedCwt)}</td>
+                  <td className="num">{c.acres != null ? fmtCwt(c.acres) : <span className="contracts-sub" title="Add a seeding rate to the contract">—</span>}</td>
+                  <td className="num">{fmtCwt(c.picked)}</td>
                   <td>{c.pct != null && <div className="seed-bar"><div style={{ width: `${Math.min(100, c.pct * 100)}%` }} className={c.pct > 1.02 ? 'over' : ''} /><span>{Math.round(c.pct * 100)}%</span></div>}</td>
-                  <td className="num" style={{ color: c.remaining < -1 ? '#A32D2D' : undefined }}>{fmtCwt(c.remaining)}</td>
+                  <td className="num" style={{ color: c.remaining < -1 ? '#A32D2D' : undefined }}>{fmtCwt(c.remaining)}{c.remainingAcres ? <div className="contracts-sub" style={{ marginTop: 0 }}>≈ {fmtCwt(c.remainingAcres)} ac</div> : null}</td>
                   <td className="num">{c.transit ? fmtCwt(c.transit) : ''}</td><td className="num">{c.loads}</td>
                 </tr>
               )))}

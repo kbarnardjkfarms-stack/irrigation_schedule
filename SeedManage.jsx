@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
-import { deleteDoc, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore'
+import { deleteDoc, doc, getDoc, setDoc, updateDoc, writeBatch } from 'firebase/firestore'
 import { auth, db } from './firebase.js'
 import { allocateUnload, fmtCwt, fmtWhen, lotKey, lotLabel, newId, truckKey } from './seedMath.js'
 import { TYPE_LABEL } from './Seed.jsx'
@@ -28,7 +28,7 @@ function useRun() {
 // ---------------------------------------------------------------------------
 // Contracts
 // ---------------------------------------------------------------------------
-const BLANK = { supplier: '', variety: '', contractedCwt: '', lots: '', generation: '', pricePerCwt: '', notes: '' }
+const BLANK = { supplier: '', variety: '', contractedCwt: '', seedingRate: '', lots: '', generation: '', pricePerCwt: '', notes: '', carry: true }
 export function SeedContracts({ ctx }) {
   const { run, Msg } = useRun()
   const [edit, setEdit] = useState(null) // { id|null, ...form }
@@ -40,12 +40,38 @@ export function SeedContracts({ ctx }) {
     if (!f.supplier.trim() || !f.variety.trim()) return
     const data = {
       seasonId: ctx.seasonId, supplier: f.supplier.trim(), variety: f.variety.trim(), contractedCwt: Number(f.contractedCwt) || 0,
+      seedingRate: f.seedingRate === '' || !(Number(f.seedingRate) > 0) ? null : Number(f.seedingRate),
       lots: String(f.lots || '').split(/[,;\n]/).map((x) => x.trim()).filter(Boolean),
-      generation: f.generation.trim() || null, pricePerCwt: f.pricePerCwt === '' ? null : Number(f.pricePerCwt), notes: f.notes.trim() || null,
+      generation: String(f.generation || '').trim() || null, pricePerCwt: f.pricePerCwt === '' || f.pricePerCwt == null ? null : Number(f.pricePerCwt), notes: String(f.notes || '').trim() || null,
       updatedBy: who(), updatedAt: Date.now()
     }
-    run(() => setDoc(doc(db, 'seedContracts', f.id || newId()), data), f.id ? 'Contract updated.' : 'Contract added.').then(() => setEdit(null))
+    const old = f.id ? ctx.contracts.find((c) => c.id === f.id) : null
+    const renamed = old && (old.supplier !== data.supplier || old.variety !== data.variety)
+    run(async () => {
+      const b = writeBatch(db)
+      b.set(doc(db, 'seedContracts', f.id || newId()), data)
+      if (renamed && f.carry) carryRename(b, old, data)
+      await b.commit()
+    }, f.id ? `Contract updated${renamed && f.carry ? ' — tickets and lots on it changed to match' : ''}.` : 'Contract added.').then(() => setEdit(null))
   }
+  // A contract's grower or variety changed: change the tickets that came off
+  // it, and the same lots all the way through cutting, planting and close-out,
+  // so the lot trail still lines up.
+  function carryRename(b, old, data) {
+    const pickups = ctx.tickets.filter((t) => t.type === 'pickup' && t.contractId === old.id)
+    const lotNames = new Set(pickups.map((t) => t.lot))
+    const oldKeys = new Set(pickups.map((t) => lotKey(old.supplier, old.variety, t.lot)))
+    pickups.forEach((t) => b.update(doc(db, 'seedTickets', t.id), { supplier: data.supplier, variety: data.variety, lotKey: lotKey(data.supplier, data.variety, t.lot), editedBy: who(), editedAt: Date.now() }))
+    ctx.tickets.filter((t) => t.parts && t.parts.some((p) => oldKeys.has(lotKey(p.supplier, p.variety, p.lot)))).forEach((t) => {
+      const parts = t.parts.map((p) => (oldKeys.has(lotKey(p.supplier, p.variety, p.lot)) ? { ...p, supplier: data.supplier, variety: data.variety } : p))
+      b.update(doc(db, 'seedTickets', t.id), { parts, varieties: [...new Set(parts.map((p) => p.variety))], editedBy: who(), editedAt: Date.now() })
+    })
+    ctx.closes.filter((c) => lotNames.has(c.lot) && oldKeys.has(c.key)).forEach((c) => b.update(doc(db, 'seedLotClose', c.id), { supplier: data.supplier, variety: data.variety, key: lotKey(data.supplier, data.variety, c.lot) }))
+  }
+  const editing = edit && edit.id ? ctx.contracts.find((c) => c.id === edit.id) : null
+  const editLoads = editing ? (rowsById[editing.id] || {}).loads || 0 : 0
+  const editRenamed = editing && (editing.supplier !== edit.supplier.trim() || editing.variety !== edit.variety.trim())
+  const previewAcres = Number(edit && edit.contractedCwt) > 0 && Number(edit && edit.seedingRate) > 0 ? Number(edit.contractedCwt) / Number(edit.seedingRate) : null
   const sorted = [...ctx.contracts].sort((a, b) => a.supplier.localeCompare(b.supplier) || a.variety.localeCompare(b.variety))
   return (
     <div className="yields-card">
@@ -63,6 +89,8 @@ export function SeedContracts({ ctx }) {
             <label className="hd-field"><span>Supplier (grower)</span><input list="sc-sup" value={edit.supplier} onChange={(e) => setEdit({ ...edit, supplier: e.target.value })} /></label>
             <label className="hd-field"><span>Variety</span><input list="sc-var" value={edit.variety} onChange={(e) => setEdit({ ...edit, variety: e.target.value })} /></label>
             <label className="hd-field"><span>Contracted (cwt)</span><input inputMode="decimal" value={edit.contractedCwt} onChange={(e) => setEdit({ ...edit, contractedCwt: e.target.value })} /></label>
+            <label className="hd-field"><span>Avg seeding rate (cwt/ac)</span><input inputMode="decimal" placeholder="e.g. 22" value={edit.seedingRate} onChange={(e) => setEdit({ ...edit, seedingRate: e.target.value })} /></label>
+            <div className="hd-field"><span>Plants about</span><div className="seed-readout" style={{ padding: '6px 0' }}>{previewAcres != null ? `${fmtCwt(previewAcres)} acres` : '—'}</div></div>
             <label className="hd-field"><span>Lot #s (comma separated)</span><input value={edit.lots} onChange={(e) => setEdit({ ...edit, lots: e.target.value })} /></label>
             <label className="hd-field"><span>Generation / class</span><input value={edit.generation} onChange={(e) => setEdit({ ...edit, generation: e.target.value })} placeholder="e.g. G3" /></label>
             <label className="hd-field"><span>Price ($/cwt)</span><input inputMode="decimal" value={edit.pricePerCwt} onChange={(e) => setEdit({ ...edit, pricePerCwt: e.target.value })} /></label>
@@ -70,6 +98,12 @@ export function SeedContracts({ ctx }) {
           </div>
           <datalist id="sc-sup">{suppliers.map((s) => <option key={s} value={s} />)}</datalist>
           <datalist id="sc-var">{varieties.map((s) => <option key={s} value={s} />)}</datalist>
+          {editRenamed && editLoads > 0 && (
+            <label className="hb-check" style={{ marginTop: 8 }}>
+              <input type="checkbox" checked={edit.carry} onChange={(e) => setEdit({ ...edit, carry: e.target.checked })} />
+              Also change the {editLoads} pickup ticket{editLoads === 1 ? '' : 's'} on this contract — and those lots through cutting, planting and close-out — to {edit.supplier.trim() || '?'} · {edit.variety.trim() || '?'}
+            </label>
+          )}
           <div className="agronomy-filter-bar" style={{ marginTop: 10 }}>
             <button className="save" disabled={!edit.supplier.trim() || !edit.variety.trim()} onClick={saveC}>Save</button>
             <button onClick={() => setEdit(null)}>Cancel</button>
@@ -78,25 +112,38 @@ export function SeedContracts({ ctx }) {
       )}
       <div className="table-scroll">
         <table className="contracts-table contracts-table-auto">
-          <thead><tr><th>Supplier</th><th>Variety</th><th>Lots</th><th>Gen</th><th className="num">Contracted</th><th className="num">Picked up</th><th className="num">Remaining</th><th className="num">$/cwt</th><th>Notes</th><th /></tr></thead>
+          <thead><tr><th>Supplier</th><th>Variety</th><th>Lots</th><th>Gen</th><th className="num">Contracted</th><th className="num">Rate (cwt/ac)</th><th className="num">≈ Acres</th><th className="num">Picked up</th><th className="num">Remaining</th><th className="num">$/cwt</th><th>Notes</th><th /></tr></thead>
           <tbody>
             {sorted.map((c) => {
               const r = rowsById[c.id] || {}
               return (
                 <tr key={c.id}>
                   <td><strong>{c.supplier}</strong></td><td>{c.variety}</td><td className="contracts-sub">{(c.lots || []).join(', ')}</td><td>{c.generation || ''}</td>
-                  <td className="num">{fmtCwt(c.contractedCwt)}</td><td className="num">{fmtCwt(r.picked)}</td><td className="num">{fmtCwt(r.remaining)}</td>
+                  <td className="num">{fmtCwt(c.contractedCwt)}</td>
+                  <td className="num">{r.rate != null ? fmtCwt(r.rate, 1) : <span className="contracts-sub">—</span>}</td>
+                  <td className="num">{r.acres != null ? <strong>{fmtCwt(r.acres)}</strong> : ''}</td>
+                  <td className="num">{fmtCwt(r.picked)}{r.pickedAcres > 0 ? <div className="contracts-sub" style={{ marginTop: 0 }}>≈ {fmtCwt(r.pickedAcres)} ac</div> : null}</td>
+                  <td className="num">{fmtCwt(r.remaining)}</td>
                   <td className="num">{c.pricePerCwt != null ? `$${c.pricePerCwt}` : ''}</td><td className="contracts-sub">{c.notes || ''}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    <button className="clear-sort-btn" onClick={() => setEdit({ ...BLANK, ...c, lots: (c.lots || []).join(', '), contractedCwt: String(c.contractedCwt ?? ''), pricePerCwt: c.pricePerCwt ?? '', generation: c.generation || '', notes: c.notes || '' })}>Edit</button>{' '}
-                    <button className="clear-sort-btn" disabled={r.loads > 0} title={r.loads ? 'Has pickup tickets' : ''} onClick={() => { if (window.confirm(`Delete the ${c.supplier} ${c.variety} contract?`)) run(() => deleteDoc(doc(db, 'seedContracts', c.id))) }}>Delete</button>
+                    <button className="clear-sort-btn" onClick={() => setEdit({ ...BLANK, ...c, lots: (c.lots || []).join(', '), contractedCwt: String(c.contractedCwt ?? ''), seedingRate: c.seedingRate != null ? String(c.seedingRate) : '', pricePerCwt: c.pricePerCwt ?? '', generation: c.generation || '', notes: c.notes || '', carry: true })}>Edit</button>{' '}
+                    <button className="clear-sort-btn" disabled={r.loads > 0} title={r.loads ? 'Has pickup tickets — move or delete them on the Tickets tab first' : ''} onClick={() => { if (window.confirm(`Delete the ${c.supplier} ${c.variety} contract?`)) run(() => deleteDoc(doc(db, 'seedContracts', c.id))) }}>Delete</button>
                   </td>
                 </tr>
               )
             })}
-            {!sorted.length && <tr><td colSpan={10} className="contracts-sub">No contracts for this crop year yet.</td></tr>}
+            {!sorted.length && <tr><td colSpan={12} className="contracts-sub">No contracts for this crop year yet.</td></tr>}
           </tbody>
-          {sorted.length > 0 && <tfoot><tr><td colSpan={4}><strong>Total</strong></td><td className="num"><strong>{fmtCwt(ctx.seed.totals.contracted)}</strong></td><td className="num"><strong>{fmtCwt(ctx.seed.totals.picked)}</strong></td><td colSpan={4} /></tr></tfoot>}
+          {sorted.length > 0 && (
+            <tfoot><tr>
+              <td colSpan={4}><strong>Total</strong>{ctx.seed.totals.contractsWithoutRate > 0 && <div className="contracts-sub" style={{ marginTop: 0 }}>{ctx.seed.totals.contractsWithoutRate} contract{ctx.seed.totals.contractsWithoutRate === 1 ? '' : 's'} with no seeding rate left out of acres</div>}</td>
+              <td className="num"><strong>{fmtCwt(ctx.seed.totals.contracted)}</strong></td>
+              <td className="num">{ctx.seed.totals.acres > 0 ? fmtCwt(ctx.seed.totals.contracted / ctx.seed.totals.acres, 1) : ''}</td>
+              <td className="num"><strong>{fmtCwt(ctx.seed.totals.acres)}</strong></td>
+              <td className="num"><strong>{fmtCwt(ctx.seed.totals.picked)}</strong>{ctx.seed.totals.pickedAcres > 0 ? <div className="contracts-sub" style={{ marginTop: 0 }}>≈ {fmtCwt(ctx.seed.totals.pickedAcres)} ac</div> : null}</td>
+              <td colSpan={4} />
+            </tr></tfoot>
+          )}
         </table>
       </div>
     </div>

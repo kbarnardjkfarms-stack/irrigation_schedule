@@ -129,15 +129,22 @@ export function computeSeed({ contracts = [], tickets = [], closes = [], now = D
     const picked = mine.reduce((s, t) => s + (t.cwt || 0), 0)
     const transit = mine.filter((t) => t.status !== 'unloaded').reduce((s, t) => s + (t.cwt || 0), 0)
     const target = Number(c.contractedCwt) || 0
-    return { ...c, picked, transit, loads: mine.length, remaining: target - picked, pct: target > 0 ? picked / target : null }
+    // Seeding rate (cwt/ac) turns seed into the acres it will plant.
+    const rate = Number(c.seedingRate) > 0 ? Number(c.seedingRate) : null
+    const ac = (cwt) => (rate ? cwt / rate : null)
+    return {
+      ...c, picked, transit, loads: mine.length, remaining: target - picked, pct: target > 0 ? picked / target : null,
+      rate, acres: ac(target), pickedAcres: ac(picked), remainingAcres: ac(Math.max(0, target - picked))
+    }
   })
   const byVariety = {}
   contractRows.forEach((c) => {
-    const v = (byVariety[c.variety] = byVariety[c.variety] || { variety: c.variety, contracted: 0, picked: 0, planted: 0 })
+    const v = (byVariety[c.variety] = byVariety[c.variety] || { variety: c.variety, contracted: 0, picked: 0, planted: 0, acres: 0, acresKnown: true })
     v.contracted += Number(c.contractedCwt) || 0; v.picked += c.picked
+    if (c.acres != null) v.acres += c.acres; else if (Number(c.contractedCwt) > 0) v.acresKnown = false
   })
   pickups.filter((t) => !t.contractId).forEach((t) => {
-    const v = (byVariety[t.variety] = byVariety[t.variety] || { variety: t.variety, contracted: 0, picked: 0, planted: 0 })
+    const v = (byVariety[t.variety] = byVariety[t.variety] || { variety: t.variety, contracted: 0, picked: 0, planted: 0, acres: 0, acresKnown: true })
     v.picked += t.cwt || 0
   })
   lotList.forEach((L) => { if (byVariety[L.variety]) byVariety[L.variety].planted += L.planted })
@@ -152,6 +159,9 @@ export function computeSeed({ contracts = [], tickets = [], closes = [], now = D
     contractRows, byVariety: Object.values(byVariety).sort((a, b) => String(a.variety).localeCompare(String(b.variety))),
     totals: {
       contracted: contractRows.reduce((s, c) => s + (Number(c.contractedCwt) || 0), 0),
+      acres: contractRows.reduce((s, c) => s + (c.acres || 0), 0),
+      pickedAcres: contractRows.reduce((s, c) => s + (c.pickedAcres || 0), 0),
+      contractsWithoutRate: contractRows.filter((c) => c.rate == null && Number(c.contractedCwt) > 0).length,
       picked: pickups.reduce((s, t) => s + (t.cwt || 0), 0),
       cut: cuts.reduce((s, t) => s + (t.cwt || 0), 0),
       planted: lotList.reduce((s, L) => s + L.planted, 0),
