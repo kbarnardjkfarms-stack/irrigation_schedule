@@ -140,6 +140,15 @@ service cloud.firestore {
       allow read: if signedIn() && hasModule('irrigation');
       allow write: if false;
     }
+    // Weekly pivot run-time log (wet / dry / no-signal hours per pivot per
+    // week), written every 10 minutes by the pivot watcher with an Admin key.
+    // Feeds the Applied inches column; the app only reads it. The helper
+    // collection pivotWetLogState (the watcher's own bookkeeping) has no rule,
+    // so it stays closed to the app.
+    match /pivotWetLog/{recordId} {
+      allow read: if signedIn() && hasModule('irrigation');
+      allow write: if false;
+    }
     // Soil/petiole/nematode/compost sample data, synced hourly from
     // Stukenholtz by a Cloud Function using an Admin key (bypasses these
     // rules for writes). Read access is scoped to canViewAgronomy(),
