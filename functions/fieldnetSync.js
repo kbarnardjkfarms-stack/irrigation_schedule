@@ -1,4 +1,4 @@
-// FieldNET (Lindsay) pivot reader, version 3 (Nov 2026)
+// FieldNET (Lindsay) pivot reader, version 3.4 (Nov 2026)
 //
 // Every 10 minutes this signs in to the FieldNET API, reads every pivot
 // registered in AIO with statusSource 'fieldnet', and writes it into
@@ -82,6 +82,7 @@ const OFFLINE_RUNNING_HOLD_HOURS = 6;
 const ANGLE_IS_LIVE = false; // set to true only after the freshness test proves it
 const FARM_TIME_ZONE = 'America/Boise';
 const PSI_PER_BAR = 14.5038;
+const FEET_PER_METER = 3.28084;
 
 // ---- pure helpers (tested on their own) ----------------------------------
 
@@ -97,6 +98,12 @@ function formatFarmLocal(date) {
 
 const numOrNull = (v) => (v === null || v === undefined || v === '' || isNaN(Number(v)) ? null : Number(v));
 const round1 = (n) => Math.round(n * 10) / 10;
+
+// Meters -> whole feet. Uses the wet length, else the dry length, else null.
+function lengthFeet(wetM, dryM) {
+  const m = numOrNull(wetM) > 0 ? numOrNull(wetM) : (numOrNull(dryM) > 0 ? numOrNull(dryM) : null);
+  return m == null ? null : Math.round(m * FEET_PER_METER);
+}
 
 // One controller from /irrigation-controllers -> the few values we use.
 function readController(c) {
@@ -129,6 +136,10 @@ function readController(c) {
     // No voltage reading = the panel is not sending analog data; do not show a pressure.
     pressurePsi: bar == null || voltage == null ? null : Math.round(bar * PSI_PER_BAR),
     flow: numOrNull(c.flow),
+    // Pivot length. FieldNET gives meters. system_length_wet (the radius the
+    // water reaches, 1314 ft on 11-A) is the one that matches the app; the
+    // plain system_length is the shorter dry length.
+    lengthFt: lengthFeet(c.system_length_wet, c.system_length),
     startAngle: numOrNull(c.partial_start_angle),
     endAngle: numOrNull(c.partial_end_angle),
     circleHours: runFull != null && speed ? round1(runFull / speed / 3600) : null,
@@ -254,6 +265,7 @@ async function syncFieldnetOnce(clientId, clientSecret, now = new Date()) {
         fieldnetVoltage: r.voltage,
         fieldnetPressureBar: r.pressureBar,
         fieldnetFlow: r.flow,
+        fieldnetLengthFt: r.lengthFt,
         fieldnetCircleHours: r.circleHours,
         fieldnetNextStopHours: r.nextStopHours,
         fieldnetDepthIn: r.depthIn,
@@ -272,6 +284,18 @@ async function syncFieldnetOnce(clientId, clientSecret, now = new Date()) {
       if (angleChanged || !pivot.fieldnetAngleChangedAt) record.fieldnetAngleChangedAt = now.toISOString();
       await doc.ref.set(record, { merge: true });
       written++;
+
+      // Pivot length goes on the pivot's profile as machineLengthFt (feet),
+      // the same field the BaseStation pivots use, so the Pivot Profile page
+      // can work out the circle acres. Written only when FieldNET's number
+      // changes (or the profile never got it).
+      if (r.lengthFt && (pivot.fieldnetLengthFt !== r.lengthFt || pivot.fieldnetLengthSaved !== true)) {
+        await db.collection('pivotProfiles').doc(doc.id).set({
+          machineLengthFt: r.lengthFt,
+          machineLengthSource: 'fieldnet'
+        }, { merge: true });
+        await doc.ref.set({ fieldnetLengthSaved: true }, { merge: true });
+      }
 
       // One row each time FieldNET's data for this pivot changed (see header).
       if (dataChanged) {
