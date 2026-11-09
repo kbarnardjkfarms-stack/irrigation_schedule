@@ -633,7 +633,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
           )}
         </div>
         <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>
-          {brand}'s pivot length does not include a corner machine. Corner acres are the AgWorld total minus the acres under the pivot.
+          {brand}'s pivot length is the main pivot only, not a corner machine or end guns. The acres beyond the pivot are the AgWorld total minus the acres under the pivot.
         </div>
       </Section>
 
