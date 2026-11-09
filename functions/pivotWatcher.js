@@ -193,7 +193,11 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
 
     // ---- Stuck-pivot check (running wet only) --------------------------
     const isRunningWet = pivot.systemStatus === 'Running' && pivot.waterMode !== 'Dry';
-    const position = Number(pivot.currentPosition);
+    // FieldNET pivots saved with skipStuckCheck: true have an arm angle that is
+    // only as fresh as FieldNET's last report, so a frozen angle must not be
+    // read as a stuck pivot. No usable position means no stuck check and no
+    // lap-time audit for that pivot (and any old stuck flag is cleared).
+    const position = pivot.skipStuckCheck === true ? NaN : Number(pivot.currentPosition);
     const stuckThreshold = Math.max(MIN_STUCK_THRESHOLD_MINUTES, profile.stuckAlertThresholdMinutes || DEFAULT_STUCK_THRESHOLD_MINUTES);
 
     if (!isRunningWet || isNaN(position)) {
