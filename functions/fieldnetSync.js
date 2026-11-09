@@ -1,30 +1,45 @@
-// FieldNET (Lindsay) pivot reader (Nov 2026)
+// FieldNET (Lindsay) pivot reader, version 3 (Nov 2026)
 //
-// Every 10 minutes this signs in to the FieldNET API, reads the status of
-// every pivot registered in AIO with statusSource 'fieldnet', and writes it
-// into pivots/{FieldNET id} in the SAME shape the BaseStation3 sync uses
-// (systemStatus, waterMode, percentTimer, currentPosition, statusDate,
-// updatedAt). That is all pivotWatcher needs, so stuck-pivot alerts, the
-// lap-time audit and wet/dry hours work for FieldNET pivots with no changes.
+// Every 10 minutes this signs in to the FieldNET API, reads every pivot
+// registered in AIO with statusSource 'fieldnet', and writes it into
+// pivots/{FieldNET id} in the SAME shape the BaseStation3 sync uses
+// (systemStatus, waterMode, direction, percentTimer, currentPosition,
+// pressure, forwardAngle/reverseAngle, statusDate, updatedAt). That is all the
+// pivot icon, the detail panel and pivotWatcher need.
 //
-// What FieldNET gives us per pivot: last_updated (time of its last report),
-// speed (a 0..1 share, same idea as the percent timer; 0 = not moving),
-// is_water_on, and the arm as a line (pivot point, then the end of the arm).
-// It does NOT give us wiper limits, a trustworthy direction or pressure, so
-// those are left empty.
+// Data source: FieldNET's /irrigation-controllers list. (The older
+// /irrigation-systems list only had a last-change time, speed and a map line.
+// The controllers list has the exact status, direction, arm angle, pressure,
+// volts, wiper limits, circle time and running-time counters.)
 //
-// IMPORTANT: a FieldNET pivot only reports when something happens, not on a
-// steady heartbeat (in early November, 46 of 120 pivots had not reported in
-// over a week). So an old report does not mean a dead pivot. Rules below:
-//   report 3 hours old or newer     -> Running (speed above 0) or Stopped
-//   older, and it was stopped/dry   -> Stopped (idle pivots stay quiet)
-//   older, and it was moving or wet -> No signal (we do not know)
-//   older than 7 days               -> No signal
-// "No signal" is never counted as wet or dry time by pivotWatcher.
+// What the controllers list tells us, and how we use it:
+//   operational_status   forward-wet / reverse-wet  -> Running, Wet
+//                        forward / reverse          -> Running, Dry
+//                        anything else (stopped, service-stop, low-pressure-
+//                        shutdown, auto-stop-at-barrier, powered-off ...) -> Stopped
+//                        (the exact word is kept in fieldnetStatus)
+//   communication_status "offline" or status "not-connected" -> No signal
+//                        (we do not know, so no wet/dry time is counted)
+//   direction            forward / reverse (kept as 'Forward' / 'Reverse' while
+//                        running; a stopped pivot keeps its last direction)
+//   pivot_angle          arm angle in degrees -> currentPosition
+//   pressure             comes in BAR; stored as PSI (bar x 14.5038). Pivots
+//                        with no voltage reading have no pressure sensor data,
+//                        so their pressure is left empty.
+//   partial_start_angle / partial_end_angle -> reverseAngle / forwardAngle
+//                        (wiper limits; 0 and 0 means a full circle)
+//
+// "Running" older than RUNNING_HOLD_HOURS (72 h) with no new report is shown as
+// No signal: FieldNET sometimes misses a stop report (20-C Mini showed
+// "running" since April). No signal is never counted as wet or dry time.
+//
+// The stuck-pivot alert depends on how fresh the arm angle is. If the angle
+// only refreshes when FieldNET gets a report, a running pivot would look
+// frozen. ANGLE_IS_LIVE says whether we trust it. While it is false, each
+// pivot is saved with skipStuckCheck: true and pivotWatcher leaves it alone.
 //
 // Every NEW report (a changed last_updated) is also saved once in
-// fieldnetReadings, so we can see how often pivots report and later add up
-// wet time from FieldNET's own timestamps.
+// fieldnetReadings, with the counters, so we can add up wet time later.
 //
 // The sign-in ID and secret are Firebase secrets, set once with:
 //   firebase functions:secrets:set FIELDNET_CLIENT_ID
@@ -41,24 +56,12 @@ const FIELDNET_CLIENT_ID = defineSecret('FIELDNET_CLIENT_ID');
 const FIELDNET_CLIENT_SECRET = defineSecret('FIELDNET_CLIENT_SECRET');
 
 const FIELDNET_BASE = process.env.FIELDNET_BASE || 'https://v2.api.myfieldnet.com';
-const FRESH_HOURS = 3;
-const IDLE_MAX_DAYS = 7;
+const RUNNING_HOLD_HOURS = 72;
+const ANGLE_IS_LIVE = false; // set to true only after the freshness test proves it
 const FARM_TIME_ZONE = 'America/Boise';
+const PSI_PER_BAR = 14.5038;
 
 // ---- pure helpers (tested on their own) ----------------------------------
-
-// Compass bearing in degrees (0 = north, clockwise) from point A to point B,
-// each as [lng, lat]. Null when the two points are the same.
-function bearingDegrees(a, b) {
-  if (!a || !b) return null;
-  const rad = Math.PI / 180;
-  const dLng = (b[0] - a[0]) * rad;
-  const lat1 = a[1] * rad, lat2 = b[1] * rad;
-  const y = Math.sin(dLng) * Math.cos(lat2);
-  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
-  if (Math.abs(x) < 1e-12 && Math.abs(y) < 1e-12) return null;
-  return (Math.atan2(y, x) / rad + 360) % 360;
-}
 
 // "MM/DD/YYYY hh:mm:ss AM", farm-local, like the text BaseStation3 sends.
 function formatFarmLocal(date) {
@@ -70,32 +73,67 @@ function formatFarmLocal(date) {
   return `${parts.month}/${parts.day}/${parts.year} ${parts.hour}:${parts.minute}:${parts.second} ${String(parts.dayPeriod).toUpperCase()}`;
 }
 
-// One FieldNET feature -> the few values we use.
-function readFeature(f) {
-  const p = (f && f.properties) || {};
-  const c = (f && f.geometry && Array.isArray(f.geometry.coordinates)) ? f.geometry.coordinates : [];
-  const first = c[0] || null;
-  const last = c.length > 1 ? c[c.length - 1] : null;
-  const when = p.last_updated ? new Date(p.last_updated) : null;
-  const speed = Number(p.speed);
+const numOrNull = (v) => (v === null || v === undefined || v === '' || isNaN(Number(v)) ? null : Number(v));
+const round1 = (n) => Math.round(n * 10) / 10;
+
+// One controller from /irrigation-controllers -> the few values we use.
+function readController(c) {
+  const when = c.last_updated ? new Date(c.last_updated) : null;
+  const status = typeof c.operational_status === 'string' ? c.operational_status : '';
+  const dir = typeof c.direction === 'string' ? c.direction.toLowerCase() : '';
+  const voltage = numOrNull(c.voltage);
+  const bar = numOrNull(c.pressure);
+  const speed = numOrNull(c.speed);
+  const angle = numOrNull(c.pivot_angle);
+  const depthMm = numOrNull(c.application_depth);
+  const runFull = numOrNull(c.run_time_100_percent);
+  const nextStop = numOrNull(c.next_pivot_stop_time);
   return {
-    id: f.id,
-    name: typeof p.name === 'string' ? p.name.trim() : '',
+    id: c.id,
+    name: typeof c.name === 'string' ? c.name.trim() : '',
     lastUpdated: when && !isNaN(when.getTime()) ? when : null,
-    speed: isNaN(speed) ? 0 : speed,
-    waterOn: p.is_water_on === true,
-    position: bearingDegrees(first, last)
+    status,
+    running: /^(forward|reverse)(-wet)?$/.test(status),
+    wet: /-wet$/.test(status),
+    offline: c.communication_status === 'offline' || status === 'not-connected',
+    direction: dir === 'forward' ? 'Forward' : dir === 'reverse' ? 'Reverse' : null,
+    angle,
+    waterOn: c.is_water_on === true,
+    speed: speed == null ? 0 : speed,
+    voltage,
+    pressureBar: bar,
+    // No voltage reading = the panel is not sending analog data; do not show a pressure.
+    pressurePsi: bar == null || voltage == null ? null : Math.round(bar * PSI_PER_BAR),
+    flow: numOrNull(c.flow),
+    startAngle: numOrNull(c.partial_start_angle),
+    endAngle: numOrNull(c.partial_end_angle),
+    circleHours: runFull != null && speed ? round1(runFull / speed / 3600) : null,
+    nextStopHours: nextStop == null ? null : round1(nextStop / 3600),
+    depthIn: depthMm == null ? null : Math.round(depthMm / 25.4 * 100) / 100,
+    plan: typeof c.plan === 'string' ? c.plan : null,
+    endgun1On: c.is_endgun_1_on === true,
+    endgun2On: c.is_endgun_2_on === true,
+    counters: {
+      total: numOrNull(c.total_runtime),
+      irrigator: numOrNull(c.irrigator_runtime),
+      pump: numOrNull(c.pump_runtime),
+      endgun1: numOrNull(c.endgun1_runtime),
+      endgun2: numOrNull(c.endgun2_runtime),
+      chemigation: numOrNull(c.chemigation_runtime)
+    }
   };
 }
 
 // The status AIO should show for this reading right now.
-function classify(reading, now) {
-  if (!reading.lastUpdated) return { systemStatus: 'No signal', fresh: false };
-  const ageHours = (now.getTime() - reading.lastUpdated.getTime()) / 3600000;
-  const moving = reading.speed > 0;
-  if (ageHours <= FRESH_HOURS) return { systemStatus: moving ? 'Running' : 'Stopped', fresh: true };
-  if (ageHours > IDLE_MAX_DAYS * 24) return { systemStatus: 'No signal', fresh: false };
-  return { systemStatus: moving || reading.waterOn ? 'No signal' : 'Stopped', fresh: false };
+function classify(r, now) {
+  if (r.offline) return { systemStatus: 'No signal', fresh: false };
+  if (r.running) {
+    if (!r.lastUpdated) return { systemStatus: 'No signal', fresh: false };
+    const ageHours = (now.getTime() - r.lastUpdated.getTime()) / 3600000;
+    if (ageHours > RUNNING_HOLD_HOURS) return { systemStatus: 'No signal', fresh: false };
+    return { systemStatus: 'Running', fresh: true };
+  }
+  return { systemStatus: 'Stopped', fresh: true };
 }
 
 // ---- FieldNET API ----------------------------------------------------------
@@ -113,17 +151,17 @@ async function signIn(clientId, clientSecret) {
   return token;
 }
 
-async function readAllSystems(token) {
+async function readAllControllers(token) {
   const out = [];
   for (let page = 1; page <= 20; page++) {
-    const res = await fetch(`${FIELDNET_BASE}/irrigation-systems?page=${page}&page-size=100`, {
+    const res = await fetch(`${FIELDNET_BASE}/irrigation-controllers?page=${page}&page-size=100`, {
       headers: { Accept: 'application/json', Authorization: `Bearer ${token}` }
     });
-    if (!res.ok) throw new Error(`FieldNET irrigation-systems failed: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`FieldNET irrigation-controllers failed: HTTP ${res.status}`);
     const body = await res.json();
-    const feats = Array.isArray(body.features) ? body.features : [];
-    out.push(...feats);
-    if (feats.length < 100) break;
+    const items = Array.isArray(body) ? body : (Array.isArray(body.items) ? body.items : []);
+    out.push(...items);
+    if (items.length < 100) break;
   }
   return out;
 }
@@ -137,16 +175,16 @@ async function syncFieldnetOnce(clientId, clientSecret, now = new Date()) {
 
   const token = await signIn(clientId, clientSecret);
   const byId = {};
-  (await readAllSystems(token)).forEach((f) => { if (f && f.id) byId[f.id] = readFeature(f); });
+  (await readAllControllers(token)).forEach((c) => { if (c && c.id) byId[c.id] = readController(c); });
 
   let written = 0, newReadings = 0, missing = 0;
   for (const doc of regSnap.docs) {
     const pivot = doc.data();
     const fnId = pivot.fieldnetId || doc.id;
-    const reading = byId[fnId];
+    const r = byId[fnId];
     const previousReport = pivot.fieldnetLastUpdated || null;
     try {
-      if (!reading) {
+      if (!r) {
         // FieldNET no longer lists this pivot: say so, keep everything else.
         missing++;
         await doc.ref.set({
@@ -155,27 +193,44 @@ async function syncFieldnetOnce(clientId, clientSecret, now = new Date()) {
         }, { merge: true });
         continue;
       }
-      const { systemStatus, fresh } = classify(reading, now);
-      const lastIso = reading.lastUpdated ? reading.lastUpdated.toISOString() : null;
+      const { systemStatus, fresh } = classify(r, now);
+      const lastIso = r.lastUpdated ? r.lastUpdated.toISOString() : null;
+      const isRunning = systemStatus === 'Running';
       const record = {
         guid: doc.id,
-        name: reading.name || pivot.name || null,
+        name: r.name || pivot.name || null,
         farmId: pivot.farmId ?? null,
         rtuId: pivot.rtuId ?? null,
         deviceKind: 'FieldNET',
         systemStatus,
         signalStale: !fresh && systemStatus === 'No signal',
-        waterMode: reading.waterOn ? 'Wet' : 'Dry',
-        direction: null,
-        currentPosition: reading.position == null ? null : (Math.round(reading.position * 10) / 10).toFixed(1),
-        percentTimer: (Math.round(reading.speed * 1000) / 10).toFixed(1),
-        pressure: null,
-        statusDate: reading.lastUpdated ? formatFarmLocal(reading.lastUpdated) : null,
+        waterMode: isRunning ? (r.wet ? 'Wet' : 'Dry') : (r.waterOn ? 'Wet' : 'Dry'),
+        currentPosition: r.angle == null ? null : round1(r.angle).toFixed(1),
+        percentTimer: round1(r.speed * 100).toFixed(1),
+        pressure: r.pressurePsi == null ? null : String(r.pressurePsi),
+        reverseAngle: r.startAngle,
+        forwardAngle: r.endAngle,
+        skipStuckCheck: !ANGLE_IS_LIVE,
+        statusDate: r.lastUpdated ? formatFarmLocal(r.lastUpdated) : null,
         fieldnetLastUpdated: lastIso,
-        fieldnetSpeed: reading.speed,
-        fieldnetWaterOn: reading.waterOn,
+        fieldnetStatus: r.status || null,
+        fieldnetComm: r.offline ? 'offline' : 'online',
+        fieldnetAngle: r.angle,
+        fieldnetVoltage: r.voltage,
+        fieldnetPressureBar: r.pressureBar,
+        fieldnetFlow: r.flow,
+        fieldnetCircleHours: r.circleHours,
+        fieldnetNextStopHours: r.nextStopHours,
+        fieldnetDepthIn: r.depthIn,
+        fieldnetPlan: r.plan,
+        fieldnetEndgun1On: r.endgun1On,
+        fieldnetEndgun2On: r.endgun2On,
+        fieldnetCounters: r.counters,
+        fieldnetCheckedAt: now.toISOString(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       };
+      // A stopped pivot keeps the direction it last ran in (for the icon).
+      if (isRunning && r.direction) record.direction = r.direction;
       await doc.ref.set(record, { merge: true });
       written++;
 
@@ -185,10 +240,13 @@ async function syncFieldnetOnce(clientId, clientSecret, now = new Date()) {
         await db.collection('fieldnetReadings').doc(`${doc.id}_${lastIso}`).set({
           pivotGuid: doc.id,
           name: record.name,
-          reportedAt: admin.firestore.Timestamp.fromDate(reading.lastUpdated),
-          speed: reading.speed,
-          waterOn: reading.waterOn,
-          position: record.currentPosition,
+          reportedAt: admin.firestore.Timestamp.fromDate(r.lastUpdated),
+          status: r.status || null,
+          direction: r.direction,
+          waterOn: r.waterOn,
+          angle: r.angle,
+          pressureBar: r.pressureBar,
+          counters: r.counters,
           recordedAt: admin.firestore.FieldValue.serverTimestamp()
         });
         newReadings++;
@@ -219,4 +277,4 @@ exports.syncFieldnetPivots = onSchedule(
 );
 
 // Exported for tests only.
-exports._test = { bearingDegrees, formatFarmLocal, readFeature, classify, syncFieldnetOnce };
+exports._test = { formatFarmLocal, readController, classify, syncFieldnetOnce };
