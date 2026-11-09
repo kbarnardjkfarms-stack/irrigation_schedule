@@ -41,6 +41,12 @@
 // Every NEW report (a changed last_updated) is also saved once in
 // fieldnetReadings, with the counters, so we can add up wet time later.
 //
+// FieldNET refreshes the arm angle, pressure and counters at irregular times
+// (about hourly, per the first test), not on every 10-minute check. So every
+// time any of them CHANGES, one row is saved in fieldnetSamples with the time
+// we noticed. That log shows how often each pivot's data really refreshes, and
+// fieldnetAngleChangedAt on the pivot says how old its angle is.
+//
 // The sign-in ID and secret are Firebase secrets, set once with:
 //   firebase functions:secrets:set FIELDNET_CLIENT_ID
 //   firebase functions:secrets:set FIELDNET_CLIENT_SECRET
@@ -124,6 +130,12 @@ function readController(c) {
   };
 }
 
+// What counts as "FieldNET sent us something new". Pressure only counts while
+// the pivot is running (a stopped pivot's pressure just flickers).
+function fingerprint(r) {
+  return JSON.stringify([r.status, r.angle, r.running ? r.pressureBar : null, r.voltage, r.counters, r.lastUpdated ? r.lastUpdated.toISOString() : null]);
+}
+
 // The status AIO should show for this reading right now.
 function classify(r, now) {
   if (r.offline) return { systemStatus: 'No signal', fresh: false };
@@ -171,13 +183,13 @@ async function readAllControllers(token) {
 async function syncFieldnetOnce(clientId, clientSecret, now = new Date()) {
   const db = admin.firestore();
   const regSnap = await db.collection('pivots').where('statusSource', '==', 'fieldnet').get();
-  if (regSnap.empty) return { registered: 0, written: 0, newReadings: 0, missing: 0 };
+  if (regSnap.empty) return { registered: 0, written: 0, newReadings: 0, newSamples: 0, missing: 0 };
 
   const token = await signIn(clientId, clientSecret);
   const byId = {};
   (await readAllControllers(token)).forEach((c) => { if (c && c.id) byId[c.id] = readController(c); });
 
-  let written = 0, newReadings = 0, missing = 0;
+  let written = 0, newReadings = 0, newSamples = 0, missing = 0;
   for (const doc of regSnap.docs) {
     const pivot = doc.data();
     const fnId = pivot.fieldnetId || doc.id;
@@ -196,6 +208,9 @@ async function syncFieldnetOnce(clientId, clientSecret, now = new Date()) {
       const { systemStatus, fresh } = classify(r, now);
       const lastIso = r.lastUpdated ? r.lastUpdated.toISOString() : null;
       const isRunning = systemStatus === 'Running';
+      const fp = fingerprint(r);
+      const dataChanged = fp !== (pivot.fieldnetFingerprint || null);
+      const angleChanged = r.angle !== (pivot.fieldnetAngle === undefined ? null : pivot.fieldnetAngle);
       const record = {
         guid: doc.id,
         name: r.name || pivot.name || null,
@@ -227,12 +242,33 @@ async function syncFieldnetOnce(clientId, clientSecret, now = new Date()) {
         fieldnetEndgun2On: r.endgun2On,
         fieldnetCounters: r.counters,
         fieldnetCheckedAt: now.toISOString(),
+        fieldnetFingerprint: fp,
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       };
       // A stopped pivot keeps the direction it last ran in (for the icon).
       if (isRunning && r.direction) record.direction = r.direction;
+      // When did we last SEE a new angle? (The angle is only as fresh as this.)
+      if (angleChanged || !pivot.fieldnetAngleChangedAt) record.fieldnetAngleChangedAt = now.toISOString();
       await doc.ref.set(record, { merge: true });
       written++;
+
+      // One row each time FieldNET's data for this pivot changed (see header).
+      if (dataChanged) {
+        await db.collection('fieldnetSamples').doc(`${doc.id}_${now.toISOString()}`).set({
+          pivotGuid: doc.id,
+          name: record.name,
+          seenAt: admin.firestore.Timestamp.fromDate(now),
+          status: r.status || null,
+          angle: r.angle,
+          angleChanged,
+          pressureBar: r.pressureBar,
+          voltage: r.voltage,
+          waterOn: r.waterOn,
+          counters: r.counters,
+          lastUpdated: lastIso
+        });
+        newSamples++;
+      }
 
       // Keep one copy of every NEW report (so we learn how often pivots
       // report, and can add up wet time from FieldNET's own times later).
@@ -255,7 +291,7 @@ async function syncFieldnetOnce(clientId, clientSecret, now = new Date()) {
       console.error(`FieldNET write failed for ${pivot.name || doc.id}:`, err.message);
     }
   }
-  return { registered: regSnap.size, written, newReadings, missing };
+  return { registered: regSnap.size, written, newReadings, newSamples, missing };
 }
 
 exports.syncFieldnetPivots = onSchedule(
@@ -269,7 +305,7 @@ exports.syncFieldnetPivots = onSchedule(
   async () => {
     try {
       const r = await syncFieldnetOnce(FIELDNET_CLIENT_ID.value(), FIELDNET_CLIENT_SECRET.value());
-      console.log(`FieldNET sync: ${r.registered} registered, ${r.written} written, ${r.newReadings} new reports, ${r.missing} not found in FieldNET.`);
+      console.log(`FieldNET sync: ${r.registered} registered, ${r.written} written, ${r.newReadings} new reports, ${r.newSamples} data changes, ${r.missing} not found in FieldNET.`);
     } catch (err) {
       console.error('FieldNET sync failed:', err.message);
     }
