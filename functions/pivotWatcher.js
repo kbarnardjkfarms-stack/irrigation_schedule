@@ -9,6 +9,7 @@ const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onRequest } = require('firebase-functions/v2/https');
 const { defineSecret } = require('firebase-functions/params');
 const admin = require('firebase-admin');
+const { updateWeeklyLog } = require('./pivotWetLog');
 
 // ---- Stuck-pivot watcher -----------------------------------------------
 // Runs every 10 minutes. Catches the "last tower gets stuck while running
@@ -168,6 +169,22 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
     Object.entries(fieldIdsByPivotGuid).forEach(([guid, fieldIds]) => {
       acresByPivotGuid[guid] = fieldIds.reduce((sum, fid) => sum + (acresByFieldId[fid] || 0), 0);
     });
+  }
+
+  // Weekly wet-time log (pivotWetLog.js): one running record per pivot per
+  // week, for every brand. A failure here must never stop the stuck-pivot
+  // checks below.
+  try {
+    const wl = await updateWeeklyLog({
+      db,
+      FieldValue: admin.firestore.FieldValue,
+      pivotDocs: pivotsSnap.docs,
+      mappedGuids: new Set(Object.keys(fieldIdsByPivotGuid)),
+      now
+    });
+    console.log(`Weekly wet-time log: ${wl.logged} weekly record(s) updated, ${wl.started} pivot(s) just started being tracked.`);
+  } catch (err) {
+    console.error('Weekly wet-time log failed:', err);
   }
 
   let checked = 0, flagged = 0, texted = 0, auditsUpdated = 0;
