@@ -329,6 +329,11 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   // Heading: the AgWorld field name(s) first, since that's what managers
   // know the pivot by; the BaseStation name goes small underneath.
   const baseStationName = pivot && pivot.name ? pivot.name : null
+  // Which system this pivot is read from (shown in the heading and notes).
+  // AgSense devices are read through BaseStation3 but are AgSense hardware.
+  const brand = pivot && (pivot.statusSource === 'fieldnet' || pivot.deviceKind === 'FieldNET') ? 'FieldNET'
+    : pivot && (pivot.statusSource === 'farmList' || pivot.deviceKind === 'ICON Link' || pivot.deviceKind === 'CommanderVP') ? 'AgSense'
+    : 'BaseStation'
   const headingName = fieldNames.length > 0 ? fieldNames.join(' + ') : (baseStationName || 'Pivot')
   const showBaseStationName = !!(baseStationName && fieldNames.length > 0 && !fieldNames.includes(baseStationName))
 
@@ -403,7 +408,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
         <div>
           <div style={{ fontSize: '16px', fontWeight: 600 }}>{headingName}</div>
           <div style={{ fontSize: '11px', color: '#888' }}>
-            Pivot profile{showBaseStationName ? ` · BaseStation: ${baseStationName}` : ''}
+            Pivot profile{showBaseStationName ? ` · ${brand}: ${baseStationName}` : ''}
           </div>
         </div>
       </div>
@@ -571,7 +576,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
         <div style={{ background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px' }}>
           {pivotAcres == null ? (
             <div style={{ fontSize: '11px', color: '#888' }}>
-              The pivot length from BaseStation hasn't been loaded for this pivot yet, so the acres breakdown isn't available.
+              The pivot length from {brand} hasn't been loaded for this pivot yet, so the acres breakdown isn't available.
             </div>
           ) : acres == null ? (
             <div style={{ fontSize: '11px', color: '#888' }}>Loading acres&hellip;</div>
@@ -593,7 +598,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
               </div>
               {hasCorner && cornerAcres < 0 && (
                 <div style={{ fontSize: '11px', color: '#A32D2D', marginTop: '8px' }}>
-                  The pivot alone covers more than the AgWorld total. Check the pivot length in BaseStation and the field acres in AgWorld.
+                  The pivot alone covers more than the AgWorld total. Check the pivot length in {brand} and the field acres in AgWorld.
                 </div>
               )}
               {hasCorner && cornerAcres >= 0 && cornerLengthSaved == null && (
@@ -618,7 +623,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
               )}
               {moreUnderPivot && !mismatchAckValid && (
                 <div style={{ fontSize: '11px', color: '#854F0B', marginTop: '8px' }}>
-                  The pivot circle covers {(-cornerAcres).toFixed(1)} ac more than AgWorld shows. Check the pivot length in BaseStation.
+                  The pivot circle covers {(-cornerAcres).toFixed(1)} ac more than AgWorld shows. Check the pivot length in {brand}.
                   <div style={{ marginTop: '6px' }}>
                     <button onClick={handleAckMismatch}>This is expected (unfarmed ground under the pivot)</button>
                   </div>
@@ -628,7 +633,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
           )}
         </div>
         <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>
-          BaseStation's pivot length does not include a corner machine. Corner acres are the AgWorld total minus the acres under the pivot.
+          {brand}'s pivot length does not include a corner machine. Corner acres are the AgWorld total minus the acres under the pivot.
         </div>
       </Section>
 
