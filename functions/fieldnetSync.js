@@ -18,8 +18,13 @@
 //                        anything else (stopped, service-stop, low-pressure-
 //                        shutdown, auto-stop-at-barrier, powered-off ...) -> Stopped
 //                        (the exact word is kept in fieldnetStatus)
-//   communication_status "offline" or status "not-connected" -> No signal
-//                        (we do not know, so no wet/dry time is counted)
+//   communication_status "offline" (FieldNET's last poll failed) or status
+//                        "not-connected": a pivot that was STOPPED and is
+//                        offline shows No signal (it may have started since).
+//                        A pivot that was RUNNING keeps showing Running for up
+//                        to OFFLINE_RUNNING_HOLD_HOURS (one failed poll does not
+//                        mean it stopped), then shows No signal.
+//                        No signal is never counted as wet or dry time.
 //   direction            forward / reverse (kept as 'Forward' / 'Reverse' while
 //                        running; a stopped pivot keeps its last direction)
 //   pivot_angle          arm angle in degrees -> currentPosition
@@ -63,6 +68,7 @@ const FIELDNET_CLIENT_SECRET = defineSecret('FIELDNET_CLIENT_SECRET');
 
 const FIELDNET_BASE = process.env.FIELDNET_BASE || 'https://v2.api.myfieldnet.com';
 const RUNNING_HOLD_HOURS = 72;
+const OFFLINE_RUNNING_HOLD_HOURS = 6;
 const ANGLE_IS_LIVE = false; // set to true only after the freshness test proves it
 const FARM_TIME_ZONE = 'America/Boise';
 const PSI_PER_BAR = 14.5038;
@@ -138,13 +144,15 @@ function fingerprint(r) {
 
 // The status AIO should show for this reading right now.
 function classify(r, now) {
-  if (r.offline) return { systemStatus: 'No signal', fresh: false };
+  if (r.status === 'not-connected') return { systemStatus: 'No signal', fresh: false };
   if (r.running) {
     if (!r.lastUpdated) return { systemStatus: 'No signal', fresh: false };
     const ageHours = (now.getTime() - r.lastUpdated.getTime()) / 3600000;
     if (ageHours > RUNNING_HOLD_HOURS) return { systemStatus: 'No signal', fresh: false };
+    if (r.offline && ageHours > OFFLINE_RUNNING_HOLD_HOURS) return { systemStatus: 'No signal', fresh: false };
     return { systemStatus: 'Running', fresh: true };
   }
+  if (r.offline) return { systemStatus: 'No signal', fresh: false };
   return { systemStatus: 'Stopped', fresh: true };
 }
 
@@ -245,8 +253,9 @@ async function syncFieldnetOnce(clientId, clientSecret, now = new Date()) {
         fieldnetFingerprint: fp,
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       };
-      // A stopped pivot keeps the direction it last ran in (for the icon).
-      if (isRunning && r.direction) record.direction = r.direction;
+      // FieldNET only gives a direction while the pivot is moving; a stopped
+      // pivot keeps the direction it last ran in (for the icon).
+      if (r.direction) record.direction = r.direction;
       // When did we last SEE a new angle? (The angle is only as fresh as this.)
       if (angleChanged || !pivot.fieldnetAngleChangedAt) record.fieldnetAngleChangedAt = now.toISOString();
       await doc.ref.set(record, { merge: true });
