@@ -37,6 +37,8 @@ import PivotIcon from './PivotIcon.jsx'
 import PivotDetailPanel from './PivotDetailPanel.jsx'
 
 import EtDetail from './EtDetail.jsx'
+import AppliedDetail from './AppliedDetail.jsx'
+import { computeApplied } from './appliedMath.js'
 
 import { weeklyEt, scheduledBand, scheduledShare, stationsForField, normalizeIsoDate } from './etMath.js'
 
@@ -368,6 +370,8 @@ export default function App() {
   const [etStationsByField, setEtStationsByField] = useState({})
   const [agrimetByStation, setAgrimetByStation] = useState({})
   const [etDetailFieldId, setEtDetailFieldId] = useState(null)
+  const [appliedDetailFieldId, setAppliedDetailFieldId] = useState(null)
+  const [wetLogByPivot, setWetLogByPivot] = useState({})
   const [selected, setSelected] = useState(null)
   const [editingMode, setEditingMode] = useState(null)
   const [editingHour, setEditingHour] = useState(0)
@@ -641,6 +645,7 @@ export default function App() {
 
   const weekStart = useMemo(() => addDays(mondayOf(new Date()), weekOffset * 7), [weekOffset])
   const weekId = isoDate(weekStart)
+  const currentWeekId = isoDate(mondayOf(new Date()))
 
   // NOTE: every Firestore listener below is now gated on `user` being resolved.
   // Previously these attached on mount regardless of auth state, which could race
@@ -772,6 +777,24 @@ export default function App() {
     return () => unsub()
   }, [user, irrigationAllowed])
 
+  // The weekly pivot run-time log (one record per pivot per week: wet, dry and
+  // no-signal hours), written every 10 minutes by the pivot watcher. Only the
+  // records for the week on screen are loaded. Feeds the Applied column.
+  useEffect(() => {
+    if (!user || !irrigationAllowed) return
+    setWetLogByPivot({})
+    const unsub = onSnapshot(
+      query(collection(db, 'pivotWetLog'), where('weekStart', '==', weekId)),
+      (snap) => {
+        const next = {}
+        snap.forEach((d) => { next[d.data().pivotGuid] = d.data() })
+        setWetLogByPivot(next)
+      },
+      (err) => console.warn('Could not read the weekly pivot log:', err)
+    )
+    return () => unsub()
+  }, [user, irrigationAllowed, weekId])
+
   useEffect(() => {
     if (!user || !staffReady || !selectedSeasonId) return
     const q = query(collectionGroup(db, 'seasons'), where('seasonId', '==', selectedSeasonId))
@@ -848,6 +871,24 @@ export default function App() {
     } catch (err) {
       console.warn('ET info failed for', field && field.fieldName, err)
       return { hours: 0, scheduled: null, stationInfo: null, et: null, band: 'gray', share: null }
+    }
+  }
+  // Applied inches for one field this week (see appliedMath.js). Never throws.
+  function appliedFor(field) {
+    try {
+      const pivotGuid = pivotGuidByFieldId[field.id]
+      return computeApplied({
+        pivotGuid,
+        pivot: pivotGuid ? pivotsByGuid[pivotGuid] : null,
+        profile: pivotGuid ? pivotProfilesByGuid[pivotGuid] : null,
+        field,
+        wetLog: wetLogByPivot,
+        weekId,
+        currentWeekId
+      })
+    } catch (err) {
+      console.warn('Applied inches failed for', field && field.fieldName, err)
+      return { ok: false, reason: 'error' }
     }
   }
   function computeEtInfo(field) {
@@ -1493,6 +1534,7 @@ export default function App() {
                   const pivot = pivotGuid ? pivotsByGuid[pivotGuid] : null
                   const isPivotExpanded = expandedPivotFieldId === field.id
                   const etInfo = etInfoFor(field)
+                  const applied = appliedFor(field)
 
                   function onNameClick() {
                     if (mode === 'copy-source') { setCopySourceId(field.id); setMode('copy-targets'); setCopyTargets(new Set()); return }
@@ -1572,7 +1614,9 @@ export default function App() {
                             </button>
                           )}
                         </td>
-                        <td className="inches-cell applied-cell" title="Applied inches aren't tracked yet: AIO doesn't keep pivot run history, so this shows 0.00 for now">0.00</td>
+                        <td className="inches-cell applied-cell" style={{ cursor: 'pointer', fontVariantNumeric: 'tabular-nums', color: applied.ok ? '#2b2b26' : '#999' }} onClick={() => setAppliedDetailFieldId(field.id)}>
+                          {applied.ok ? <>{applied.inches.toFixed(2)}<span className="et-mark">{applied.estimate ? '~' : ''}{applied.unknownMark ? '+?' : ''}</span></> : '—'}
+                        </td>
                         <td className="inches-cell et-cell" onClick={() => setEtDetailFieldId(field.id)}>
                           {etInfo.et ? <>{etInfo.et.inches.toFixed(2)}<span className="et-mark">{etInfo.stationInfo && etInfo.stationInfo.codes.length > 1 ? '*' : ''}{etInfo.et.approximate ? '~' : ''}</span></> : '—'}
                         </td>
@@ -1610,6 +1654,20 @@ export default function App() {
             weekStart={weekStart}
             todayIso={todayIso}
             onClose={() => setEtDetailFieldId(null)}
+          />,
+          document.body
+        )
+      })()}
+      {appliedDetailFieldId && (() => {
+        const f = fields.find((x) => x.id === appliedDetailFieldId)
+        if (!f) return null
+        return createPortal(
+          <AppliedDetail
+            field={f}
+            applied={appliedFor(f)}
+            scheduled={etInfoFor(f).scheduled}
+            weekStart={weekStart}
+            onClose={() => setAppliedDetailFieldId(null)}
           />,
           document.body
         )
