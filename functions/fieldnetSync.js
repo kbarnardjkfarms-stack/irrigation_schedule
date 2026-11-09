@@ -13,11 +13,21 @@
 // volts, wiper limits, circle time and running-time counters.)
 //
 // What the controllers list tells us, and how we use it:
+//   direction            'forward' / 'reverse' means the pivot is MOVING. FieldNET
+//                        also puts extra words on a moving pivot (for example
+//                        low-pressure-warning), so "running" is decided from the
+//                        direction, not from the status word. Two stale statuses
+//                        (not-connected, powered-off) can keep an old direction,
+//                        so they never count as running. Every stopped status
+//                        (stopped, service-stop, low-pressure-shutdown,
+//                        auto-stop-at-barrier, alignment-fault ...) reports
+//                        direction 'stopped'.
 //   operational_status   forward-wet / reverse-wet  -> Running, Wet
 //                        forward / reverse          -> Running, Dry
-//                        anything else (stopped, service-stop, low-pressure-
-//                        shutdown, auto-stop-at-barrier, powered-off ...) -> Stopped
-//                        (the exact word is kept in fieldnetStatus)
+//                        (the exact word is always kept in fieldnetStatus)
+//   is_water_on          decides Wet or Dry for a moving pivot whose status
+//                        has an extra word (a low-pressure warning with the
+//                        water on is Running, Wet)
 //   communication_status "offline" (FieldNET's last poll failed) or status
 //                        "not-connected": a pivot that was STOPPED and is
 //                        offline shows No signal (it may have started since).
@@ -100,17 +110,19 @@ function readController(c) {
   const depthMm = numOrNull(c.application_depth);
   const runFull = numOrNull(c.run_time_100_percent);
   const nextStop = numOrNull(c.next_pivot_stop_time);
+  const moving = (dir === 'forward' || dir === 'reverse') && status !== 'not-connected' && status !== 'powered-off';
+  const waterOn = c.is_water_on === true;
   return {
     id: c.id,
     name: typeof c.name === 'string' ? c.name.trim() : '',
     lastUpdated: when && !isNaN(when.getTime()) ? when : null,
     status,
-    running: /^(forward|reverse)(-wet)?$/.test(status),
-    wet: /-wet$/.test(status),
+    running: moving,
+    wet: /-wet$/.test(status) || (moving && waterOn),
     offline: c.communication_status === 'offline' || status === 'not-connected',
     direction: dir === 'forward' ? 'Forward' : dir === 'reverse' ? 'Reverse' : null,
     angle,
-    waterOn: c.is_water_on === true,
+    waterOn,
     speed: speed == null ? 0 : speed,
     voltage,
     pressureBar: bar,
