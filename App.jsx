@@ -26,7 +26,6 @@ import Harvest from './Harvest.jsx'
 import Seed from './Seed.jsx'
 import FarmMap from './FarmMap.jsx'
 
-import potatoStorageLogo from './potato-storage-logo.jpg'
 
 import AioLogo from './AioLogo.jsx'
 
@@ -1162,7 +1161,7 @@ export default function App() {
           {hasModule('irrigation') && (
           <div
             onClick={() => setPage('irrigation')}
-            style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
           >
             <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#E6F1FB', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <svg width="56" height="56" viewBox="0 0 48 48">
@@ -1179,22 +1178,58 @@ export default function App() {
                 <circle cx="33.5" cy="29" r="1.6" fill="#1F8FD4" opacity="0.7" />
               </svg>
             </div>
-            <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Irrigation</div>
+            <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Irrigation</div>
           </div>
           )}
           {hasModule('potato-storage') && (
           <div
             onClick={() => setPage('potato-storage')}
-            style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
           >
-            <img src={potatoStorageLogo} alt="Potato Storage" style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover' }} />
-            <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato storage</div>
+            <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#F1E7D3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="58" height="58" viewBox="0 0 48 48">
+                <path d="M3 41.5h42" stroke="#52514e" strokeWidth="1.8" strokeLinecap="round"/>
+                <defs>
+                <linearGradient id="potatoStorageMetal" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#F7F9FA"/>
+                <stop offset="100%" stopColor="#BFC9D1"/>
+                </linearGradient>
+                <clipPath id="potatoStorageArch">
+                <path d="M3 34A21 24 0 0 1 45 34Z"/>
+                </clipPath>
+                </defs>
+                <rect x="3" y="34" width="42" height="7" fill="#CFCBC0" stroke="#5b6770" strokeWidth="1.5"/>
+                <path d="M3 34A21 24 0 0 1 45 34Z" fill="url(#potatoStorageMetal)" stroke="#5b6770" strokeWidth="1.8" strokeLinejoin="round"/>
+                <g clipPath="url(#potatoStorageArch)" stroke="#5b6770" strokeWidth="0.9" opacity="0.45">
+                <path d="M9 6v30M14.5 6v30M33.5 6v30M39 6v30"/>
+                </g>
+                <rect x="14" y="19" width="20" height="15" fill="#4A3D2E"/>
+                <path d="M14 19L9.5 21.5V34H14Z M34 19L38.5 21.5V34H34Z" fill="#fff" stroke="#5b6770" strokeWidth="1.4" strokeLinejoin="round"/>
+                <path d="M9 41.5Q12.6 28.5 24.0 28.5Q35.4 28.5 39 41.5Z" fill="#D6B07A" stroke="#7a5a32" strokeWidth="1.4" strokeLinejoin="round"/>
+                <ellipse cx="16.2" cy="38.5" rx="5.06" ry="3.4100000000000006" fill="#C9A26B" stroke="#7a5a32" strokeWidth="1.3"/>
+                <circle cx="14.4" cy="37.8" r="0.8" fill="#7a5a32"/>
+                <circle cx="17.7" cy="39.4" r="0.8" fill="#7a5a32"/>
+                <ellipse cx="24.0" cy="38.9" rx="5.28" ry="3.4100000000000006" fill="#C9A26B" stroke="#7a5a32" strokeWidth="1.3"/>
+                <circle cx="22.2" cy="38.2" r="0.8" fill="#7a5a32"/>
+                <circle cx="25.6" cy="39.8" r="0.8" fill="#7a5a32"/>
+                <ellipse cx="31.8" cy="38.5" rx="4.840000000000001" ry="3.3000000000000003" fill="#C9A26B" stroke="#7a5a32" strokeWidth="1.3"/>
+                <circle cx="30.1" cy="37.8" r="0.8" fill="#7a5a32"/>
+                <circle cx="33.3" cy="39.3" r="0.8" fill="#7a5a32"/>
+                <ellipse cx="18.9" cy="33.5" rx="4.620000000000001" ry="3.19" fill="#C9A26B" stroke="#7a5a32" strokeWidth="1.3"/>
+                <circle cx="17.3" cy="32.9" r="0.8" fill="#7a5a32"/>
+                <circle cx="20.3" cy="34.3" r="0.8" fill="#7a5a32"/>
+                <ellipse cx="29.1" cy="33.5" rx="4.620000000000001" ry="3.19" fill="#C9A26B" stroke="#7a5a32" strokeWidth="1.3"/>
+                <circle cx="27.5" cy="32.9" r="0.8" fill="#7a5a32"/>
+                <circle cx="30.5" cy="34.3" r="0.8" fill="#7a5a32"/>
+                </svg>
+            </div>
+            <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato storage</div>
           </div>
           )}
           {canSeeAgronomy && (
             <div
               onClick={() => setPage('agronomy')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
               <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#DEEAD2', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="56" height="56" viewBox="0 0 48 48">
@@ -1210,13 +1245,13 @@ export default function App() {
                   <path d="M24 30c0-9 9-14 16-13 1 9-6 16-16 13z" fill="url(#agronomySproutGradient)" />
                 </svg>
               </div>
-              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Agronomy</div>
+              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Agronomy</div>
             </div>
           )}
           {canSeeContracts && (
             <div
               onClick={() => setPage('contracts')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
               <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#F6EBD3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="56" height="56" viewBox="0 0 48 48">
@@ -1232,13 +1267,13 @@ export default function App() {
                   <path d="M25 37c2-3 4-3 5-1s3 1 5-2" fill="none" stroke="#3c5a3f" strokeWidth="2" strokeLinecap="round" />
                 </svg>
               </div>
-              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Contracts</div>
+              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Contracts</div>
             </div>
           )}
           {canSeeYields && (
             <div
               onClick={() => setPage('yields')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
               <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#E3EDF7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="56" height="56" viewBox="0 0 48 48">
@@ -1250,13 +1285,13 @@ export default function App() {
                   <circle cx="40" cy="9" r="2.4" fill="#3c5a3f" />
                 </svg>
               </div>
-              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Yields</div>
+              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Yields</div>
             </div>
           )}
           {canSeeHarvest && (
             <div
               onClick={() => setPage('harvest')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
               <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#F6EBDD', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="58" height="58" viewBox="0 0 48 48">
@@ -1269,13 +1304,13 @@ export default function App() {
                   <rect x="21" y="32" width="11" height="4" rx="2" fill="#D6B48C" />
                 </svg>
               </div>
-              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Harvest</div>
+              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Harvest</div>
             </div>
           )}
           {canSeeSeed && (
             <div
               onClick={() => setPage('seed')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
               <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#EFE6D6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="58" height="58" viewBox="0 0 48 48">
@@ -1288,13 +1323,13 @@ export default function App() {
                   <path d="M31 30h10M31 33h6" stroke="#7a5a32" strokeWidth="1.2" />
                 </svg>
               </div>
-              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato Seed</div>
+              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato Seed</div>
             </div>
           )}
           {canSeeMap && (
             <div
               onClick={() => setPage('map')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '10px', padding: '16px', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
               <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#E4EBDD', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="58" height="58" viewBox="0 0 48 48">
@@ -1306,7 +1341,7 @@ export default function App() {
                   <circle cx="32" cy="35" r="4" fill="#F9A825" />
                 </svg>
               </div>
-              <div style={{ fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Farm Map</div>
+              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Farm Map</div>
             </div>
           )}
         </div>
