@@ -1,6 +1,6 @@
 const FARM_TZ = 'America/Boise';
 
-// "3:16 PM yesterday (17 h)" from the time FieldNET says the status began.
+// "3:16 PM yesterday (17 h)" from the time the status began (FieldNET or BaseStation).
 function sinceText(iso, now = new Date()) {
   const t = iso ? new Date(iso) : null;
   if (!t || isNaN(t.getTime())) return null;
@@ -31,7 +31,9 @@ export default function PivotDetailPanel({ pivot }) {
     ? pivot.waterMode === 'Dry'
       ? 'Running, dry'
       : 'Running, wet'
-    : 'Stopped';
+    : pivot.systemStatus === 'No signal'
+      ? 'No signal'
+      : 'Stopped';
 
   const rows = [
     ['Status', statusLabel],
@@ -42,10 +44,10 @@ export default function PivotDetailPanel({ pivot }) {
     ['Last updated', show(pivot.statusDate)],
   ];
 
-  // FieldNET pivots carry the exact reason for a stop or warning
-  // (statusLabel / statusTone, written by the FieldNET sync).
+  // FieldNET and BaseStation/AgSense pivots carry the exact reason for a stop or fault
+  // (statusLabel / statusTone / statusSince, written by their syncs).
   const tone = pivot.statusTone ? TONES[pivot.statusTone] || TONES.info : null;
-  const since = tone ? sinceText(pivot.fieldnetLastUpdated) : null;
+  const since = tone ? sinceText(pivot.statusSince || pivot.fieldnetLastUpdated) : null;
 
   return (
     <div
