@@ -1551,7 +1551,7 @@ export default function App() {
 
                   return (
                     <Fragment key={field.id}>
-                      <tr>
+                      <tr style={{ borderBottom: '1px solid #1A1A1A' }}>
                         <td className="sticky-col field-cell" style={{ padding: '4px 6px', background: isSource ? '#eef3ec' : isCopyTarget ? '#f5faf3' : isEraseTarget ? '#fbeaea' : undefined }} onClick={onNameClick}>
                           {(mode === 'copy-targets' && !isSource) && <span className={`checkbox ${isCopyTarget ? 'checked' : ''}`} />}
                           {mode === 'erase' && <span className={`checkbox erase ${isEraseTarget ? 'checked' : ''}`} />}
