@@ -1552,13 +1552,14 @@ export default function App() {
                   return (
                     <Fragment key={field.id}>
                       <tr>
-                        <td className="sticky-col field-cell" style={{ background: isSource ? '#eef3ec' : isCopyTarget ? '#f5faf3' : isEraseTarget ? '#fbeaea' : undefined }} onClick={onNameClick}>
+                        <td className="sticky-col field-cell" style={{ padding: '4px 6px', background: isSource ? '#eef3ec' : isCopyTarget ? '#f5faf3' : isEraseTarget ? '#fbeaea' : undefined }} onClick={onNameClick}>
                           {(mode === 'copy-targets' && !isSource) && <span className={`checkbox ${isCopyTarget ? 'checked' : ''}`} />}
                           {mode === 'erase' && <span className={`checkbox erase ${isEraseTarget ? 'checked' : ''}`} />}
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '62px', flex: 'none' }}>
                             <PivotIcon
                               pivot={pivot}
-                              size={55}
+                              size={46}
                               flagged={!!(pivotProfilesByGuid[pivotGuid]?.stuckAlertActive || pivotProfilesByGuid[pivotGuid]?.lapTimeDriftFlagged)}
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -1572,6 +1573,9 @@ export default function App() {
                                 }
                               }}
                             />
+                            {/* Always this tall, label or not, so every row is the same height. Two lines at most. */}
+                            <div style={{ marginTop: '1px', height: '22px', width: '100%', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', fontSize: '10px', lineHeight: '11px', textAlign: 'center', fontWeight: 500, color: '#1A1A1A' }}>{pivot && pivot.statusLabel ? pivot.statusLabel : ''}</div>
+                            </div>
                             <div>
                               <div>
                                 <strong>{field.fieldName}</strong>
