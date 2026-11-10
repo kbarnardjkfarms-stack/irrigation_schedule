@@ -2,6 +2,7 @@ const COLORS = {
   wet: '#378ADD',
   dry: '#97C459',
   stopped: '#B8BDC7',
+  fault: '#E24B4A', // stopped by a fault (low pressure shutdown, alignment fault)
 };
 
 function polar(cx, cy, r, deg) {
@@ -48,7 +49,7 @@ export default function PivotIcon({ pivot, size = 40, onClick, flagged = false }
 
   const { systemStatus, waterMode, direction, currentPosition, reverseAngle, forwardAngle } = pivot;
   const isRunning = systemStatus === 'Running';
-  const state = isRunning ? (waterMode === 'Dry' ? 'dry' : 'wet') : 'stopped';
+  const state = isRunning ? (waterMode === 'Dry' ? 'dry' : 'wet') : (pivot.statusTone === 'fault' ? 'fault' : 'stopped');
   const fill = COLORS[state];
   const cx = 20;
   const cy = 20;
