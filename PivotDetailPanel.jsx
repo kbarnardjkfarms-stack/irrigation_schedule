@@ -1,3 +1,29 @@
+const FARM_TZ = 'America/Boise';
+
+// "3:16 PM yesterday (17 h)" from the time FieldNET says the status began.
+function sinceText(iso, now = new Date()) {
+  const t = iso ? new Date(iso) : null;
+  if (!t || isNaN(t.getTime())) return null;
+  const mins = Math.max(0, Math.round((now.getTime() - t.getTime()) / 60000));
+  const dayKey = (d) => d.toLocaleDateString('en-CA', { timeZone: FARM_TZ });
+  const yesterday = new Date(now.getTime() - 24 * 3600 * 1000);
+  const time = t.toLocaleTimeString('en-US', { timeZone: FARM_TZ, hour: 'numeric', minute: '2-digit' });
+  let day;
+  if (dayKey(t) === dayKey(now)) day = 'today';
+  else if (dayKey(t) === dayKey(yesterday)) day = 'yesterday';
+  else day = t.toLocaleDateString('en-US', { timeZone: FARM_TZ, weekday: 'short', month: 'short', day: 'numeric' });
+  const age = mins < 60 ? `${mins} min` : mins < 48 * 60 ? `${Math.round(mins / 60)} h` : `${Math.round(mins / 1440)} days`;
+  return `${time} ${day} (${age})`;
+}
+
+const TONES = {
+  fault: { background: '#FBEAEA', border: '#E8B4B4', color: '#A32D2D' },
+  warning: { background: '#FAEEDA', border: '#F0D9A8', color: '#854F0B' },
+  info: { background: '#F1EFE8', border: '#D3D1C7', color: '#444441' },
+};
+
+const show = (v, suffix = '') => (v === null || v === undefined || v === '' || v === 'null' || v === 'undefined' ? '—' : `${v}${suffix}`);
+
 export default function PivotDetailPanel({ pivot }) {
   if (!pivot) return null;
   const isRunning = pivot.systemStatus === 'Running';
@@ -9,12 +35,17 @@ export default function PivotDetailPanel({ pivot }) {
 
   const rows = [
     ['Status', statusLabel],
-    ['Direction', pivot.direction],
-    ['Current position', `${pivot.currentPosition}\u00b0`],
-    ['Percent timer', `${pivot.percentTimer}%`],
-    ['Pressure', `${pivot.pressure} PSI`],
-    ['Last updated', pivot.statusDate],
+    ['Direction', show(pivot.direction)],
+    ['Current position', show(pivot.currentPosition, '°')],
+    ['Percent timer', show(pivot.percentTimer, '%')],
+    ['Pressure', show(pivot.pressure, ' PSI')],
+    ['Last updated', show(pivot.statusDate)],
   ];
+
+  // FieldNET pivots carry the exact reason for a stop or warning
+  // (statusLabel / statusTone, written by the FieldNET sync).
+  const tone = pivot.statusTone ? TONES[pivot.statusTone] || TONES.info : null;
+  const since = tone ? sinceText(pivot.fieldnetLastUpdated) : null;
 
   return (
     <div
@@ -27,6 +58,22 @@ export default function PivotDetailPanel({ pivot }) {
         borderTop: 'none',
       }}
     >
+      {tone && (
+        <div
+          style={{
+            marginBottom: 8,
+            padding: '8px 10px',
+            borderRadius: 8,
+            background: tone.background,
+            border: `1px solid ${tone.border}`,
+            color: tone.color,
+            fontSize: 12,
+          }}
+        >
+          <strong>{pivot.statusFull || pivot.statusLabel}</strong>
+          {since ? ` since ${since}` : ''}
+        </div>
+      )}
       <table style={{ width: '100%', minWidth: 0, fontSize: 13, borderCollapse: 'collapse' }}>
         <tbody>
           {rows.map(([label, value], i) => (
