@@ -1,4 +1,4 @@
-// FieldNET (Lindsay) pivot reader, version 3.4 (Nov 2026)
+// FieldNET (Lindsay) pivot reader, version 3.5 (Nov 2026)
 //
 // Every 10 minutes this signs in to the FieldNET API, reads every pivot
 // registered in AIO with statusSource 'fieldnet', and writes it into
@@ -83,6 +83,42 @@ const ANGLE_IS_LIVE = false; // set to true only after the freshness test proves
 const FARM_TIME_ZONE = 'America/Boise';
 const PSI_PER_BAR = 14.5038;
 const FEET_PER_METER = 3.28084;
+
+// What to show under the pivot icon for each FieldNET status word (the same
+// thing the FieldNET app shows under each pivot). tone: 'fault' = the icon
+// turns red and the detail panel gets a red bar; 'warning' / 'info' = a colored
+// bar in the detail panel; null = an ordinary running or stopped status (label
+// only, no bar). A status word we have not seen before still gets a label (the
+// word, tidied up) so a new kind of stop never goes unnoticed.
+// label = the short text under the icon (two lines at most); full = the
+// wording for the detail panel.
+const STATUS_LABELS = {
+  'low-pressure-shutdown': { label: 'Low PSI', full: 'Low pressure shutdown', tone: 'fault' },
+  'alignment-fault': { label: 'Alignment Fault', full: 'Alignment fault', tone: 'fault' },
+  'low-pressure-warning': { label: 'Low PSI Warn', full: 'Low pressure warning', tone: 'warning' },
+  'service-stop': { label: 'Service Stop', full: 'Service stop', tone: 'info' },
+  'auto-stop-at-barrier': { label: 'Auto Barrier Stop', full: 'Auto stop at barrier', tone: 'info' },
+  'soft-barrier-stop': { label: 'Soft Barrier Stop', full: 'Soft barrier stop', tone: 'info' },
+  'powered-off': { label: 'Powered Off', full: 'Powered off', tone: 'info' },
+  'not-connected': { label: 'Not Connected', full: 'Not connected', tone: 'info' },
+  'stopped-wet': { label: 'Stopped Wet', full: 'Stopped, water on', tone: 'info' },
+  'stopped': { label: 'Stopped', full: 'Stopped', tone: null },
+  'forward': { label: 'Forward', full: 'Forward', tone: null },
+  'forward-wet': { label: 'Forward Wet', full: 'Forward, wet', tone: null },
+  'reverse': { label: 'Reverse', full: 'Reverse', tone: null },
+  'reverse-wet': { label: 'Reverse Wet', full: 'Reverse, wet', tone: null }
+};
+
+function statusLabelFor(status) {
+  if (!status) return { label: null, full: null, tone: null };
+  if (STATUS_LABELS[status]) return STATUS_LABELS[status];
+  const words = String(status).replace(/[-_]+/g, ' ').trim();
+  return {
+    label: words.replace(/\b\w/g, (c) => c.toUpperCase()),
+    full: words.charAt(0).toUpperCase() + words.slice(1),
+    tone: 'info'
+  };
+}
 
 // ---- pure helpers (tested on their own) ----------------------------------
 
@@ -260,6 +296,9 @@ async function syncFieldnetOnce(clientId, clientSecret, now = new Date()) {
         statusDate: r.lastUpdated ? formatFarmLocal(r.lastUpdated) : null,
         fieldnetLastUpdated: lastIso,
         fieldnetStatus: r.status || null,
+        statusLabel: statusLabelFor(r.status).label,
+        statusFull: statusLabelFor(r.status).full,
+        statusTone: statusLabelFor(r.status).tone,
         fieldnetComm: r.offline ? 'offline' : 'online',
         fieldnetAngle: r.angle,
         fieldnetVoltage: r.voltage,
@@ -358,4 +397,4 @@ exports.syncFieldnetPivots = onSchedule(
 );
 
 // Exported for tests only.
-exports._test = { formatFarmLocal, readController, classify, syncFieldnetOnce };
+exports._test = { formatFarmLocal, readController, classify, syncFieldnetOnce, statusLabelFor };
