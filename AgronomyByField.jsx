@@ -176,7 +176,16 @@ const SPLIT_STYLE = {
 // The x-axis is weeks since emergence, labeled with a handful of "Wk N"
 // ticks along the bottom - points alone (no axis) made it impossible to
 // tell which week a reading landed in.
-function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, secondary, weekDate }) {
+// Axis titles: yTitle (left, e.g. "Soil NO3 (ppm)"), secondary.title (right),
+// and "Weeks since emergence" along the bottom. The left axis also carries a
+// few round-number ticks with faint grid lines so readings can be read off it.
+function niceStep(range, count) {
+  const raw = range / Math.max(1, count)
+  const mag = Math.pow(10, Math.floor(Math.log10(raw || 1)))
+  const n = raw / mag
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * mag
+}
+function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, secondary, weekDate, yTitle }) {
   if (points.length < 1) {
     return <div className="agronomy-chart-empty">{emptyMessage || 'No readings yet'}</div>
   }
@@ -196,15 +205,22 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, 
   const minX = Math.min(...xs, ...bandXs, ...secXs), maxX = Math.max(...xs, ...bandXs, ...secXs)
   const minY = Math.min(...ys, ...bandYs), maxY = Math.max(...ys, ...bandYs)
 
-  const w = 280, h = weekDate ? 132 : 120
-  // padR is wide enough for a 5-digit band label (petiole NO3 targets run
-  // up to ~25000 ppm) sitting just past the plot area's right edge.
-  const padL = 34, padR = 36, padT = 10, padB = weekDate ? 32 : 20
+  const w = 290, h = weekDate ? 144 : 132
+  // padL holds the left axis title + tick numbers (petiole NO3 runs to ~25000
+  // ppm); padR the right-axis numbers and title; padB the week ticks, dates
+  // and the x-axis title.
+  const padL = 44, padR = secondary ? 42 : 12, padT = 10, padB = weekDate ? 33 : 24
   const plotW = w - padL - padR
   const plotH = h - padT - padB
 
   const scaleX = (x) => padL + ((x - minX) / (maxX - minX || 1)) * plotW
-  const scaleY = (y) => padT + plotH - ((y - minY) / (maxY - minY || 1)) * plotH
+  // Round the left axis out to whole tick steps so the ticks land on the ends.
+  const yStep = niceStep(maxY - minY || Math.abs(maxY) || 1, 3)
+  const yLo = Math.floor(minY / yStep) * yStep
+  const yHi = Math.max(yLo + yStep, Math.ceil(maxY / yStep) * yStep)
+  const yTicks = []
+  for (let v = yLo; v <= yHi + yStep / 1000; v += yStep) yTicks.push(Math.round(v * 1000) / 1000)
+  const scaleY = (y) => padT + plotH - ((y - yLo) / (yHi - yLo || 1)) * plotH
   const path = points.map((p) => `${scaleX(p.x)},${scaleY(p.y)}`).join(' ')
 
   // Secondary (right-hand) axis: its own scale, so a different unit (field
@@ -232,17 +248,33 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, 
         ...[...sortedBand].reverse().map((b) => `${scaleX(b.x)},${scaleY(b.low)}`)
       ].join(' ')
     : null
-  const bandRightEdge = sortedBand ? sortedBand[sortedBand.length - 1] : null
+  // Range numbers sit just inside the band's first week (the latest week is
+  // where the newest reading's own label usually is).
+  const bandRightEdge = sortedBand ? sortedBand[0] : null
 
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="agronomy-sparkline">
+      {yTicks.map((v) => (
+        <g key={`yt${v}`}>
+          <line x1={padL} y1={scaleY(v)} x2={padL + plotW} y2={scaleY(v)} className="agronomy-sparkline-grid" />
+          <text x={padL - 3} y={scaleY(v) + 2.5} textAnchor="end" className="agronomy-sparkline-tick">{fmtChartValue(v)}</text>
+        </g>
+      ))}
+      <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} className="agronomy-sparkline-axis" />
+      {yTitle && (
+        <text transform={`translate(9 ${padT + plotH / 2}) rotate(-90)`} textAnchor="middle" className="agronomy-sparkline-axis-title" fill={color}>{yTitle}</text>
+      )}
+      {secondary && secondary.title && (
+        <text transform={`translate(${w - 5} ${padT + plotH / 2}) rotate(90)`} textAnchor="middle" className="agronomy-sparkline-axis-title" fill={secondary.color}>{secondary.title}</text>
+      )}
+      <text x={padL + plotW / 2} y={h - 2} textAnchor="middle" className="agronomy-sparkline-axis-title" fill="#777">Weeks since emergence</text>
       {bandPolygon && (
         <>
           <polygon points={bandPolygon} className="agronomy-sparkline-band" />
-          <text x={padL - 3} y={scaleY(bandRightEdge.high) + 3} textAnchor="end" className="agronomy-sparkline-range-label">
+          <text x={padL + 3} y={scaleY(bandRightEdge.high) - 2} textAnchor="start" className="agronomy-sparkline-range-label">
             {bandRightEdge.high}
           </text>
-          <text x={padL - 3} y={scaleY(bandRightEdge.low) + 3} textAnchor="end" className="agronomy-sparkline-range-label">
+          <text x={padL + 3} y={scaleY(bandRightEdge.low) + 8} textAnchor="start" className="agronomy-sparkline-range-label">
             {bandRightEdge.low}
           </text>
         </>
@@ -273,11 +305,11 @@ function Sparkline({ points, color, band, emptyMessage, selectedWeek, onSelect, 
       <line x1={padL} y1={padT + plotH} x2={padL + plotW} y2={padT + plotH} className="agronomy-sparkline-axis" />
       {xTicks.map((t) => (
         <g key={t}>
-          <text x={scaleX(t)} y={weekDate ? h - 14 : h - 4} className="agronomy-sparkline-week-label" textAnchor="middle">
+          <text x={scaleX(t)} y={padT + plotH + 9} className="agronomy-sparkline-week-label" textAnchor="middle">
             Wk {t}
           </text>
           {weekDate && (
-            <text x={scaleX(t)} y={h - 4} className="agronomy-sparkline-week-label" textAnchor="middle">
+            <text x={scaleX(t)} y={padT + plotH + 18} className="agronomy-sparkline-week-label" textAnchor="middle">
               {weekDate(t)}
             </text>
           )}
@@ -653,7 +685,7 @@ export default function AgronomyByField({ fields }) {
         const lo = Math.min(50, Math.floor(Math.min(...mv) - 2))
         const hi = Math.max(100, Math.ceil(Math.max(...mv)))
         secondary = {
-          kind: 'bars', color: '#1F6FB2', name: 'Field moisture', unit: '%',
+          kind: 'bars', color: '#1F6FB2', name: 'Field moisture', unit: '%', title: 'Field moisture (%)',
           points: moistureJudged, byStatus: true, barLabels: false,
           lo, hi,
           refLines: MOISTURE_TARGET,
@@ -672,7 +704,7 @@ export default function AgronomyByField({ fields }) {
       const mx = nWeekly.length ? Math.max(...nWeekly.map((p) => p.y)) : 0
       if (nWeekly.length) {
         secondary = {
-          kind: 'bars', color: '#C77D0A', name: 'N applied', unit: 'lbs N/ac',
+          kind: 'bars', color: '#C77D0A', name: 'N applied', unit: 'lbs N/ac', title: 'N applied (lbs N/ac)',
           points: nWeekly, lo: 0, hi: Math.max(10, Math.ceil(mx * 1.25)),
           labels: [{ v: 0, text: '0' }, { v: Math.max(10, Math.ceil(mx * 1.25)), text: `${Math.max(10, Math.ceil(mx * 1.25))} N` }]
         }
@@ -703,6 +735,7 @@ export default function AgronomyByField({ fields }) {
           onSelect={toggleWeek}
           secondary={secondary}
           weekDate={plantDate ? (x) => fmtShortDay(weekStartDate(plantDate, x)) : null}
+          yTitle={`${SAMPLE_TYPE_LABEL[type]} ${metric.label}${metric.unit ? ` (${metric.unit})` : ''}`}
         />
         {secondaryNote && <p style={{ fontSize: 10, margin: '2px 0 6px' }}>{secondaryNote}</p>}
         {judged.length > 0 && (
