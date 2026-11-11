@@ -514,10 +514,13 @@ function computeZoneStats(bay, zone, zoneData) {
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
   // No logged loads = nothing to compare run out against, so no shrink
   // estimate at all (shows as "—") rather than a misleading 100%.
-  const hasShrink = loggedRun > 0;
-  const shrinkCwt = hasShrink ? totalRun - loggedRun : 0;
-  const shrinkBase = hasShrink ? baseCwt : 0;
-  const shrinkPct = shrinkBase > 0 ? shrinkCwt / shrinkBase : 0;
+  // Shrink is worked out for the whole BAY (loads are logged against the bay,
+  // not field by field) — computeBayStats fills these in afterwards by
+  // sharing the bay's shrink out across its fields.
+  const hasShrink = false;
+  const shrinkCwt = 0;
+  const shrinkBase = 0;
+  const shrinkPct = 0;
   return {
     pipeCount, pipesEmpty, pipesFilled, fullMap, topFullMap, hasTopRange, cwtPerPipe,
     calculatedCwt, hasOverride, currentCwt, capacityCwt, fillPct,
@@ -543,8 +546,27 @@ function computeBayStats(bay, bayData) {
     ? bay.pipeCount * bay.cwtPerPipe * pileHeightRatio(bay)
     : zoneCapacityCwt;
   const fillPct = capacityCwt > 0 ? Math.min(1, currentCwt / capacityCwt) : 0;
+  // Bay-wide logged loads: loads logged against the bay itself, plus any
+  // older loads that were logged on individual fields.
+  const bayRuns = bayData?.cwtRuns || [];
+  const bayLogged = bayRuns.reduce((s, r) => s + Number(r.cwt || 0), 0);
+  loggedRun += bayLogged;
+  const bayHasShrink = loggedRun > 0;
+  shrinkCwt = bayHasShrink ? totalRun - loggedRun : 0;
+  shrinkBase = bayHasShrink ? initialCwt : 0;
+  // For Summary grouping, each field carries its share of the bay's shrink in
+  // proportion to how much of the bay's run out came from it.
+  bay.zones.forEach((z) => {
+    const zs = zoneStats[z.id];
+    if (!bayHasShrink) return;
+    const share = totalRun > 0 ? zs.totalRun / totalRun : 1 / Math.max(1, bay.zones.length);
+    zs.hasShrink = true;
+    zs.shrinkCwt = shrinkCwt * share;
+    zs.shrinkBase = zs.baseCwt;
+    zs.shrinkPct = zs.shrinkBase > 0 ? zs.shrinkCwt / zs.shrinkBase : 0;
+  });
   const shrinkPct = shrinkBase > 0 ? shrinkCwt / shrinkBase : 0;
-  return { zoneStats, currentCwt, capacityCwt, fillPct, totalRun, loggedRun, initialCwt, hasShrink: shrinkBase > 0, shrinkBase, shrinkCwt, shrinkPct };
+  return { zoneStats, currentCwt, capacityCwt, fillPct, totalRun, loggedRun, initialCwt, hasShrink: bayHasShrink, shrinkBase, shrinkCwt, shrinkPct };
 }
 /* =================================================================
    3D — shared bay-group builder (used by both the yard view and the
@@ -2829,7 +2851,7 @@ function LiveStat({ label, value, sub }) {
 /* ---------------------------------------------------------------
    Bay detail panel (per-zone pipe checks + cwt runs) + interior 3D
 ----------------------------------------------------------------*/
-function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipeCheck, onAddCwtRun, onDeleteCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay, onUpdateZoneMeta, onUpdateBayMeta, onEmptyBay, onDeleteZone, invFilter = EMPTY_INV_FILTER, buildingsById, locationsById }) {
+function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipeCheck, onAddCwtRun, onDeleteCwtRun, onAddBayCwtRun, onDeleteBayCwtRun, onUpdateZoneCustomer, onUpdateZoneVariety, onAddZoneToBay, onUpdateZoneMeta, onUpdateBayMeta, onEmptyBay, onDeleteZone, invFilter = EMPTY_INV_FILTER, buildingsById, locationsById }) {
   const [zoneId, setZoneId] = useState(bay.zones[0]?.id ?? null);
   useEffect(() => { setZoneId(bay.zones[0]?.id ?? null); }, [bay.id]);
   const [showAddZone, setShowAddZone] = useState(false);
@@ -2899,11 +2921,16 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
   };
   const submitRun = () => {
     if (!runCwt || isNaN(Number(runCwt))) return;
-    onAddCwtRun(bay.id, zoneId, { date: runDate, dest: runDest, cwt: Number(runCwt) });
-    setRunCwt(""); setRunDest("");
+    onAddBayCwtRun(bay.id, { date: runDate, dest: runDest, cwt: Number(runCwt) });
+    setRunCwt("");
   };
   const pipeChecks = [...(zoneData.pipeChecks || [])].reverse();
-  const cwtRuns = [...(zoneData.cwtRuns || [])].reverse();
+  // Loads are logged for the whole bay. Older loads that were logged on an
+  // individual field still count (and still show here, tagged with the field).
+  const bayLoads = [
+    ...((data.cwtRuns || []).map((r, idx) => ({ ...r, kind: "bay", idx }))),
+    ...bay.zones.flatMap((z) => ((data.zones?.[z.id]?.cwtRuns) || []).map((r, idx) => ({ ...r, kind: "field", idx, zoneId: z.id, fieldName: z.name }))),
+  ].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -3068,8 +3095,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
                 {customerOptions(customers, zone.customer).map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
-            <StatBlock label="Field run out" value={`${fmt(zs.totalRun)} cwt`} sub={`${fmt(zs.loggedRun)} cwt logged loads`} />
-            <StatBlock label="Field shrink" value={zs.hasShrink ? `${fmt(zs.shrinkCwt)} cwt` : "—"} sub={zs.hasShrink ? `${(zs.shrinkPct * 100).toFixed(2)}%` : "log cwt loads to see"} accent={zs.hasShrink ? (zs.shrinkPct > 0.08 ? "#e08787" : "#8fd19e") : undefined} />
+            <StatBlock label="Field run out" value={`${fmt(zs.totalRun)} cwt`} sub="from pipe hauled out" />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18 }}>
             <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
@@ -3141,28 +3167,32 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
             </div>
             <div style={{ background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
               <div style={{ fontWeight: 700, marginBottom: 10, display: "flex", alignItems: "center", gap: 6, color: "#eef1f6" }}>
-                <TrendingDown size={16} color="#f2c14e" /> Log cwt run out — {zone.name}{zone.customerFieldCode ? ` — ${zone.customerFieldCode}` : ""}
+                <TrendingDown size={16} color="#f2c14e" /> Log cwt run out — {bay.name} (whole bay)
+              </div>
+              <div style={{ fontSize: 11.5, color: "#6f7890", marginBottom: 10 }}>
+                Loads are logged against the whole bay, not a single field. Shrink = the bay's run out (from pipe hauled) − these loads.
               </div>
               <Field label="Date"><input type="date" value={runDate} onChange={(e) => setRunDate(e.target.value)} style={inputStyle} /></Field>
               <Field label="Destination / buyer">
                 <select value={runDest} onChange={(e) => setRunDest(e.target.value)} style={inputStyle}>
-                  {customerOptions(customers, zone.customer).map((c) => <option key={c} value={c}>{c}</option>)}
+                  {customerOptions(customers, runDest || zone.customer).map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </Field>
               <Field label="Cwt run"><input type="number" min="0" value={runCwt} onChange={(e) => setRunCwt(e.target.value)} style={inputStyle} /></Field>
               <Button onClick={submitRun} disabled={readOnly}><Plus size={14} /> Add load</Button>
               <div style={{ marginTop: 14, maxHeight: 150, overflowY: "auto" }}>
-                {cwtRuns.length === 0 && <div style={{ color: "#5b6478", fontSize: 12 }}>No loads logged yet.</div>}
-                {cwtRuns.map((r, i) => (
+                {bayLoads.length === 0 && <div style={{ color: "#5b6478", fontSize: 12 }}>No loads logged yet.</div>}
+                {bayLoads.map((r, i) => (
                   <div key={i} style={{ fontSize: 12, color: "#c7cede", padding: "6px 0", borderTop: "1px solid #232d40", display: "flex", justifyContent: "space-between" }}>
-                    <span><b>{r.date}</b> — {r.dest}</span>
+                    <span><b>{r.date}</b> — {r.dest}{r.kind === "field" ? <span style={{ color: "#6f7890" }}> · logged on {r.fieldName}</span> : null}</span>
                     <span style={{ color: "#f2c14e", display: "flex", alignItems: "center", gap: 10 }}>
                       {fmt(r.cwt)} cwt
                       {!readOnly && (
                         <button type="button" title="Delete this load"
                           onClick={() => {
                             if (window.confirm(`Delete the ${fmt(r.cwt)} cwt load from ${r.date} (${r.dest})?`)) {
-                              onDeleteCwtRun(bay.id, zoneId, cwtRuns.length - 1 - i);
+                              if (r.kind === "bay") onDeleteBayCwtRun(bay.id, r.idx);
+                              else onDeleteCwtRun(bay.id, r.zoneId, r.idx);
                             }
                           }}
                           style={{ border: "none", background: "transparent", color: "#e08787", cursor: "pointer", padding: 0, display: "flex" }}>
@@ -5515,6 +5545,24 @@ export default function PotatoStorage() {
       });
     }
   }, [updateZoneData, isReadOnly, bays]);
+  const onAddBayCwtRun = useCallback((bayId, entry) => {
+    if (isReadOnly) return;
+    setDataById((prev) => {
+      const bd = prev[bayId] || {};
+      const nb = { ...bd, cwtRuns: [...(bd.cwtRuns || []), entry] };
+      saveJSON(bayDataKey(bayId), nb);
+      return { ...prev, [bayId]: nb };
+    });
+  }, [isReadOnly]);
+  const onDeleteBayCwtRun = useCallback((bayId, index) => {
+    if (isReadOnly) return;
+    setDataById((prev) => {
+      const bd = prev[bayId] || {};
+      const nb = { ...bd, cwtRuns: (bd.cwtRuns || []).filter((_, i) => i !== index) };
+      saveJSON(bayDataKey(bayId), nb);
+      return { ...prev, [bayId]: nb };
+    });
+  }, [isReadOnly]);
   const onDeleteCwtRun = useCallback((bayId, zoneId, index) => {
     updateZoneData(bayId, zoneId, (zd) => ({ ...zd, cwtRuns: (zd.cwtRuns || []).filter((_, i) => i !== index) }));
   }, [updateZoneData]);
@@ -6136,7 +6184,7 @@ export default function PotatoStorage() {
                   );})}
                 </div>
                 <BayDetail bay={selectedBay} data={displayDataById[selectedBay.id] || emptyBayData(selectedBay)} stats={statsById[selectedBay.id]}
-                  customers={sortedCustomers} varieties={sortedVarieties} readOnly={isReadOnly} onAddPipeCheck={onAddPipeCheck} onAddCwtRun={onAddCwtRun} onDeleteCwtRun={onDeleteCwtRun}
+                  customers={sortedCustomers} varieties={sortedVarieties} readOnly={isReadOnly} onAddPipeCheck={onAddPipeCheck} onAddCwtRun={onAddCwtRun} onDeleteCwtRun={onDeleteCwtRun} onAddBayCwtRun={onAddBayCwtRun} onDeleteBayCwtRun={onDeleteBayCwtRun}
                   onUpdateZoneCustomer={onUpdateZoneCustomer} onUpdateZoneVariety={onUpdateZoneVariety} onAddZoneToBay={onAddZoneToBay}
                   onUpdateZoneMeta={onUpdateZoneMeta} onUpdateBayMeta={onUpdateBayMeta} onEmptyBay={onEmptyBay} onDeleteZone={onDeleteZone}
                   invFilter={invFilter} buildingsById={buildingsById} locationsById={locationsById} />
