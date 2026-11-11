@@ -1421,16 +1421,20 @@ const STUKENHOLTZ_PAGE_SIZE = 1000;
 // repeatedly, walking forward through bounded date windows). Queries all
 // four sample type codes separately rather than ANY in one call - see
 // the note on fetchResultsSince for why.
-async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
+async function loadStukenholtzContext() {
   const apikey = STUKENHOLTZ_API_KEY.value();
   const db = admin.firestore();
-
   const [contactIds, fieldDocsSnap] = await Promise.all([
     fetchAllContactIds(apikey),
     db.collection('fields').get()
   ]);
-  const fieldLookup = buildFieldLookup(fieldDocsSnap.docs);
-  const aliases = await loadSampleAliases(db);
+  return { apikey, db, contactIds, fieldLookup: buildFieldLookup(fieldDocsSnap.docs), aliases: await loadSampleAliases(db) };
+}
+
+// ctx (optional) lets a caller that runs many windows load contacts, fields
+// and aliases once. typeCodes (optional) limits which sample types are asked for.
+async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt, ctx, typeCodes) {
+  const { apikey, db, contactIds, fieldLookup, aliases } = ctx || await loadStukenholtzContext();
 
   let totalFetched = 0;
   let written = 0;
@@ -1440,11 +1444,16 @@ async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
   // the cap and need to shrink the window" check looks at the right
   // number (see windowTruncated below).
   let maxFetchedForAnyType = 0;
+  let added = 0; // samples AIO didn't have before this run
+  const byType = {};
+  const capped = []; // type codes that came back at the 1000 cap (window too wide)
 
-  for (const sampleTypeCode of STUKENHOLTZ_SAMPLE_TYPE_CODES) {
+  for (const sampleTypeCode of (typeCodes || STUKENHOLTZ_SAMPLE_TYPE_CODES)) {
     const results = await fetchResultsSince(startingReceivedDt, contactIds, apikey, endingReceivedDt, sampleTypeCode);
     totalFetched += results.length;
     maxFetchedForAnyType = Math.max(maxFetchedForAnyType, results.length);
+    byType[sampleTypeCode] = (byType[sampleTypeCode] || 0) + results.length;
+    if (results.length >= STUKENHOLTZ_PAGE_SIZE) capped.push(sampleTypeCode);
 
     for (let i = 0; i < results.length; i += 400) {
       const chunk = results.slice(i, i + 400);
@@ -1460,7 +1469,7 @@ async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
       if (sampleRefs.length) {
         const existing = await db.getAll(...sampleRefs, { fieldMask: ['fieldMatchType'] });
         existing.forEach((snap) => {
-          if (!snap.exists) return;
+          if (!snap.exists) { added++; return }
           const t = snap.get('fieldMatchType');
           if (t === 'manual' || t === 'ignored') humanChoice.add(snap.id);
         });
@@ -1482,7 +1491,47 @@ async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
     }
   }
 
-  return { fetched: totalFetched, written, unmapped, maxFetchedForAnyType };
+  return { fetched: totalFetched, written, unmapped, maxFetchedForAnyType, added, byType, capped };
+}
+
+// Walks [from, to) in windows small enough that no sample type hits
+// Stukenholtz's 1000-per-call cap: a window that comes back capped is split
+// in half and re-asked (down to one hour), so nothing is cut off. Used by
+// the hourly sync and by the "re-check a date range" button.
+async function syncStukenholtzRange(fromIso, toIso, { windowMs = 3 * 86400000, deadlineMs = Date.now() + 480000 } = {}) {
+  const ctx = await loadStukenholtzContext();
+  const totals = { fetched: 0, written: 0, unmapped: 0, added: 0, windows: 0, byType: {}, stillCapped: [] }
+  const end = new Date(toIso).getTime()
+  let cursor = new Date(fromIso).getTime()
+  let finishedAt = cursor
+  // queue of [start, end, typeCodes]
+  const queue = []
+  while (cursor < end) { const e = Math.min(end, cursor + windowMs); queue.push([cursor, e, null]); cursor = e }
+  while (queue.length) {
+    if (Date.now() > deadlineMs) { totals.timedOut = true; break }
+    const [a, b, types] = queue.shift()
+    const r = await syncOneStukenholtzBatch(new Date(a).toISOString(), new Date(b).toISOString(), ctx, types)
+    totals.windows++
+    totals.written += r.written; totals.unmapped += r.unmapped; totals.added += r.added
+    const willSplit = r.capped.length && b - a > 3600000
+    // a capped type is asked again in halves, so count it there, not here
+    Object.entries(r.byType).forEach(([k, v]) => {
+      if (willSplit && r.capped.includes(k)) return
+      totals.byType[k] = (totals.byType[k] || 0) + v; totals.fetched += v
+    })
+    if (r.capped.length) {
+      if (willSplit) {
+        // re-ask just the capped types, in two halves (put in front so we stay in date order)
+        const mid = a + Math.floor((b - a) / 2)
+        queue.unshift([a, mid, r.capped], [mid, b, r.capped])
+        continue
+      }
+      totals.stillCapped.push({ from: new Date(a).toISOString(), types: r.capped })
+    }
+    finishedAt = Math.max(finishedAt, b)
+  }
+  totals.checkedThrough = new Date(finishedAt).toISOString()
+  return totals
 }
 
 // Runs hourly, checking a rolling lookback window rather than an
@@ -1497,13 +1546,9 @@ async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
 // report id), so this trades a bit of redundant querying for actually
 // catching late-approved results.
 //
-// NOTE: still doesn't paginate past 1000 per type - if a single type
-// ever produced 1000+ results within the lookback window (soil alone hit
-// exactly 1000 in one month during backfill testing, so this isn't
-// impossible), anything past the cap would be missed until the backlog
-// thinned out. Shorten STUKENHOLTZ_HOURLY_LOOKBACK_DAYS if that ever
-// shows up as unmapped/missing data, or add windowed pagination here
-// too, matching the backfill's approach.
+// Nov 2026: now windowed (syncStukenholtzRange), so a busy stretch can no
+// longer run past the 1000-per-call cap - that cap is the likely reason
+// samples went missing in late Aug / early Sep 2026.
 const STUKENHOLTZ_HOURLY_LOOKBACK_DAYS = 14;
 
 exports.syncStukenholtzSamplesHourly = onSchedule(
@@ -1519,15 +1564,49 @@ exports.syncStukenholtzSamplesHourly = onSchedule(
     const lookbackStart = new Date(
       Date.now() - STUKENHOLTZ_HOURLY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
     ).toISOString();
-    const result = await syncOneStukenholtzBatch(lookbackStart);
+    // Windowed (3 days at a time, split further if a type still hits the
+    // 1000 cap) - one open-ended 14-day call used to get cut off at 1000
+    // per type in the busiest weeks, silently dropping samples.
+    const result = await syncStukenholtzRange(lookbackStart, new Date().toISOString())
     // Kept for visibility/debugging (e.g. confirming the schedule is
     // actually firing) - no longer used to compute the next query's
     // starting point.
     await db.collection('syncState').doc('stukenholtz').set(
-      { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp(), lookbackStart },
+      { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp(), lookbackStart, lastAdded: result.added, lastFetched: result.fetched },
       { merge: true }
     );
-    console.log(`Stukenholtz sync: fetched ${result.fetched}, wrote ${result.written}, ${result.unmapped} unmapped.`);
+    console.log(`Stukenholtz sync: fetched ${result.fetched}, ${result.added} new, wrote ${result.written}, ${result.unmapped} unmapped, ${result.windows} windows.`);
+  }
+);
+
+// Weekly deeper re-check: results approved more than 14 days after the
+// sample was received would fall outside the hourly window, so once a week
+// look back 60 days.
+exports.recheckStukenholtzWeekly = onSchedule(
+  { schedule: 'every sunday 03:17', timeZone: 'America/Denver', secrets: [STUKENHOLTZ_API_KEY], timeoutSeconds: 540, memory: '1GiB' },
+  async () => {
+    const from = new Date(Date.now() - 60 * 86400000).toISOString()
+    const r = await syncStukenholtzRange(from, new Date().toISOString())
+    await admin.firestore().collection('syncState').doc('stukenholtzRecheck').set({ ...r, from, trigger: 'weekly', ranAt: admin.firestore.FieldValue.serverTimestamp() })
+    console.log(`Stukenholtz weekly re-check: fetched ${r.fetched}, ${r.added} new, ${r.windows} windows.`)
+  }
+);
+
+// "Re-check Stukenholtz" button in Agronomy > All samples: re-asks the lab
+// for every sample received in a date range and saves anything missing.
+// Admin / Owner / Farm manager. Up to ~8 minutes per call; if the range is
+// too long it stops part way and says how far it got (call again from there).
+exports.recheckStukenholtzRange = onCall(
+  { secrets: [STUKENHOLTZ_API_KEY], timeoutSeconds: 540, memory: '1GiB' },
+  async (request) => {
+    await requireAgronomyAccess(request.auth)
+    const { from, to } = request.data || {}
+    const a = new Date(from), b = new Date(to)
+    if (!from || !to || isNaN(a) || isNaN(b) || b <= a) throw new HttpsError('invalid-argument', 'Give a from and to date (to after from).')
+    if (b - a > 400 * 86400000) throw new HttpsError('invalid-argument', 'Pick a range of about a year or less.')
+    const r = await syncStukenholtzRange(a.toISOString(), b.toISOString(), { deadlineMs: Date.now() + 470000 })
+    await admin.firestore().collection('syncState').doc('stukenholtzRecheck').set({ ...r, from: a.toISOString(), to: b.toISOString(), trigger: 'manual', by: request.auth.uid, ranAt: admin.firestore.FieldValue.serverTimestamp() })
+    return r
   }
 );
 
