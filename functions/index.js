@@ -791,6 +791,33 @@ exports.updateAgronomyCriteria = onCall(async (request) => {
     return { ok: true };
   }
 
+  // Rename a curve = move it to the new crop / variety key (the key is what
+  // fields are matched on: "CROP" or "CROP::VARIETY").
+  if (kind === 'renameCurve') {
+    const { newCropName, newVarietyName } = request.data || {};
+    const crop = String(newCropName || '').trim().toUpperCase();
+    const variety = String(newVarietyName || '').trim().toUpperCase() || null;
+    if (!cropKey || !crop) {
+      throw new HttpsError('invalid-argument', 'cropKey and a new crop name are required for kind "renameCurve".');
+    }
+    const newKey = variety ? `${crop}::${variety}` : crop;
+    if (newKey.includes('/')) throw new HttpsError('invalid-argument', 'Names can\'t contain "/".');
+    const oldRef = db.collection('agronomyCurves').doc(cropKey);
+    const newRef = db.collection('agronomyCurves').doc(newKey);
+    await db.runTransaction(async (tx) => {
+      const [oldSnap, newSnap] = await Promise.all([tx.get(oldRef), tx.get(newRef)]);
+      if (!oldSnap.exists) throw new HttpsError('not-found', `No curve named ${cropKey}.`);
+      if (newKey === cropKey) return;
+      if (newSnap.exists) throw new HttpsError('already-exists', `There's already a curve named ${newKey} — rename or delete that one first.`);
+      tx.set(newRef, {
+        ...oldSnap.data(), cropName: crop, varietyName: variety, renamedFrom: cropKey,
+        updatedAt: AgronomyCriteriaFieldValue.serverTimestamp(), updatedBy: request.auth.uid
+      });
+      tx.delete(oldRef);
+    });
+    return { ok: true, cropKey: newKey };
+  }
+
   if (kind === 'deleteCurve') {
     if (!cropKey) {
       throw new HttpsError('invalid-argument', 'cropKey is required for kind "deleteCurve".');
@@ -957,13 +984,30 @@ async function stukenholtzGet(path, apikey) {
 
 async function stukenholtzPost(path, body, apikey) {
   const url = `${STUKENHOLTZ_BASE_URL}${path}?apikey=${apikey}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { accept: 'application/json', 'content-type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  if (!res.ok) throw new Error(`Stukenholtz API error ${res.status} on ${path}: ${await res.text()}`);
-  return res.json();
+  // Retry a busy / flaky lab server (429, 5xx, dropped connection) a couple
+  // of times with a pause, since a re-check asks for many windows in a row.
+  for (let attempt = 1; ; attempt++) {
+    let res;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(90000) // a hung request mustn't eat the whole function's time
+      });
+    } catch (err) {
+      if (attempt >= 3) throw new Error(`Couldn't reach Stukenholtz (${err.message})`);
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+      continue;
+    }
+    if (res.ok) return res.json();
+    const text = (await res.text()).slice(0, 300);
+    if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+      await new Promise((r) => setTimeout(r, 3000 * attempt));
+      continue;
+    }
+    throw new Error(`Stukenholtz API error ${res.status} on ${path}: ${text}`);
+  }
 }
 
 // Matches a Stukenholtz field/location label against our own `fields`
@@ -1510,7 +1554,16 @@ async function syncStukenholtzRange(fromIso, toIso, { windowMs = 3 * 86400000, d
   while (queue.length) {
     if (Date.now() > deadlineMs) { totals.timedOut = true; break }
     const [a, b, types] = queue.shift()
-    const r = await syncOneStukenholtzBatch(new Date(a).toISOString(), new Date(b).toISOString(), ctx, types)
+    let r
+    try {
+      r = await syncOneStukenholtzBatch(new Date(a).toISOString(), new Date(b).toISOString(), ctx, types)
+    } catch (err) {
+      // one bad window shouldn't sink the whole run - note it and keep going
+      console.error(`Stukenholtz window ${new Date(a).toISOString()} - ${new Date(b).toISOString()} failed:`, err)
+      ;(totals.errors = totals.errors || []).push({ from: new Date(a).toISOString(), to: new Date(b).toISOString(), message: String(err && err.message || err).slice(0, 300) })
+      finishedAt = Math.max(finishedAt, b)
+      continue
+    }
     totals.windows++
     totals.written += r.written; totals.unmapped += r.unmapped; totals.added += r.added
     const willSplit = r.capped.length && b - a > 3600000
@@ -1604,8 +1657,17 @@ exports.recheckStukenholtzRange = onCall(
     const a = new Date(from), b = new Date(to)
     if (!from || !to || isNaN(a) || isNaN(b) || b <= a) throw new HttpsError('invalid-argument', 'Give a from and to date (to after from).')
     if (b - a > 400 * 86400000) throw new HttpsError('invalid-argument', 'Pick a range of about a year or less.')
-    const r = await syncStukenholtzRange(a.toISOString(), b.toISOString(), { deadlineMs: Date.now() + 470000 })
-    await admin.firestore().collection('syncState').doc('stukenholtzRecheck').set({ ...r, from: a.toISOString(), to: b.toISOString(), trigger: 'manual', by: request.auth.uid, ranAt: admin.firestore.FieldValue.serverTimestamp() })
+    let r
+    try {
+      r = await syncStukenholtzRange(a.toISOString(), b.toISOString(), { deadlineMs: Date.now() + 240000 })
+    } catch (err) {
+      // Pass the real reason back to the screen instead of a bare "INTERNAL".
+      console.error('recheckStukenholtzRange failed:', err)
+      throw new HttpsError('internal', `Re-check failed: ${String(err && err.message || err).slice(0, 400)}`)
+    }
+    try {
+      await admin.firestore().collection('syncState').doc('stukenholtzRecheck').set(JSON.parse(JSON.stringify({ ...r, from: a.toISOString(), to: b.toISOString(), trigger: 'manual', by: request.auth.uid, ranAt: new Date().toISOString() })))
+    } catch (err) { console.error('could not save re-check status', err) }
     return r
   }
 );
