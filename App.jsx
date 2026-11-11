@@ -357,7 +357,7 @@ export default function App() {
   const [profileStatus, setProfileStatus] = useState('loading') // 'loading' | 'ready' | 'missing' | 'error'
   const [profileSlow, setProfileSlow] = useState(false)
   const [profileAttempt, setProfileAttempt] = useState(0)
-  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', 'contracts', 'yields', 'harvest', 'seed' or 'map' — more modules join this list later
+  const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', 'contracts', 'yields', 'harvest' (Operations schedule), 'seed' or 'map' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
   const [view, setView] = useState('schedule')
   const [online, setOnline] = useState(navigator.onLine)
@@ -1304,7 +1304,7 @@ export default function App() {
                   <rect x="21" y="32" width="11" height="4" rx="2" fill="#D6B48C" />
                 </svg>
               </div>
-              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Harvest</div>
+              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Operations</div>
             </div>
           )}
           {canSeeSeed && (

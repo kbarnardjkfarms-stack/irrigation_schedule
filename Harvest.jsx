@@ -10,7 +10,9 @@ import HarvestTimeline from './HarvestTimeline.jsx'
 import HarvestToday from './HarvestToday.jsx'
 import { FieldDrawer, FieldsTable, HarvestSettings } from './HarvestSetup.jsx'
 
-// Harvest Schedule module — the AIO version of harvest_plan_2026.xlsm.
+// Operations Schedule module (was "Harvest schedule") — the AIO version of
+// harvest_plan_2026.xlsm. Code, collection names (harvestPlans/harvestFields/
+// harvestLogs) and the 'harvest' module id are unchanged so nothing saved moves.
 //
 // Pulls every Agworld field for the season, lets you filter by crop and drag
 // fields into ~8 team lines; the line order becomes a half-day by half-day
@@ -74,7 +76,7 @@ export default function Harvest({ userRole }) {
     if (!seasonId) return undefined
     const sid = String(seasonId)
     const onErr = (e) => setError(e.code === 'permission-denied'
-      ? 'No permission to read the harvest plan. If this is the first time the module has been opened, the new firestore.rules may not be deployed yet.'
+      ? 'No permission to read the operations schedule. If this is the first time the module has been opened, the new firestore.rules may not be deployed yet.'
       : e.message)
     const unsubs = [
       onSnapshot(query(collectionGroup(db, 'seasons'), where('seasonId', '==', seasonId)), (snap) => {
@@ -177,7 +179,7 @@ export default function Harvest({ userRole }) {
   async function run(fn, okText) {
     setMsg(null)
     try { await fn(); if (okText) setMsg({ ok: true, text: okText }) } catch (e) {
-      setMsg({ ok: false, text: e.code === 'permission-denied' ? 'You don’t have permission to change the harvest plan.' : (e.message || String(e)) })
+      setMsg({ ok: false, text: e.code === 'permission-denied' ? 'You don’t have permission to change the operations schedule.' : (e.message || String(e)) })
     }
   }
   const sid = String(seasonId)
@@ -374,7 +376,7 @@ function Banners({ schedule, settings, nowRes }) {
   return (
     <div className="harvest-banners">
       <div className="harvest-banner harvest-banner-total">
-        <div className="hb-head"><span className="hb-name">Total harvest</span><span className={`hb-pace ${totalChip}`} title="All teams added together">{Math.abs(tot.aheadDays) < 0.25 ? 'On pace' : `${fmtDays(Math.abs(tot.aheadDays)).replace('day', 'crew-day')} ${tot.aheadDays > 0 ? 'ahead' : 'behind'}`}</span></div>
+        <div className="hb-head"><span className="hb-name">All teams</span><span className={`hb-pace ${totalChip}`} title="All teams added together">{Math.abs(tot.aheadDays) < 0.25 ? 'On pace' : `${fmtDays(Math.abs(tot.aheadDays)).replace('day', 'crew-day')} ${tot.aheadDays > 0 ? 'ahead' : 'behind'}`}</span></div>
         <div className="hb-pct">{Math.round(tot.pct * 100)}<small>%</small></div>
         <div className="hb-bar"><div style={{ width: `${Math.min(100, tot.pct * 100)}%` }} /></div>
         <div className="hb-line">{fmtN(tot.acresDone)} of {fmtN(tot.acres)} ac</div>

@@ -121,7 +121,7 @@ export default function HarvestBoard({ allFields, schedule, settings, canEdit, w
           </div>
         )}
         <div className="hb-crops">
-          <button className={crop === 'default' ? 'active' : ''} onClick={() => setCrop('default')} title="Potatoes, beets and onions">Harvest crops</button>
+          <button className={crop === 'default' ? 'active' : ''} onClick={() => setCrop('default')} title="Potatoes, beets and onions">Main crops</button>
           {cropCounts.map(([c, n]) => (
             <button key={c} className={crop === c ? 'active' : ''} onClick={() => setCrop(c)}>
               <i style={{ background: CROP_TINT[c] || '#D3D1C7' }} />{c.toLowerCase()} <span>{n}</span>

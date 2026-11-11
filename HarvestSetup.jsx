@@ -69,7 +69,7 @@ export function FieldDrawer({ field, schedule, settings, canEdit, writes, onClos
   )
   return (
     <div className="hd-backdrop" onClick={onClose}>
-      <div className="hd-drawer" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={`${f.name} harvest details`}>
+      <div className="hd-drawer" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={`${f.name} schedule details`}>
         <div className="hd-head" style={{ borderTopColor: team ? team.color : '#ccc' }}>
           <div>
             <div className="yields-card-title" style={{ fontSize: 16 }}>{f.name}</div>
@@ -244,7 +244,7 @@ export function FieldsTable({ allFields, schedule, settings, canEdit, writes, on
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheetRows), 'Field Table')
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(grid), 'Half-day schedule')
-    XLSX.writeFile(wb, `harvest_plan_${seasonName || ''}.xlsx`)
+    XLSX.writeFile(wb, `operations_schedule_${seasonName || ''}.xlsx`)
   }
 
   return (
@@ -404,7 +404,7 @@ function ImportPanel({ allFields, settings, writes, onDone }) {
 
   return (
     <div className="harvest-import">
-      <div className="contracts-sub" style={{ marginTop: 0 }}>Pick your harvest plan workbook (.xlsm / .xlsx). AIO reads its <strong>Field Table</strong> sheet: team, order, yield projection, target output, hours digging, drive time, destination, skin set, kill type, buyer and the resource columns. Fields are matched to Agworld by name; anything that doesn’t match is added as a field that isn’t in Agworld. “Move Day” rows become move blocks; “Done” rows are skipped.</div>
+      <div className="contracts-sub" style={{ marginTop: 0 }}>Pick your schedule workbook, e.g. harvest_plan_2026 (.xlsm / .xlsx). AIO reads its <strong>Field Table</strong> sheet: team, order, yield projection, target output, hours digging, drive time, destination, skin set, kill type, buyer and the resource columns. Fields are matched to Agworld by name; anything that doesn’t match is added as a field that isn’t in Agworld. “Move Day” rows become move blocks; “Done” rows are skipped.</div>
       <input type="file" accept=".xlsx,.xlsm,.xls" onChange={onFile} style={{ marginTop: 8 }} />
       {err && <div className="agronomy-error-banner" style={{ marginTop: 8 }}>{err}</div>}
       {parsed && (
