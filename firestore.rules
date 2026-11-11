@@ -443,6 +443,11 @@ service cloud.firestore {
       allow read: if canMap();
       allow write: if canMapEdit();
     }
+    // Public map feed settings (Farm Map > Public feed). The feed function
+    // reads them with the admin SDK; only Admin/Owner see or change them.
+    match /publicMapFeed/{id} {
+      allow read, write: if canMapEdit();
+    }
     match /fieldPlanRows/{id} {
       allow read: if canMap();
       allow write: if canMapEdit();
