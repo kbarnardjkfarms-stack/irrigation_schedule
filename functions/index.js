@@ -3222,3 +3222,9 @@ exports.scanSprinklerPackage = packageScan.scanSprinklerPackage;
 // reason as pivotWatcher. See fieldnetSync.js.
 const fieldnetSync = require('./fieldnetSync');
 exports.syncFieldnetPivots = fieldnetSync.syncFieldnetPivots;
+
+// Public farm map feed: a live KML link of the Agworld fields (crop colours,
+// acres) for Google Earth and other map programs. Lives in its own file —
+// see publicMapFeed.js.
+const publicMapFeed = require('./publicMapFeed');
+exports.publicFieldsKml = publicMapFeed.publicFieldsKml;
