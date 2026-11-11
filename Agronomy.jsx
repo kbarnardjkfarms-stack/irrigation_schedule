@@ -187,7 +187,7 @@ export default function Agronomy({ userRole }) {
       {view === 'compost' && <AgronomyCompostSources />}
       {view === 'mapping' && <AgronomyMapping fields={allFields} />}
       {view === 'scouting' && <AgronomyScouting fields={allFields} />}
-      {view === 'targets' && canEditTargets && <AgronomyTargets />}
+      {view === 'targets' && canEditTargets && <AgronomyTargets fields={fields} />}
     </div>
   )
 }

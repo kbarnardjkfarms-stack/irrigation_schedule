@@ -63,11 +63,15 @@ export function useLiveAgronomyCriteria() {
 // null if neither a variety-specific nor a crop-level curve exists.
 export function getCurveRows(curvesByKey, cropName, varietyName) {
   if (!cropName || !curvesByKey) return null
-  if (varietyName) {
-    const varietyKey = `${cropName}::${varietyName}`
+  // Curve keys are stored upper-case; Agworld's variety names often aren't
+  // ("Russet Burbank"), so compare upper-case on both sides.
+  const crop = String(cropName).trim().toUpperCase()
+  const variety = varietyName ? String(varietyName).trim().toUpperCase() : null
+  if (variety) {
+    const varietyKey = `${crop}::${variety}`
     if (curvesByKey[varietyKey]) return curvesByKey[varietyKey].weeks || null
   }
-  if (curvesByKey[cropName]) return curvesByKey[cropName].weeks || null
+  if (curvesByKey[crop]) return curvesByKey[crop].weeks || null
   return null
 }
 

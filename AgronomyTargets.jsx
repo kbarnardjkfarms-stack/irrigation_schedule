@@ -45,7 +45,7 @@ function buildFlatDraft(metricsByType, liveFlatTargets) {
   return draft
 }
 
-export default function AgronomyTargets() {
+export default function AgronomyTargets({ fields = [] }) {
   const { flatTargets, curvesByKey, loading, error } = useLiveAgronomyCriteria()
 
   const [flatDraft, setFlatDraft] = useState(null)
@@ -82,10 +82,56 @@ export default function AgronomyTargets() {
         varietyName: doc.varietyName || null,
         weeks: cloneWeeks(doc.weeks)
       })
-      setCurveMsg(null)
+      setCurveMsg((m) => (m && m.keep ? { ...m, keep: false } : null))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKey])
+
+  // How many of this season's fields each curve is used for (variety curve
+  // first, then the crop-wide one) - helps when renaming to match Agworld.
+  const useCount = useMemo(() => {
+    const m = {}
+    fields.forEach((f) => {
+      const crop = String(f.cropName || '').toUpperCase(), variety = String(f.varietyName || '').toUpperCase()
+      if (!crop) return
+      const k = variety && curvesByKey[`${crop}::${variety}`] ? `${crop}::${variety}` : curvesByKey[crop] ? crop : null
+      if (k) m[k] = (m[k] || 0) + 1
+    })
+    return m
+  }, [fields, curvesByKey])
+  const cropOptions = useMemo(() => [...new Set(fields.map((f) => String(f.cropName || '').toUpperCase()).filter(Boolean))].sort(), [fields])
+  const [rename, setRename] = useState(null) // { crop, variety }
+  const [renaming, setRenaming] = useState(false)
+  const varietyOptions = useMemo(() => {
+    const crop = rename ? rename.crop.trim().toUpperCase() : ''
+    return [...new Set(fields.filter((f) => String(f.cropName || '').toUpperCase() === crop).map((f) => String(f.varietyName || '').toUpperCase()).filter(Boolean))].sort()
+  }, [fields, rename])
+  const renameKey = rename ? (rename.variety.trim() ? `${rename.crop.trim().toUpperCase()}::${rename.variety.trim().toUpperCase()}` : rename.crop.trim().toUpperCase()) : ''
+  const renameMatches = rename ? fields.filter((f) => {
+    const crop = String(f.cropName || '').toUpperCase(), variety = String(f.varietyName || '').toUpperCase()
+    return rename.variety.trim() ? `${crop}::${variety}` === renameKey : crop === renameKey
+  }).length : 0
+  function startRename() {
+    const d = curvesByKey[selectedKey] || {}
+    setRename({ crop: d.cropName || selectedKey.split('::')[0], variety: d.varietyName || selectedKey.split('::')[1] || '' })
+    setCurveMsg(null)
+  }
+  function saveRename() {
+    if (!rename.crop.trim()) return
+    if (renameKey === selectedKey) { setRename(null); return }
+    if (curvesByKey[renameKey]) { setCurveMsg({ ok: false, text: `There's already a curve named ${renameKey}.` }); return }
+    setRenaming(true)
+    updateAgronomyCriteria({ kind: 'renameCurve', cropKey: selectedKey, newCropName: rename.crop, newVarietyName: rename.variety })
+      .then((res) => {
+        const k = (res && res.data && res.data.cropKey) || renameKey
+        setSelectedKey(k)
+        setCurveDraft((d) => (d ? { ...d, cropName: rename.crop.trim().toUpperCase(), varietyName: rename.variety.trim().toUpperCase() || null } : d))
+        setRename(null)
+        setCurveMsg({ ok: true, text: `Renamed to ${k.replace('::', ' · ')}.`, keep: true })
+      })
+      .catch((err) => setCurveMsg({ ok: false, text: err.message }))
+      .finally(() => setRenaming(false))
+  }
 
   const [showNewForm, setShowNewForm] = useState(false)
   const [newCrop, setNewCrop] = useState('')
@@ -267,10 +313,27 @@ export default function AgronomyTargets() {
       <div className="agronomy-targets-crop-row">
         <select value={selectedKey || ''} onChange={(e) => setSelectedKey(e.target.value)}>
           {cropKeys.length === 0 && <option value="">No curves yet</option>}
-          {cropKeys.map((k) => <option key={k} value={k}>{k}</option>)}
+          {cropKeys.map((k) => <option key={k} value={k}>{k.replace('::', ' · ')}{fields.length ? ` (${useCount[k] || 0} field${useCount[k] === 1 ? '' : 's'})` : ''}</option>)}
         </select>
+        {selectedKey && curvesByKey[selectedKey] && <button onClick={startRename} disabled={!!rename}>Rename</button>}
         <button onClick={() => setShowNewForm((s) => !s)}>+ New crop/variety</button>
       </div>
+
+      {rename && (
+        <div className="agronomy-targets-new-form">
+          <input placeholder="Crop name (e.g. POTATO)" list="curve-crops" value={rename.crop} onChange={(e) => setRename({ ...rename, crop: e.target.value })} />
+          <input placeholder="Variety (blank = whole crop)" list="curve-varieties" value={rename.variety} onChange={(e) => setRename({ ...rename, variety: e.target.value })} />
+          <datalist id="curve-crops">{cropOptions.map((c) => <option key={c} value={c} />)}</datalist>
+          <datalist id="curve-varieties">{varietyOptions.map((v) => <option key={v} value={v} />)}</datalist>
+          <button onClick={saveRename} disabled={renaming || !rename.crop.trim()}>{renaming ? 'Saving…' : 'Save name'}</button>
+          <button onClick={() => setRename(null)} disabled={renaming}>Cancel</button>
+          <span className="agronomy-targets-hint" style={{ margin: 0 }}>
+            {renameKey === selectedKey ? 'No change yet.'
+              : curvesByKey[renameKey] ? `A curve named ${renameKey.replace('::', ' · ')} already exists.`
+                : fields.length ? `${renameKey.replace('::', ' · ') || '—'} matches ${renameMatches} field${renameMatches === 1 ? '' : 's'} this season (crop and variety as Agworld spells them).` : ''}
+          </span>
+        </div>
+      )}
 
       {showNewForm && (
         <div className="agronomy-targets-new-form">

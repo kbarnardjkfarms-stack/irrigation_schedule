@@ -86,15 +86,31 @@ function RecheckStukenholtz() {
   const [to, setTo] = useState(() => isoDay(new Date()))
   const [busy, setBusy] = useState(false)
   const [res, setRes] = useState(null)
+  // The function stops after ~4 minutes and says how far it got; keep
+  // calling from there until the whole range is done, adding up the counts.
+  const [progress, setProgress] = useState(null)
   async function go() {
-    setBusy(true); setRes(null)
+    setBusy(true); setRes(null); setProgress(null)
+    const call = httpsCallable(functions, 'recheckStukenholtzRange', { timeout: 540000 })
+    const end = `${to}T23:59:59`
+    let start = `${from}T00:00:00`
+    const sum = { fetched: 0, added: 0, unmapped: 0, byType: {}, stillCapped: [], errors: [] }
     try {
-      const r = (await httpsCallable(functions, 'recheckStukenholtzRange', { timeout: 540000 })({ from: `${from}T00:00:00`, to: `${to}T23:59:59` })).data
-      setRes({ ok: true, r })
-      if (r.timedOut && r.checkedThrough) setFrom(r.checkedThrough.slice(0, 10))
+      for (let round = 0; round < 30; round++) {
+        const r = (await call({ from: start, to: end })).data
+        sum.fetched += r.fetched || 0; sum.added += r.added || 0; sum.unmapped += r.unmapped || 0
+        Object.entries(r.byType || {}).forEach(([k, v]) => { sum.byType[k] = (sum.byType[k] || 0) + v })
+        sum.stillCapped.push(...(r.stillCapped || [])); sum.errors.push(...(r.errors || []))
+        sum.checkedThrough = r.checkedThrough
+        if (!r.timedOut || !r.checkedThrough || r.checkedThrough >= new Date(end).toISOString()) break
+        start = r.checkedThrough
+        setProgress(`Checked through ${fmtDay(r.checkedThrough)} so far — ${sum.added} missing found…`)
+      }
+      setRes({ ok: true, r: sum })
     } catch (e) {
-      setRes({ ok: false, text: e.code === 'functions/not-found' ? 'The re-check isn’t deployed yet — it goes out with the Cloud Functions upload.' : (e.message || String(e)) })
-    } finally { setBusy(false) }
+      const partial = sum.checkedThrough ? ` (it had checked through ${fmtDay(sum.checkedThrough)} and saved ${sum.added} missing before this)` : ''
+      setRes({ ok: false, text: (e.code === 'functions/not-found' ? 'The re-check isn’t deployed yet — it goes out with the Cloud Functions upload.' : (e.message || String(e))) + partial })
+    } finally { setBusy(false); setProgress(null) }
   }
   if (!open) return <button onClick={() => setOpen(true)} title="Ask Stukenholtz again for a date range and add any samples that are missing">Re-check Stukenholtz…</button>
   const r = res && res.ok ? res.r : null
@@ -105,17 +121,18 @@ function RecheckStukenholtz() {
         <label>From <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
         <label>To <input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
         <button className="save" disabled={busy || !from || !to || to < from} onClick={go}>{busy ? 'Checking… (can take a few minutes)' : 'Re-check'}</button>
+        {progress && <span className="agronomy-search-status">{progress}</span>}
         <button disabled={busy} onClick={() => { setOpen(false); setRes(null) }}>Close</button>
       </div>
       {res && !res.ok && <div className="agronomy-error-banner" style={{ margin: '8px 0 0' }}>{res.text}</div>}
       {r && (
         <div className={r.added ? 'yields-ok' : 'agronomy-recheck-result'}>
-          Stukenholtz has {r.fetched.toLocaleString()} sample{r.fetched === 1 ? '' : 's'} received {fmtDay(`${from}T12:00:00`)} – {r.timedOut ? fmtDay(r.checkedThrough) : fmtDay(`${to}T12:00:00`)}
+          Stukenholtz has {r.fetched.toLocaleString()} sample{r.fetched === 1 ? '' : 's'} received {fmtDay(`${from}T12:00:00`)} – {fmtDay(`${to}T12:00:00`)}
           {' '}({Object.entries(r.byType).filter(([, v]) => v).map(([k, v]) => `${v.toLocaleString()} ${TYPE_NAME[k] || k}`).join(', ') || 'none'}).
           {' '}<strong>{r.added ? `${r.added.toLocaleString()} were missing and are now saved.` : 'AIO already had all of them.'}</strong>
           {r.unmapped > 0 && ` ${r.unmapped} couldn’t be matched to a field — see Field mapping.`}
-          {r.timedOut && ` Ran out of time at ${fmtDay(r.checkedThrough)} — press Re-check again to carry on from there.`}
           {r.stillCapped && r.stillCapped.length > 0 && ` ${r.stillCapped.length} one-hour stretch(es) still hit the lab’s 1,000 limit — tell Claude.`}
+          {r.errors && r.errors.length > 0 && <div style={{ marginTop: 6, color: '#A32D2D' }}>{r.errors.length} stretch{r.errors.length === 1 ? '' : 'es'} couldn’t be read from Stukenholtz and {r.errors.length === 1 ? 'was' : 'were'} skipped ({fmtDay(r.errors[0].from)}: {r.errors[0].message}). Press Re-check again to retry.</div>}
         </div>
       )}
     </div>
