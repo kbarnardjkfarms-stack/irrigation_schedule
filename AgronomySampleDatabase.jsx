@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { collection, getDocs, limit, onSnapshot, orderBy, query, startAfter, where } from 'firebase/firestore'
-import { db } from './firebase.js'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions } from './firebase.js'
 import { SAMPLE_TYPE_LABEL, METRICS_BY_TYPE, CROP_COLOR, sortValueKeys } from './AgronomyConfig.js'
 
 const SAMPLE_TYPES = Object.keys(METRICS_BY_TYPE)
@@ -69,6 +70,56 @@ function fmtDate(ts) {
 function SortArrow({ active, dir }) {
   if (!active) return null
   return <span style={{ marginLeft: '4px' }}>{dir === 'asc' ? '\u25b2' : '\u25bc'}</span>
+}
+
+const TYPE_NAME = { SO: 'soil', PL: 'petiole', NEMA: 'nematode', CM: 'compost' }
+const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const fmtDay = (iso) => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+
+// Asks Stukenholtz again for every sample received in a date range and saves
+// any AIO doesn't have (recheckStukenholtzRange Cloud Function). The lab's
+// API only hands back 1,000 results per call, so a busy stretch could get
+// cut off; this re-check goes a few days at a time so nothing is skipped.
+function RecheckStukenholtz() {
+  const [open, setOpen] = useState(false)
+  const [from, setFrom] = useState(() => isoDay(new Date(Date.now() - 30 * 86400000)))
+  const [to, setTo] = useState(() => isoDay(new Date()))
+  const [busy, setBusy] = useState(false)
+  const [res, setRes] = useState(null)
+  async function go() {
+    setBusy(true); setRes(null)
+    try {
+      const r = (await httpsCallable(functions, 'recheckStukenholtzRange', { timeout: 540000 })({ from: `${from}T00:00:00`, to: `${to}T23:59:59` })).data
+      setRes({ ok: true, r })
+      if (r.timedOut && r.checkedThrough) setFrom(r.checkedThrough.slice(0, 10))
+    } catch (e) {
+      setRes({ ok: false, text: e.code === 'functions/not-found' ? 'The re-check isn’t deployed yet — it goes out with the Cloud Functions upload.' : (e.message || String(e)) })
+    } finally { setBusy(false) }
+  }
+  if (!open) return <button onClick={() => setOpen(true)} title="Ask Stukenholtz again for a date range and add any samples that are missing">Re-check Stukenholtz…</button>
+  const r = res && res.ok ? res.r : null
+  return (
+    <div className="agronomy-recheck">
+      <div><strong>Re-check Stukenholtz</strong> — asks the lab again for every sample <em>received</em> in these dates and adds any AIO is missing. Nothing already here is changed or duplicated.</div>
+      <div className="agronomy-filter-bar" style={{ margin: '8px 0 0' }}>
+        <label>From <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+        <label>To <input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+        <button className="save" disabled={busy || !from || !to || to < from} onClick={go}>{busy ? 'Checking… (can take a few minutes)' : 'Re-check'}</button>
+        <button disabled={busy} onClick={() => { setOpen(false); setRes(null) }}>Close</button>
+      </div>
+      {res && !res.ok && <div className="agronomy-error-banner" style={{ margin: '8px 0 0' }}>{res.text}</div>}
+      {r && (
+        <div className={r.added ? 'yields-ok' : 'agronomy-recheck-result'}>
+          Stukenholtz has {r.fetched.toLocaleString()} sample{r.fetched === 1 ? '' : 's'} received {fmtDay(`${from}T12:00:00`)} – {r.timedOut ? fmtDay(r.checkedThrough) : fmtDay(`${to}T12:00:00`)}
+          {' '}({Object.entries(r.byType).filter(([, v]) => v).map(([k, v]) => `${v.toLocaleString()} ${TYPE_NAME[k] || k}`).join(', ') || 'none'}).
+          {' '}<strong>{r.added ? `${r.added.toLocaleString()} were missing and are now saved.` : 'AIO already had all of them.'}</strong>
+          {r.unmapped > 0 && ` ${r.unmapped} couldn’t be matched to a field — see Field mapping.`}
+          {r.timedOut && ` Ran out of time at ${fmtDay(r.checkedThrough)} — press Re-check again to carry on from there.`}
+          {r.stillCapped && r.stillCapped.length > 0 && ` ${r.stillCapped.length} one-hour stretch(es) still hit the lab’s 1,000 limit — tell Claude.`}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function AgronomySampleDatabase({ fields }) {
@@ -362,6 +413,7 @@ export default function AgronomySampleDatabase({ fields }) {
                 : `${visibleSamples.length.toLocaleString()} of ${searchBase.length.toLocaleString()} ${SAMPLE_TYPE_LABEL[type].toLowerCase()} samples${fuzzyCount ? ` · ${fuzzyCount} close match${fuzzyCount === 1 ? '' : 'es'}` : ''}`}
           </span>
         )}
+        <RecheckStukenholtz />
         {valueColumns.length > 1 && (
           <div style={{ position: 'relative' }}>
             <button onClick={() => setColumnPickerOpen((o) => !o)}>
