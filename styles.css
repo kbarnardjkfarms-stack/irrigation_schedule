@@ -1157,3 +1157,6 @@ thead th.sticky-col { top: 0; z-index: 4; }
   .fm-mapbox { height: 65vh; order: -1; }
   .fm-card { left: 8px; right: 8px; top: auto; bottom: 8px; width: auto; max-height: 55%; }
 }
+
+.agronomy-search-status { font-size: 11px; color: #777; }
+.agronomy-fuzzy-tag { margin-left: 6px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 1px 5px; border-radius: 8px; background: #FAEEDA; color: #854F0B; white-space: nowrap; }

@@ -5,6 +5,53 @@ import { SAMPLE_TYPE_LABEL, METRICS_BY_TYPE, CROP_COLOR, sortValueKeys } from '.
 
 const SAMPLE_TYPES = Object.keys(METRICS_BY_TYPE)
 const PAGE_SIZE = 200
+const SEARCH_PAGE = 1000
+
+// ---------------------------------------------------------------------------
+// Spelling-tolerant search. Both sides are folded to capital letters and
+// digits only, so "HV-01", "hv 01", "HV01" and "HV_1" all compare equal (a
+// wrong dash, a space or a dropped leading zero doesn't matter). On top of
+// that a few typos are allowed: about one per four letters typed.
+// ---------------------------------------------------------------------------
+export function foldText(t) {
+  return String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/(^|[^0-9])0+(?=[0-9])/g, '$1')
+}
+// Fewest edits to make `q` appear somewhere inside `t` (approximate substring
+// match). Returns 0 for an exact hit.
+export function editsToFind(q, t) {
+  if (!q) return 0
+  if (t.includes(q)) return 0
+  const m = q.length
+  let pp = null // row before prev, for swapped letters
+  let prev = Array.from({ length: m + 1 }, (_, i) => i)
+  let best = m
+  for (let j = 1; j <= t.length; j++) {
+    const cur = [0] // a match may start anywhere in t
+    for (let i = 1; i <= m; i++) {
+      const cost = q[i - 1] === t[j - 1] ? 0 : 1
+      let v = Math.min(prev[i] + 1, cur[i - 1] + 1, prev[i - 1] + cost)
+      // swapped letters ("HV10" for "HV01") count as one edit
+      if (pp && i > 1 && q[i - 1] === t[j - 2] && q[i - 2] === t[j - 1]) v = Math.min(v, pp[i - 2] + 1)
+      cur.push(v)
+    }
+    if (cur[m] < best) best = cur[m]
+    pp = prev
+    prev = cur
+  }
+  return best
+}
+export const allowedEdits = (q) => (q.length < 3 ? 0 : Math.max(1, Math.floor(q.length / 4)))
+// Score a sample against the typed words: null = no match, 0 = exact, higher = looser.
+export function matchScore(words, haystacks) {
+  let total = 0
+  for (const w of words) {
+    let best = Infinity
+    for (const h of haystacks) { const d = editsToFind(w, h); if (d < best) best = d; if (!best) break }
+    if (best > allowedEdits(w)) return null
+    total += best
+  }
+  return total
+}
 
 const MATCH_TYPE_OPTIONS = [
   { value: '', label: 'Any match status' },
@@ -39,6 +86,9 @@ export default function AgronomySampleDatabase({ fields }) {
   const [sortColumn, setSortColumn] = useState('receivedDt')
   const [sortDir, setSortDir] = useState('desc')
   const [expandedId, setExpandedId] = useState(null)
+  // Searching looks through every sample of this type (in the date range),
+  // not just the loaded pages: fetched once, kept for the session.
+  const [allCache, setAllCache] = useState({ key: null, list: null, loading: false, error: null })
 
   // Builds the shared where()/orderBy() clauses for both the live first
   // page and loadMore. sinceDate/untilDate are range filters on the same
@@ -100,6 +150,41 @@ export default function AgronomySampleDatabase({ fields }) {
     }
   }
 
+  const searching = searchText.trim().length > 0
+  const cacheKey = `${type}|${sinceDate}|${untilDate}`
+  useEffect(() => {
+    if (!searching || allCache.key === cacheKey) return undefined
+    let dead = false
+    setAllCache({ key: cacheKey, list: null, loading: true, error: null })
+    ;(async () => {
+      try {
+        const out = []
+        let after = null
+        for (let guard = 0; guard < 200; guard++) {
+          const parts = [collection(db, 'samples'), ...buildConstraints()]
+          if (after) parts.push(startAfter(after))
+          parts.push(limit(SEARCH_PAGE))
+          const snap = await getDocs(query(...parts))
+          snap.forEach((d) => out.push({ id: d.id, ...d.data() }))
+          if (dead) return
+          setAllCache((c) => (c.key === cacheKey ? { ...c, list: [...out], loading: snap.docs.length === SEARCH_PAGE } : c))
+          if (snap.docs.length < SEARCH_PAGE) break
+          after = snap.docs[snap.docs.length - 1]
+        }
+      } catch (err) {
+        if (!dead) setAllCache({ key: cacheKey, list: null, loading: false, error: err.message })
+      }
+    })()
+    return () => { dead = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searching, cacheKey])
+  // A new live sample arriving on page one shouldn't be missing from search.
+  const searchBase = useMemo(() => {
+    if (!searching || allCache.key !== cacheKey || !allCache.list) return samples
+    const ids = new Set(allCache.list.map((x) => x.id))
+    return [...samples.filter((x) => !ids.has(x.id)), ...allCache.list]
+  }, [searching, allCache, cacheKey, samples])
+
   const fieldById = useMemo(() => {
     const map = {}
     fields.forEach((f) => { map[f.id] = f })
@@ -107,20 +192,26 @@ export default function AgronomySampleDatabase({ fields }) {
   }, [fields])
 
   const visibleSamples = useMemo(() => {
-    const search = searchText.trim().toLowerCase()
-    return samples.filter((s) => {
-      if (fieldFilter !== 'all' && s.fieldId !== fieldFilter) return false
+    const words = searchText.trim().split(/\s+/).map(foldText).filter(Boolean)
+    const out = []
+    searchBase.forEach((s) => {
+      if (fieldFilter !== 'all' && s.fieldId !== fieldFilter) return
       if (matchTypeFilter) {
-        if (matchTypeFilter === 'unmapped' ? s.fieldMatchType : s.fieldMatchType !== matchTypeFilter) return false
+        if (matchTypeFilter === 'unmapped' ? s.fieldMatchType : s.fieldMatchType !== matchTypeFilter) return
       }
-      if (search) {
+      if (words.length) {
         const field = fieldById[s.fieldId]
-        const haystack = [field?.name, field?.cropName, s.rawFieldLabel].filter(Boolean).join(' ').toLowerCase()
-        if (!haystack.includes(search)) return false
+        const hay = [field?.name, field?.farmName, field?.cropName, s.rawFieldLabel, s.id].filter(Boolean).map(foldText)
+        const score = matchScore(words, hay)
+        if (score == null) return
+        out.push(score ? { ...s, _fuzzy: score } : s)
+        return
       }
-      return true
+      out.push(s)
     })
-  }, [samples, fieldFilter, matchTypeFilter, searchText, fieldById])
+    return out
+  }, [searchBase, fieldFilter, matchTypeFilter, searchText, fieldById])
+  const fuzzyCount = visibleSamples.filter((s) => s._fuzzy).length
 
   // Columns come from whatever value keys are actually present in the
   // currently loaded samples - known/labeled metrics (from
@@ -146,13 +237,10 @@ export default function AgronomySampleDatabase({ fields }) {
     }
   }
 
-  // Sorts/searches only what's currently loaded (this page, plus
-  // anything pulled in via Load more) - the date range above is a real
-  // server-side query bound, but search text, match status, and sorting
-  // by a value column all operate on the loaded set, since Firestore
-  // can't do free-text search or sort by an arbitrary nested field
-  // without a dedicated index per metric. Load more first if you want to
-  // search/sort across full history rather than just the loaded page(s).
+  // Without search text this sorts what's loaded (page one plus Load more).
+  // With search text it works on every sample of this type in the date
+  // range (fetched once, above) - Firestore can't do free-text or
+  // spelling-tolerant search itself, so it's done here.
   const sortedSamples = useMemo(() => {
     const list = [...visibleSamples]
     function getValue(s) {
@@ -262,11 +350,18 @@ export default function AgronomySampleDatabase({ fields }) {
         />
         <input
           type="text"
-          placeholder="Search field, crop, or lab label..."
+          placeholder="Search all samples: field, farm, crop, lab label…"
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           className="agronomy-search-input"
         />
+        {searching && (
+          <span className="agronomy-search-status">
+            {allCache.error ? `Couldn’t search everything (${allCache.error}) — showing loaded samples only`
+              : allCache.loading ? `Searching all ${SAMPLE_TYPE_LABEL[type].toLowerCase()} samples… ${allCache.list ? allCache.list.length.toLocaleString() : 0} so far`
+                : `${visibleSamples.length.toLocaleString()} of ${searchBase.length.toLocaleString()} ${SAMPLE_TYPE_LABEL[type].toLowerCase()} samples${fuzzyCount ? ` · ${fuzzyCount} close match${fuzzyCount === 1 ? '' : 'es'}` : ''}`}
+          </span>
+        )}
         {valueColumns.length > 1 && (
           <div style={{ position: 'relative' }}>
             <button onClick={() => setColumnPickerOpen((o) => !o)}>
@@ -355,7 +450,10 @@ export default function AgronomySampleDatabase({ fields }) {
                 <Fragment key={s.id}>
                   <tr className="agronomy-clickable-row" onClick={() => setExpandedId(isExpanded ? null : s.id)}>
                     <td>{fmtDate(s.receivedDt)}</td>
-                    <td>{field?.name || s.rawFieldLabel || '\u2014'}</td>
+                    <td>
+                      {field?.name || s.rawFieldLabel || '\u2014'}
+                      {s._fuzzy ? <span className="agronomy-fuzzy-tag" title="Close match — spelled a little differently from what you typed">close match</span> : null}
+                    </td>
                     <td>
                       {field?.cropName && (
                         <span className="crop-badge" style={{ background: cropColor.bg, color: cropColor.fg }}>
@@ -392,7 +490,7 @@ export default function AgronomySampleDatabase({ fields }) {
         </table>
       </div>
 
-      {hasMore && (
+      {hasMore && !searching && (
         <button disabled={loadingMore} onClick={loadMore} style={{ marginTop: '10px' }}>
           {loadingMore ? 'Loading\u2026' : 'Load more'}
         </button>
