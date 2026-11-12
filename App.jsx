@@ -538,6 +538,14 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  // Escape closes the editor pop-up (same as the X button).
+  useEffect(() => {
+    if (!selected) return
+    function onKey(e) { if (e.key === 'Escape') closeEditor() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selected])
+
   useEffect(() => {
     if (!user) { setUserRole(null); setUserProfile(null); setProfileStatus('loading'); return }
     setProfileStatus('loading')
@@ -941,6 +949,12 @@ export default function App() {
     setEditingMode(null)
   }
 
+  // Closes the editor pop-up and forgets the selected cell.
+  function closeEditor() {
+    setSelected(null)
+    setEditingMode(null)
+  }
+
   function startEditOn(existing) {
     setEditingMode('on')
     setEditingHour(existing && existing.type === 'on' ? existing.ts % 24 : DEFAULT_HOUR[selected.shift])
@@ -967,12 +981,13 @@ export default function App() {
       if (editingDisplay === 'sis') newEvent.sisDegrees = editingSisDegrees
     }
     await saveEvents(fieldId, [...filtered, newEvent])
-    setEditingMode(null)
+    closeEditor()
   }
 
   async function removeEvent(fieldId, ev) {
     const current = eventsByField[fieldId] || []
     await saveEvents(fieldId, current.filter((e) => e !== ev))
+    closeEditor()
   }
 
   async function applyCopy() {
@@ -1428,7 +1443,8 @@ export default function App() {
             </div>
           )}
           {view === 'schedule' && selected && !mode && editorField && (
-            <div className="editor-panel">
+            <div className="editor-backdrop" onClick={(e) => { if (e.target === e.currentTarget) closeEditor() }}>
+            <div className="editor-panel" role="dialog" aria-modal="true" aria-label={`Edit ${editorField.fieldName}`}>
               <div className="editor-header">
                 <span className="editor-dot" style={{ background: dayTint(selected.dayIdx) }} />
                 <div>
@@ -1437,6 +1453,7 @@ export default function App() {
                     {DAYS[selected.dayIdx].en} · {BLOCKS[selected.shift].label.toLowerCase()}{editingMode ? ` · turned ${editingMode}` : ''}
                   </div>
                 </div>
+                <button className="editor-close" aria-label="Close" onClick={closeEditor}>×</button>
               </div>
               {!editingMode ? (
                 <div className="editor-row">
@@ -1496,6 +1513,7 @@ export default function App() {
                   </div>
                 </>
               )}
+            </div>
             </div>
           )}
           {view === 'schedule' && <div className="table-scroll">
