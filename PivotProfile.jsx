@@ -4,6 +4,169 @@ import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage
 import { db, storage, auth } from './firebase.js'
 import PivotIcon from './PivotIcon.jsx'
 
+// ---------------------------------------------------------------------------
+// Photo of a printout -> PDF. The phone's own camera takes the picture (the
+// file picker with capture), each photo is shrunk to a JPEG, and the JPEGs are
+// wrapped in a plain PDF in the browser. The package that gets saved is an
+// ordinary PDF, so the GPM reader treats it like any scanned page.
+
+const PHOTO_MAX_EDGE = 2200
+const PHOTO_MAX_PAGES = 5 // the reader looks at the first 5 pages
+
+function loadPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img) }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't open that photo. Try taking it again.")) }
+    img.src = url
+  })
+}
+
+async function photoToPage(file) {
+  const img = await loadPhoto(file)
+  const scale = Math.min(1, PHOTO_MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight))
+  const w = Math.max(1, Math.round(img.naturalWidth * scale))
+  const h = Math.max(1, Math.round(img.naturalHeight * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, 0, w, h)
+  ctx.drawImage(img, 0, 0, w, h)
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85))
+  if (!blob) throw new Error("Couldn't use that photo. Try taking it again.")
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  return { bytes, w, h, previewUrl: URL.createObjectURL(blob) }
+}
+
+// One JPEG per page, each page 612 points wide (US Letter width).
+function buildPdf(pages) {
+  const enc = new TextEncoder()
+  const chunks = []
+  const offsets = []
+  let len = 0
+  const push = (x) => {
+    const b = typeof x === 'string' ? enc.encode(x) : x
+    chunks.push(b)
+    len += b.length
+  }
+  const obj = (id, parts) => {
+    offsets[id] = len
+    push(`${id} 0 obj\n`)
+    parts.forEach(push)
+    push('\nendobj\n')
+  }
+  const total = 2 + pages.length * 3
+  push('%PDF-1.4\n')
+  obj(1, ['<< /Type /Catalog /Pages 2 0 R >>'])
+  obj(2, [`<< /Type /Pages /Kids [${pages.map((_, i) => `${3 + i * 3} 0 R`).join(' ')}] /Count ${pages.length} >>`])
+  pages.forEach((p, i) => {
+    const base = 3 + i * 3
+    const W = 612
+    const H = Math.round((612 * p.h) / p.w)
+    const content = `q ${W} 0 0 ${H} 0 0 cm /Im0 Do Q`
+    obj(base, [`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /XObject << /Im0 ${base + 2} 0 R >> >> /Contents ${base + 1} 0 R >>`])
+    obj(base + 1, [`<< /Length ${content.length} >>\nstream\n${content}\nendstream`])
+    obj(base + 2, [
+      `<< /Type /XObject /Subtype /Image /Width ${p.w} /Height ${p.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${p.bytes.length} >>\nstream\n`,
+      p.bytes,
+      '\nendstream'
+    ])
+  })
+  const xrefPos = len
+  let xref = `xref\n0 ${total + 1}\n0000000000 65535 f \n`
+  for (let id = 1; id <= total; id++) xref += `${String(offsets[id]).padStart(10, '0')} 00000 n \n`
+  push(`${xref}trailer\n<< /Size ${total + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`)
+  const out = new Uint8Array(len)
+  let at = 0
+  chunks.forEach((c) => { out.set(c, at); at += c.length })
+  return out
+}
+
+// "Take photo of printout" button. Photos pile up as pages; "Use" turns them
+// into one PDF and hands it to onPdf (which returns true once it is saved).
+function PhotoToPdf({ disabled, onPdf, onError }) {
+  const [pages, setPages] = useState([])
+  const [busy, setBusy] = useState(false)
+  const locked = disabled || busy
+
+  async function handlePhoto(e) {
+    const file = e.target.files && e.target.files[0]
+    e.target.value = ''
+    if (!file) return
+    setBusy(true)
+    onError(null)
+    try {
+      const page = await photoToPage(file)
+      setPages((prev) => [...prev, page])
+    } catch (err) {
+      onError(err.message || "Couldn't use that photo.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function startOver() {
+    pages.forEach((p) => URL.revokeObjectURL(p.previewUrl))
+    setPages([])
+    onError(null)
+  }
+
+  async function usePages() {
+    setBusy(true)
+    onError(null)
+    try {
+      const stamp = new Date().toISOString().slice(0, 10)
+      const file = new File([buildPdf(pages)], `Package photo ${stamp}.pdf`, { type: 'application/pdf' })
+      const saved = await onPdf(file)
+      if (saved) startOver()
+    } catch (err) {
+      onError(err.message || "Couldn't make the PDF. Try again.")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const btn = { fontSize: '13px', padding: '8px 14px', border: '1px solid #ccc', borderRadius: '8px', background: '#fff', cursor: locked ? 'default' : 'pointer', display: 'inline-block' }
+
+  return (
+    <div style={{ marginTop: '10px' }}>
+      {pages.length === 0 ? (
+        <>
+          <label style={btn}>
+            {busy ? 'Preparing photo…' : 'Take photo of printout'}
+            <input type="file" accept="image/*" capture="environment" onChange={handlePhoto} disabled={locked} style={{ display: 'none' }} />
+          </label>
+          <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Lay the page flat in good light and photograph the page that shows the system GPM.</div>
+        </>
+      ) : (
+        <div style={{ background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px' }}>
+          <div style={{ fontSize: '12px', color: '#555', marginBottom: '8px' }}>{pages.length} page{pages.length === 1 ? '' : 's'} ready</div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+            {pages.map((p, i) => (
+              <img key={i} src={p.previewUrl} alt={`Page ${i + 1}`} style={{ height: '80px', width: 'auto', borderRadius: '4px', border: '1px solid #ccc' }} />
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <button onClick={usePages} disabled={locked} style={{ fontSize: '13px', padding: '8px 14px', background: '#2b2b26', color: '#fff', border: 'none', borderRadius: '6px', cursor: locked ? 'default' : 'pointer' }}>
+              {busy ? 'Working…' : `Use ${pages.length === 1 ? 'this page' : `these ${pages.length} pages`}`}
+            </button>
+            {pages.length < PHOTO_MAX_PAGES && (
+              <label style={btn}>
+                Add another page
+                <input type="file" accept="image/*" capture="environment" onChange={handlePhoto} disabled={locked} style={{ display: 'none' }} />
+              </label>
+            )}
+            <button onClick={startOver} disabled={locked} style={{ fontSize: '12px', border: 'none', background: 'transparent', color: '#555', cursor: locked ? 'default' : 'pointer' }}>Start over</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Layout helpers for the profile page: each data section sits in its own
 // white card with a title, and cards are grouped under small headings so
 // the sections don't run together on the cream page background.
@@ -135,6 +298,15 @@ export default function PivotProfile({ pivotGuid, onBack }) {
       return
     }
     setUploadError(null)
+    await savePackage(file)
+    e.target.value = ''
+  }
+
+  // Saves a PDF as the pivot's package: uploads it, files the old package
+  // in the history, and leaves the GPM unconfirmed until a manager confirms
+  // the number the reader finds. Used by the PDF picker and by the camera.
+  // Returns true when it saved.
+  async function savePackage(file) {
     setUploading(true)
     setError(null)
     try {
@@ -155,11 +327,12 @@ export default function PivotProfile({ pivotGuid, onBack }) {
         sprinklerPackageHistory: history,
         noPackagePrintout: false
       }, { merge: true })
+      return true
     } catch (err) {
       setError(err.message || 'Upload failed.')
+      return false
     } finally {
       setUploading(false)
-      e.target.value = ''
     }
   }
 
@@ -452,7 +625,8 @@ export default function PivotProfile({ pivotGuid, onBack }) {
             </label>
           </>
         )}
-        <div style={{ fontSize: '10px', color: '#888', marginTop: '8px' }}>PDF only. Have a paper printout? A free scanning app (or the Notes app on iPhone) can turn a photo into a PDF.</div>
+        <div style={{ fontSize: '10px', color: '#888', marginTop: '8px' }}>PDF only. Have a paper printout? Take a photo of it below and AIO makes the PDF.</div>
+        <PhotoToPdf disabled={uploading} onPdf={savePackage} onError={setUploadError} />
         {uploadError && (
           <div style={{ background: '#FBEAEA', border: '1px solid #E8B4B4', borderRadius: '8px', padding: '8px 12px', marginTop: '8px', fontSize: '12px', color: '#A32D2D' }}>{uploadError}</div>
         )}
