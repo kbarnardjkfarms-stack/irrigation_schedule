@@ -9,6 +9,7 @@ admin.initializeApp();
 const AGWORLD_TOKEN = defineSecret('AGWORLD_API_TOKEN');
 // Satellite crop history (USDA Cropland Data Layer) — own file, see satelliteRotation.js.
 const satelliteRotation = require('./satelliteRotation');
+const { removeStaleSeasonRecords } = require('./seasonCleanup');
 
 // Change this to match your Agworld region if you're not on the US instance:
 // Australia - https://my.agworld.com.au
@@ -295,6 +296,7 @@ async function syncFields() {
   const allFarmsById = {};
   const fieldNamesById = {}; // field id -> { name, farmId }
   const skippedFieldIds = new Set(); // distinct fields skipped, across all seasons
+  const writtenBySeason = {}; // season id -> Set of field ids AgWorld returned (seasons fetched OK only)
   let totalFieldSeasonDocs = 0;
   let totalYieldDocs = 0;
 
@@ -318,6 +320,8 @@ async function syncFields() {
       continue;
     }
     Object.assign(allFarmsById, farmsById);
+    const writtenThisSeason = new Set();
+    writtenBySeason[season.id] = writtenThisSeason;
 
     // Firestore batches cap at 500 writes; each field can write three docs
     // (season, yield history, boundary), so chunk at 150.
@@ -330,6 +334,7 @@ async function syncFields() {
           skippedFieldIds.add(f.id);
           return; // skip fields under junk farms
         }
+        writtenThisSeason.add(String(f.id));
         const hiddenFromIrrigation = HIDDEN_FROM_IRRIGATION_FARM_IDS.has(String(f.attributes.farm_id));
         fieldNamesById[f.id] = {
           name: f.attributes.name,
@@ -517,6 +522,12 @@ async function syncFields() {
     }
   }
 
+  // Season-level cleanup: a field can stay in AgWorld (e.g. in 2026 and 2028)
+  // but be taken out of one season (e.g. 2027). Remove its leftover record for
+  // that season so it stops showing on that year's schedule. Guarded: a run
+  // that would remove an unusually large share leaves them and logs a warning.
+  const seasonCleanup = await removeStaleSeasonRecords(db, writtenBySeason);
+
   // Separately clean up farm docs for the excluded farm IDs, in case any
   // were sitting in Firestore from before this exclusion existed. Farms
   // aren't part of the field-diffing logic above since a farm can validly
@@ -531,6 +542,8 @@ async function syncFields() {
     fieldSeasonRecords: totalFieldSeasonDocs,
     skippedFieldCount: skippedFieldIds.size,
     staleFieldsRemoved: staleFieldDocs.length,
+    staleSeasonRecordsRemoved: seasonCleanup.removed,
+    staleSeasonsBlocked: seasonCleanup.blockedSeasons.length,
     yieldRecords: totalYieldDocs
   };
 }
@@ -548,7 +561,7 @@ exports.syncAgworldFields = onSchedule(
   async () => {
     const result = await syncFields();
     console.log(
-      `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields, ${result.yieldRecords} harvest yields).`
+      `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields and ${result.staleSeasonRecordsRemoved} leftover season records${result.staleSeasonsBlocked ? ` (${result.staleSeasonsBlocked} season(s) skipped: too many to remove automatically, see logs)` : ''}, ${result.yieldRecords} harvest yields).`
     );
   }
 );
@@ -562,7 +575,7 @@ exports.syncAgworldFieldsNow = onRequest(
     try {
       const result = await syncFields();
       res.status(200).send(
-        `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields, ${result.yieldRecords} harvest yields).`
+        `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields and ${result.staleSeasonRecordsRemoved} leftover season records${result.staleSeasonsBlocked ? ` (${result.staleSeasonsBlocked} season(s) skipped: too many to remove automatically, see logs)` : ''}, ${result.yieldRecords} harvest yields).`
       );
     } catch (err) {
       console.error(err);
