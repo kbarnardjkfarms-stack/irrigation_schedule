@@ -1517,7 +1517,7 @@ export default function App() {
             </div>
           )}
           {view === 'schedule' && <div className="table-scroll">
-            <table>
+            <table className="sched-table">
               <colgroup>
                 <col className="col-sticky" />
                 {DAYS.map((d) => ([
