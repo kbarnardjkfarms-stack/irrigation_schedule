@@ -39,7 +39,7 @@ import EtDetail from './EtDetail.jsx'
 import AppliedDetail from './AppliedDetail.jsx'
 import { computeApplied, WET_LOG_START_WEEK } from './appliedMath.js'
 
-import { weeklyEt, scheduledBand, scheduledShare, stationsForField, normalizeIsoDate } from './etMath.js'
+import { weeklyEt, scheduledBand, scheduledShare, stationsForField, normalizeIsoDate, curveKeyForCrop } from './etMath.js'
 
 const DAYS = [
   { k: 'mon', en: 'Mon' }, { k: 'tue', en: 'Tue' }, { k: 'wed', en: 'Wed' },
@@ -277,6 +277,43 @@ function placePivotPanel(anchor, size, viewport) {
   return { top, left }
 }
 
+// ---- Demo ET forecast (for presentations) -------------------------------------
+// Example ET numbers for the week of Nov 9-15 2026 so the schedule can be
+// demonstrated with colors and percentages. Turned on from Settings by an
+// admin or owner; it never saves anything and it only touches that one week.
+// Each crop gets its own number, and each field a tiny nudge of its own.
+const DEMO_ET_WEEK = '2026-11-09'
+const DEMO_ET_BY_CROP = {
+  POTATO: 1.35, POTATOES: 1.35, 'SWEET CORN': 1.48, CORN: 1.52, ALFALFA: 1.58, HAY: 1.52,
+  'SUGAR BEET': 1.42, BEETS: 1.42, ONIONS: 1.18, MINT: 1.50, CARROTS: 1.22, SQUASH: 1.28,
+  BARLEY: 1.12, 'BARLEY - WINTER': 1.00, 'BARLEY - SPRING': 1.14,
+  WHEAT: 1.16, 'WHEAT - WINTER': 1.02, 'WHEAT - SPRING': 1.18, BEANS: 1.26
+}
+function demoHash(text) {
+  let h = 0
+  for (let i = 0; i < text.length; i++) h = (h * 31 + text.charCodeAt(i)) % 100003
+  return h
+}
+function demoEtFor(field, weekStart, todayIso) {
+  const crop = field && field.crop
+  if (!crop || crop === 'FALLOW') return null
+  const base = DEMO_ET_BY_CROP[crop] != null ? DEMO_ET_BY_CROP[crop] : 1.10 + (demoHash(crop) % 41) / 100
+  const nudge = ((demoHash(String(field.id)) % 7) - 3) * 0.01
+  const sinceMonday = Math.round((Date.parse(todayIso) - Date.parse(weekStart)) / 86400000)
+  const measured = Math.max(0, Math.min(7, sinceMonday))
+  const forecast = Math.min(4, 7 - measured)
+  return {
+    inches: base + nudge,
+    measuredDays: measured,
+    forecastDays: forecast,
+    averageDays: 7 - measured - forecast,
+    growingDays: 7,
+    curveKey: curveKeyForCrop(crop),
+    approximate: false,
+    demo: true
+  }
+}
+
 export default function App() {
   // Keep the service worker registration so new deploys are noticed quickly
   // (see the polling effect below) instead of only on the next full page load.
@@ -461,6 +498,17 @@ export default function App() {
   const [pivotProfileGuid, setPivotProfileGuid] = useState(null)
   const [pivotProfilesByGuid, setPivotProfilesByGuid] = useState({})
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false)
+  // Demo ET forecast switch (Settings menu, admin/owner). Remembered on this device.
+  const [demoEt, setDemoEt] = useState(() => {
+    try { return window.localStorage.getItem('aioDemoEt') === '1' } catch { return false }
+  })
+  function toggleDemoEt() {
+    setDemoEt((on) => {
+      const next = !on
+      try { window.localStorage.setItem('aioDemoEt', next ? '1' : '0') } catch { /* storage blocked */ }
+      return next
+    })
+  }
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const settingsMenuRef = useRef(null)
   const profileMenuRef = useRef(null)
@@ -950,6 +998,10 @@ export default function App() {
     } catch (err) {
       console.warn('ET calculation failed for', field.fieldName, err)
     }
+    if (demoEt && weekId === DEMO_ET_WEEK) {
+      const demo = demoEtFor(field, weekId, todayIso)
+      if (demo) et = demo
+    }
     return {
       hours, scheduled, stationInfo, et,
       band: scheduledBand(scheduled, et ? et.inches : null),
@@ -1064,6 +1116,8 @@ export default function App() {
   const showUsersMenuItem = userRole === 'admin' || userRole === 'owner'
   const showPivotProfilesMenuItem = page === 'irrigation' && (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager')
   const showCopyLinkMenuItem = page === 'irrigation' && selectedFarmId !== 'all'
+  const showDemoEtMenuItem = page === 'irrigation' && (userRole === 'admin' || userRole === 'owner')
+  const demoEtActive = demoEt && weekId === DEMO_ET_WEEK
 
   if (user === undefined) {
     return <div className="app"><p style={{ padding: '2rem' }}>Loading…</p></div>
@@ -1179,6 +1233,12 @@ export default function App() {
                       onClick={copyWatchLink}
                       style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: (showUsersMenuItem || showPivotProfilesMenuItem) ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
                     >{linkCopied ? 'Copied!' : 'Copy irrigator link'}</button>
+                  )}
+                  {showDemoEtMenuItem && (
+                    <button
+                      onClick={() => { toggleDemoEt(); setSettingsMenuOpen(false) }}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: '0.5px solid #eee', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
+                    >{demoEt ? 'Demo ET forecast: ON (tap to turn off)' : 'Demo ET forecast: off'}</button>
                   )}
                 </div>
               )}
@@ -1601,6 +1661,7 @@ export default function App() {
                   <th rowSpan={2} className="inches-head">
                     <span className="inches-label-full">ET forecast</span>
                     <span className="inches-label-short">ET</span>
+                    {demoEtActive && <span style={{ display: 'block', marginTop: '2px', fontSize: '9px', fontWeight: 700, color: '#8a5a00', background: '#FBEBC4', borderRadius: '4px', padding: '1px 4px' }}>DEMO</span>}
                   </th>
                 </tr>
                 <tr>
