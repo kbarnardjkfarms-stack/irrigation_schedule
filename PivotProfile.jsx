@@ -10,8 +10,8 @@ import PivotIcon from './PivotIcon.jsx'
 // wrapped in a plain PDF in the browser. The package that gets saved is an
 // ordinary PDF, so the GPM reader treats it like any scanned page.
 
-const PHOTO_MAX_EDGE = 2200
-const PHOTO_MAX_PAGES = 5 // the reader looks at the first 5 pages
+const PHOTO_MAX_EDGE = 1800 // pixels on the long side: sharp enough to read, small enough for 12 pages
+const PHOTO_MAX_PAGES = 12
 
 function loadPhoto(file) {
   return new Promise((resolve, reject) => {
@@ -35,7 +35,7 @@ async function photoToPage(file) {
   ctx.fillStyle = '#fff'
   ctx.fillRect(0, 0, w, h)
   ctx.drawImage(img, 0, 0, w, h)
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85))
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8))
   if (!blob) throw new Error("Couldn't use that photo. Try taking it again.")
   const bytes = new Uint8Array(await blob.arrayBuffer())
   return { bytes, w, h, previewUrl: URL.createObjectURL(blob) }
@@ -85,14 +85,15 @@ function buildPdf(pages) {
   return out
 }
 
-// "Take photo of printout" button. Photos pile up as pages; "Use" turns them
-// into one PDF and hands it to onPdf (which returns true once it is saved).
-function PhotoToPdf({ disabled, onPdf, onError }) {
+// Photos pile up as pages; "Use" turns them into one PDF and hands it to
+// onPdf (which returns true once it is saved). The parent calls this once and
+// passes the result to <CameraButton> (the icon next to the upload button)
+// and <PhotoPages> (the thumbnails and Use button under it).
+function usePhotoPages(onPdf, onError) {
   const [pages, setPages] = useState([])
   const [busy, setBusy] = useState(false)
-  const locked = disabled || busy
 
-  async function handlePhoto(e) {
+  async function addPhoto(e) {
     const file = e.target.files && e.target.files[0]
     e.target.value = ''
     if (!file) return
@@ -100,7 +101,7 @@ function PhotoToPdf({ disabled, onPdf, onError }) {
     onError(null)
     try {
       const page = await photoToPage(file)
-      setPages((prev) => [...prev, page])
+      setPages((prev) => (prev.length >= PHOTO_MAX_PAGES ? prev : [...prev, page]))
     } catch (err) {
       onError(err.message || "Couldn't use that photo.")
     } finally {
@@ -129,40 +130,60 @@ function PhotoToPdf({ disabled, onPdf, onError }) {
     }
   }
 
-  const btn = { fontSize: '13px', padding: '8px 14px', border: '1px solid #ccc', borderRadius: '8px', background: '#fff', cursor: locked ? 'default' : 'pointer', display: 'inline-block' }
+  return { pages, busy, addPhoto, startOver, usePages }
+}
 
+function CameraIcon() {
   return (
-    <div style={{ marginTop: '10px' }}>
-      {pages.length === 0 ? (
-        <>
-          <label style={btn}>
-            {busy ? 'Preparing photo…' : 'Take photo of printout'}
-            <input type="file" accept="image/*" capture="environment" onChange={handlePhoto} disabled={locked} style={{ display: 'none' }} />
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2b2b26" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+      <circle cx="12" cy="13.5" r="3.5" />
+    </svg>
+  )
+}
+
+// The camera icon button. On a phone it opens the camera; on a computer it
+// opens the picker for image files.
+function CameraButton({ photos, disabled }) {
+  const locked = disabled || photos.busy || photos.pages.length >= PHOTO_MAX_PAGES
+  const label = photos.busy ? 'Preparing photo…' : 'Take photo of printout'
+  return (
+    <label
+      title={label}
+      aria-label={label}
+      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '42px', height: '36px', boxSizing: 'border-box', border: '1px solid #ccc', borderRadius: '8px', background: '#fff', cursor: locked ? 'default' : 'pointer', opacity: locked ? 0.5 : 1 }}
+    >
+      <CameraIcon />
+      <input type="file" accept="image/*" capture="environment" onChange={photos.addPhoto} disabled={locked} style={{ display: 'none' }} />
+    </label>
+  )
+}
+
+function PhotoPages({ photos, disabled }) {
+  const { pages, busy } = photos
+  if (pages.length === 0) return null
+  const locked = disabled || busy
+  return (
+    <div style={{ background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px', marginTop: '10px' }}>
+      <div style={{ fontSize: '12px', color: '#555', marginBottom: '8px' }}>{pages.length} of up to {PHOTO_MAX_PAGES} pages</div>
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+        {pages.map((p, i) => (
+          <img key={i} src={p.previewUrl} alt={`Page ${i + 1}`} style={{ height: '72px', width: 'auto', borderRadius: '4px', border: '1px solid #ccc' }} />
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <button onClick={photos.usePages} disabled={locked} style={{ fontSize: '13px', padding: '8px 14px', background: '#2b2b26', color: '#fff', border: 'none', borderRadius: '6px', cursor: locked ? 'default' : 'pointer' }}>
+          {busy ? 'Working…' : `Use ${pages.length === 1 ? 'this page' : `these ${pages.length} pages`}`}
+        </button>
+        {pages.length < PHOTO_MAX_PAGES && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '6px 12px', border: '1px solid #ccc', borderRadius: '8px', background: '#fff', cursor: locked ? 'default' : 'pointer', opacity: locked ? 0.5 : 1 }}>
+            <CameraIcon />
+            Add page
+            <input type="file" accept="image/*" capture="environment" onChange={photos.addPhoto} disabled={locked} style={{ display: 'none' }} />
           </label>
-          <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Lay the page flat in good light and photograph the page that shows the system GPM.</div>
-        </>
-      ) : (
-        <div style={{ background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px' }}>
-          <div style={{ fontSize: '12px', color: '#555', marginBottom: '8px' }}>{pages.length} page{pages.length === 1 ? '' : 's'} ready</div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
-            {pages.map((p, i) => (
-              <img key={i} src={p.previewUrl} alt={`Page ${i + 1}`} style={{ height: '80px', width: 'auto', borderRadius: '4px', border: '1px solid #ccc' }} />
-            ))}
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-            <button onClick={usePages} disabled={locked} style={{ fontSize: '13px', padding: '8px 14px', background: '#2b2b26', color: '#fff', border: 'none', borderRadius: '6px', cursor: locked ? 'default' : 'pointer' }}>
-              {busy ? 'Working…' : `Use ${pages.length === 1 ? 'this page' : `these ${pages.length} pages`}`}
-            </button>
-            {pages.length < PHOTO_MAX_PAGES && (
-              <label style={btn}>
-                Add another page
-                <input type="file" accept="image/*" capture="environment" onChange={handlePhoto} disabled={locked} style={{ display: 'none' }} />
-              </label>
-            )}
-            <button onClick={startOver} disabled={locked} style={{ fontSize: '12px', border: 'none', background: 'transparent', color: '#555', cursor: locked ? 'default' : 'pointer' }}>Start over</button>
-          </div>
-        </div>
-      )}
+        )}
+        <button onClick={photos.startOver} disabled={locked} style={{ fontSize: '12px', border: 'none', background: 'transparent', color: '#555', cursor: locked ? 'default' : 'pointer' }}>Start over</button>
+      </div>
     </div>
   )
 }
@@ -195,6 +216,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState(null)
   const [uploadError, setUploadError] = useState(null)
+  const photos = usePhotoPages(savePackage, setUploadError)
   const [gpmSaved, setGpmSaved] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [fieldNames, setFieldNames] = useState([])
@@ -609,24 +631,28 @@ export default function PivotProfile({ pivotGuid, onBack }) {
               {uploading ? 'Uploading\u2026' : 'Replace'}
               <input type="file" accept="application/pdf" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
             </label>
+            <CameraButton photos={photos} disabled={uploading} />
             {canDelete && (
               <button onClick={() => setDeleteTarget({ kind: 'current', entry: pkg })} style={{ fontSize: '12px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: '#A32D2D' }}>Delete</button>
             )}
           </div>
         ) : (
           <>
-            <label style={{ display: 'inline-block', fontSize: '13px', padding: '8px 14px', border: '1px dashed #ccc', borderRadius: '8px', cursor: uploading ? 'default' : 'pointer' }}>
-              {uploading ? 'Uploading\u2026' : 'Upload package PDF'}
-              <input type="file" accept="application/pdf" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
-            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <label style={{ display: 'inline-block', fontSize: '13px', padding: '8px 14px', border: '1px dashed #ccc', borderRadius: '8px', cursor: uploading ? 'default' : 'pointer' }}>
+                {uploading ? 'Uploading\u2026' : 'Upload package PDF'}
+                <input type="file" accept="application/pdf" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
+              </label>
+              <CameraButton photos={photos} disabled={uploading} />
+            </div>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#555', marginTop: '12px', cursor: 'pointer' }}>
               <input type="checkbox" checked={!!(profile && profile.noPackagePrintout)} onChange={(e) => handleToggleNoPackage(e.target.checked)} />
               No package printout available
             </label>
           </>
         )}
-        <div style={{ fontSize: '10px', color: '#888', marginTop: '8px' }}>PDF only. Have a paper printout? Take a photo of it below and AIO makes the PDF.</div>
-        <PhotoToPdf disabled={uploading} onPdf={savePackage} onError={setUploadError} />
+        <div style={{ fontSize: '10px', color: '#888', marginTop: '8px' }}>PDF only. No PDF? Tap the camera to photograph the printout (up to 12 pages, cover page first) and AIO makes the PDF.</div>
+        <PhotoPages photos={photos} disabled={uploading} />
         {uploadError && (
           <div style={{ background: '#FBEAEA', border: '1px solid #E8B4B4', borderRadius: '8px', padding: '8px 12px', marginTop: '8px', fontSize: '12px', color: '#A32D2D' }}>{uploadError}</div>
         )}
