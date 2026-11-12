@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { DEMO_WEEKLY } from './reportDemoData.js'
+import { DEMO_WEEKLY, DEMO_FIELDS, DEMO_CROP_NOTES } from './reportDemoData.js'
+import { fetchSeasons, loadLiveReport } from './reportLive.js'
 
 // Irrigation Reports view (opened from the views dropdown in the header).
 //
-// Right now this shows DEMO data (reportDemoData.js): Acequia potato fields,
-// 2026. Crop ET, rain and the moisture readings are real; scheduled and
-// applied water are modeled. When live data exists, replace DEMO_WEEKLY with
-// the real rows (same shape) and drop the demo badge.
+// Two sources, same report:
+//   Demo  reportDemoData.js: Acequia 2026. Crop ET, rain and moisture readings
+//         are real; scheduled and applied water are modeled.
+//   Live  reportLive.js reads what AIO really has for a season. Anything AIO
+//         has no number for stays blank and the page says "no data", so real
+//         numbers show up on their own as they start getting recorded.
+//
+// Every field in the season is listed for its crop, with or without data.
 
 const DRY = 71
 const WET = 88
@@ -21,10 +26,13 @@ const OK = '#4d8a4a'
 const BAD = '#b3402e'
 const WARN = '#b07a16'
 
-const isRead = (v) => v != null && v !== ''
+const has = (v) => v != null && v !== ''
 const f0 = (v) => String(Math.round(v))
 const f1 = (v) => (Math.round(v * 10) / 10).toFixed(1)
 const f2 = (v) => (Math.round(v * 100) / 100).toFixed(2)
+const d0 = (v) => (has(v) ? f0(v) : '—')
+const d1 = (v) => (has(v) ? f1(v) : '—')
+const d2 = (v) => (has(v) ? f2(v) : '—')
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const weekLabel = (w) => MONTHS[Number(w.slice(5, 7)) - 1] + ' ' + Number(w.slice(8, 10))
 
@@ -36,99 +44,89 @@ const MEASURES = {
   moisture: { label: 'Soil moisture readings (%)', title: 'Soil moisture, %', fmt: (v) => f0(v) + '%', band: true }
 }
 
-const sum = (rows, k) => rows.reduce((a, r) => a + Number(r[k]), 0)
-const avgOf = (rows, k) => Math.round((sum(rows, k) / rows.length) * 100) / 100
+// ---- the numbers ----
+// Every sum and average skips weeks with no number (null). A blank is never
+// counted as zero.
+const vals = (rows, k) => rows.map((r) => r[k]).filter(has).map(Number)
+const total = (rows, k) => { const v = vals(rows, k); return v.length ? v.reduce((a, b) => a + b, 0) : null }
+const mean = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null)
+const pairShare = (rows, num, den) => {
+  const p = rows.filter((r) => has(r[num]) && has(r[den]))
+  const d = p.reduce((a, r) => a + Number(r[den]), 0)
+  return p.length && d > 0 ? Math.round((100 * p.reduce((a, r) => a + Number(r[num]), 0)) / d) : null
+}
 
-// ---- the numbers (all worked out here from the weekly rows) ----
-function buildReport(weekly) {
+function buildReport(rows, fields) {
   const byField = new Map()
   const byWeek = new Map()
-  weekly.forEach((r) => {
-    if (!byField.has(r.field)) byField.set(r.field, [])
-    byField.get(r.field).push(r)
+  rows.forEach((r) => {
+    if (!byField.has(r.fieldKey)) byField.set(r.fieldKey, [])
+    byField.get(r.fieldKey).push(r)
     if (!byWeek.has(r.week)) byWeek.set(r.week, [])
     byWeek.get(r.week).push(r)
   })
-  const fieldNames = [...byField.keys()].sort()
-  byField.forEach((rows) => rows.sort((a, b) => (a.week < b.week ? -1 : 1)))
+  byField.forEach((g) => g.sort((a, b) => (a.week < b.week ? -1 : 1)))
   const weeks = [...byWeek.keys()].sort()
 
-  const readings = weekly.filter((r) => isRead(r.moisture))
-  const okWeeks = weekly.filter((r) => r.etActual >= 0.3)
-  const miss = okWeeks.reduce((a, r) => a + Math.abs(r.etEstimate - r.etActual), 0) / (sum(okWeeks, 'etActual') || 1)
-  const n = fieldNames.length || 1
+  const readings = rows.filter((r) => has(r.moisture))
+  const withEstimate = rows.filter((r) => Number(r.etActual) >= 0.3 && has(r.etEstimate))
+  const missDen = withEstimate.reduce((a, r) => a + Number(r.etActual), 0)
+  const perField = (k) => mean([...byField.values()].map((g) => total(g, k)).filter((v) => v != null))
   const summary = {
-    fields: fieldNames.length,
-    etActual: sum(weekly, 'etActual') / n,
-    scheduled: sum(weekly, 'schedIn') / n,
-    applied: sum(weekly, 'appIn') / n,
-    appliedPct: Math.round((100 * sum(weekly, 'appIn')) / (sum(weekly, 'etActual') || 1)),
+    fields: byField.size,
+    etActual: perField('etActual'),
+    scheduled: perField('schedIn'),
+    applied: perField('appIn'),
+    appliedPct: pairShare(rows, 'appIn', 'etActual'),
     readings: readings.length,
     dry: readings.filter((r) => r.moisture < DRY).length,
-    estMiss: Math.round(100 * miss)
+    estMiss: missDen > 0 ? Math.round((100 * withEstimate.reduce((a, r) => a + Math.abs(r.etEstimate - r.etActual), 0)) / missDen) : null
   }
 
   const farmWeekly = weeks.map((week) => {
     const g = byWeek.get(week)
-    const rd = g.filter((r) => isRead(r.moisture))
-    return {
-      week,
-      etEstimate: avgOf(g, 'etEstimate'),
-      etActual: avgOf(g, 'etActual'),
-      rain: avgOf(g, 'rain'),
-      schedIn: avgOf(g, 'schedIn'),
-      appIn: avgOf(g, 'appIn'),
-      moisture: rd.length ? Math.round(sum(rd, 'moisture') / rd.length) : null
-    }
+    const avg = (k) => { const v = vals(g, k); return v.length ? Math.round(mean(v) * 100) / 100 : null }
+    const rd = vals(g, 'moisture')
+    return { week, etEstimate: avg('etEstimate'), etActual: avg('etActual'), rain: avg('rain'), schedIn: avg('schedIn'), appIn: avg('appIn'), moisture: rd.length ? Math.round(mean(rd)) : null }
   })
 
-  const rdAll = weekly.filter((r) => isRead(r.moisture) && r.etActual > 0)
+  const rdAll = rows.filter((r) => has(r.moisture) && Number(r.etActual) > 0)
   const bands = [
     ['Below 71% (dry)', (m) => m < DRY],
     ['71 to 88% (on target)', (m) => m >= DRY && m <= WET],
     ['Above 88% (wet)', (m) => m > WET]
   ].map(([band, test]) => {
     const g = rdAll.filter((r) => test(r.moisture))
+    return { band, readings: g.length, schedPct: pairShare(g, 'schedIn', 'etEstimate'), appPct: pairShare(g, 'appIn', 'etActual') }
+  })
+
+  const fieldSummary = fields.map((f) => {
+    const g = byField.get(f.key) || []
+    const rd = g.filter((r) => has(r.moisture))
     return {
-      band,
-      readings: g.length,
-      schedPct: g.length ? Math.round((100 * sum(g, 'schedIn')) / (sum(g, 'etEstimate') || 1)) : null,
-      appPct: g.length ? Math.round((100 * sum(g, 'appIn')) / (sum(g, 'etActual') || 1)) : null
+      field: f, hasData: g.length > 0,
+      etActual: total(g, 'etActual'), scheduled: total(g, 'schedIn'), applied: total(g, 'appIn'),
+      appliedPct: pairShare(g, 'appIn', 'etActual'), readings: rd.length, dry: rd.filter((r) => r.moisture < DRY).length
     }
   })
 
-  const fieldSummary = fieldNames.map((field) => {
-    const g = byField.get(field)
-    const rd = g.filter((r) => isRead(r.moisture))
-    return {
-      field,
-      etActual: sum(g, 'etActual'),
-      scheduled: sum(g, 'schedIn'),
-      applied: sum(g, 'appIn'),
-      appliedPct: Math.round((100 * sum(g, 'appIn')) / (sum(g, 'etActual') || 1)),
-      readings: rd.length,
-      dry: rd.filter((r) => r.moisture < DRY).length
-    }
-  })
-
-  // per field per week, with the percent views (weeks with almost no ET stay blank)
   const pct = new Map()
-  byField.forEach((rows, field) => {
+  byField.forEach((g, key) => {
     const m = new Map()
-    rows.forEach((r) => {
-      const quiet = r.etActual < 0.05 && r.etEstimate < 0.05
+    g.forEach((r) => {
+      const quiet = !(Number(r.etActual) >= 0.05 || Number(r.etEstimate) >= 0.05)
       m.set(r.week, {
-        appPct: r.etActual >= 0.3 ? Math.round((100 * r.appIn) / r.etActual) : null,
-        schedPct: r.etEstimate >= 0.3 ? Math.round((100 * r.schedIn) / r.etEstimate) : null,
-        appIn: quiet ? null : r.appIn,
-        etActual: quiet ? null : r.etActual,
-        moisture: isRead(r.moisture) ? Number(r.moisture) : null
+        appPct: has(r.appIn) && Number(r.etActual) >= 0.3 ? Math.round((100 * r.appIn) / r.etActual) : null,
+        schedPct: has(r.schedIn) && Number(r.etEstimate) >= 0.3 ? Math.round((100 * r.schedIn) / r.etEstimate) : null,
+        appIn: quiet || !has(r.appIn) ? null : r.appIn,
+        etActual: quiet || !has(r.etActual) ? null : r.etActual,
+        moisture: has(r.moisture) ? Number(r.moisture) : null
       })
     })
-    pct.set(field, m)
+    pct.set(key, m)
   })
 
-  return { fieldNames, byField, weeks, summary, farmWeekly, bands, fieldSummary, pct }
+  return { byField, weeks, summary, farmWeekly, bands, fieldSummary, pct, hasMoisture: readings.length > 0 }
 }
 
 function useWidth() {
@@ -168,9 +166,9 @@ function ChartFrame({ height, children, tip, onLeave, label }) {
   )
 }
 
-function Tip({ tip, boxW }) {
+function Tip({ tip }) {
   if (!tip) return null
-  const left = tip.x + 14 + 190 > boxW ? Math.max(0, tip.x - 204) : tip.x + 14
+  const left = tip.x + 14 + 190 > tip.boxW ? Math.max(0, tip.x - 204) : tip.x + 14
   return (
     <div
       style={{
@@ -212,74 +210,87 @@ function XAxis({ weeks, x, bw, w, y0, m }) {
 }
 
 function bandScale(weeks, w, m) {
-  const step = (w - m.l - m.r) / weeks.length
+  const step = (w - m.l - m.r) / Math.max(1, weeks.length)
   const bw = step * 0.82
   const idx = new Map(weeks.map((wk, i) => [wk, i]))
   return { bw, x: (wk) => m.l + idx.get(wk) * step + (step - bw) / 2 }
 }
 
+// A line that breaks wherever a week has no number.
+function gapPath(rows, key, cx, y) {
+  let d = ''
+  let pen = false
+  rows.forEach((r) => {
+    if (!has(r[key])) { pen = false; return }
+    d += (pen ? 'L' : 'M') + cx(r).toFixed(1) + ' ' + y(Number(r[key])).toFixed(1) + ' '
+    pen = true
+  })
+  return d
+}
+
 function weekTipLines(d, field) {
   return [
-    <b key="h" style={{ color: INK }}>{field || 'Farm average'}</b>,
+    <b key="h" style={{ color: INK }}>{field || 'Average of the fields'}</b>,
     'Week of ' + weekLabel(d.week),
-    'ET estimate ' + f2(d.etEstimate) + ' in, actual ' + f2(d.etActual) + ' in',
-    'Scheduled ' + f2(d.schedIn) + ' in, applied ' + f2(d.appIn) + ' in',
-    'Moisture ' + (isRead(d.moisture) ? d.moisture + '%' : 'no reading')
+    'ET estimate ' + d2(d.etEstimate) + ' in, actual ' + d2(d.etActual) + ' in',
+    'Scheduled ' + d2(d.schedIn) + ' in, applied ' + d2(d.appIn) + ' in',
+    'Moisture ' + (has(d.moisture) ? d.moisture + '%' : 'no reading')
   ]
 }
 
 function WaterChart({ rows, field }) {
   const [tip, show, hide] = useTip()
   const H = 280
-  const m = { l: 40, r: 10, t: 34, b: 26 }
+  const m = { l: 40, r: 10, t: 26, b: 26 }
   const weeks = rows.map((d) => d.week)
-  const ymax = niceMax(Math.max(0.5, ...rows.map((d) => Math.max(d.schedIn, d.appIn, d.etActual, d.etEstimate))) * 1.05)
+  const all = rows.flatMap((d) => [d.schedIn, d.appIn, d.etActual, d.etEstimate]).filter(has).map(Number)
+  const ymax = niceMax(Math.max(0.5, ...all) * 1.05)
+  const legend = [['Scheduled', 'bar', COLORS[0]], ['Applied', 'bar', COLORS[1]], ['Actual ET', 'line', INK], ['ET estimate', 'dash', MUTED]]
   return (
-    <ChartFrame height={H} label="Weekly scheduled and applied inches against crop ET" onLeave={hide} tip={<Tip tip={tip} boxW={tip ? tip.boxW : 600} />}>
-      {(w) => {
-        const { x, bw } = bandScale(weeks, w, m)
-        const y = (v) => H - m.b - (v / ymax) * (H - m.b - m.t)
-        const ticks = [0, 1, 2, 3, 4, 5].map((i) => (ymax * i) / 5)
-        const cx = (d) => x(d.week) + bw / 2
-        const path = (key) => rows.map((d, i) => (i ? 'L' : 'M') + cx(d).toFixed(1) + ' ' + y(d[key]).toFixed(1)).join(' ')
-        const half = bw / 2 - 0.5
-        let lx = m.l
-        const legend = [['Scheduled', 'bar', COLORS[0]], ['Applied', 'bar', COLORS[1]], ['Actual ET', 'line', INK], ['ET estimate', 'dash', MUTED]]
-        return (
-          <g>
-            {ticks.map((t) => (
-              <g key={t}>
-                <line x1={m.l} x2={w - m.r} y1={y(t)} y2={y(t)} stroke={GRID} />
-                <text x={m.l - 6} y={y(t) + 4} textAnchor="end" fill={MUTED}>{t % 1 ? f1(t) : f0(t)}</text>
-              </g>
-            ))}
-            <text x={m.l - 6} y={m.t - 18} textAnchor="end" fill={MUTED}>in / week</text>
-            {rows.map((d) => (
-              <g key={d.week}>
-                <rect x={x(d.week)} width={half} y={y(d.schedIn)} height={Math.max(0, y(0) - y(d.schedIn))} fill={COLORS[0]} />
-                <rect x={x(d.week) + half + 1} width={half} y={y(d.appIn)} height={Math.max(0, y(0) - y(d.appIn))} fill={COLORS[1]} />
-              </g>
-            ))}
-            <path d={path('etEstimate')} fill="none" stroke={MUTED} strokeWidth="1.6" strokeDasharray="4 3" />
-            <path d={path('etActual')} fill="none" stroke={INK} strokeWidth="2.2" />
-            <XAxis weeks={weeks} x={x} bw={bw} w={w} y0={H - m.b} m={m} />
-            {legend.map(([t, kind, col]) => {
-              const x0 = lx
-              lx += (kind === 'bar' ? 15 : 21) + t.length * 6.2 + 14
-              return (
-                <g key={t} transform={`translate(${x0},10)`}>
-                  {kind === 'bar' ? <rect width="10" height="10" y="-1" fill={col} /> : <line x1="0" x2="16" y1="4" y2="4" stroke={col} strokeWidth="2" strokeDasharray={kind === 'dash' ? '4 3' : undefined} />}
-                  <text x={kind === 'bar' ? 15 : 21} y="9" fill={MUTED}>{t}</text>
+    <div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', fontSize: 12, color: MUTED, marginBottom: 2 }}>
+        {legend.map(([t, kind, col]) => (
+          <span key={t} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <svg width="16" height="10" aria-hidden="true">
+              {kind === 'bar' ? <rect width="10" height="10" fill={col} /> : <line x1="0" x2="16" y1="5" y2="5" stroke={col} strokeWidth="2" strokeDasharray={kind === 'dash' ? '4 3' : undefined} />}
+            </svg>
+            {t}
+          </span>
+        ))}
+      </div>
+      <ChartFrame height={H} label="Weekly scheduled and applied inches against crop ET" onLeave={hide} tip={<Tip tip={tip} />}>
+        {(w) => {
+          const { x, bw } = bandScale(weeks, w, m)
+          const y = (v) => H - m.b - (v / ymax) * (H - m.b - m.t)
+          const ticks = [0, 1, 2, 3, 4, 5].map((i) => (ymax * i) / 5)
+          const cx = (d) => x(d.week) + bw / 2
+          const half = bw / 2 - 0.5
+          return (
+            <g>
+              {ticks.map((t) => (
+                <g key={t}>
+                  <line x1={m.l} x2={w - m.r} y1={y(t)} y2={y(t)} stroke={GRID} />
+                  <text x={m.l - 6} y={y(t) + 4} textAnchor="end" fill={MUTED}>{t % 1 ? f1(t) : f0(t)}</text>
                 </g>
-              )
-            })}
-            {rows.map((d) => (
-              <rect key={'h' + d.week} x={x(d.week) - 2} width={bw + 4} y={m.t} height={H - m.b - m.t} fill="transparent" onMouseMove={(e) => show(e, weekTipLines(d, field))} />
-            ))}
-          </g>
-        )
-      }}
-    </ChartFrame>
+              ))}
+              <text x={2} y={m.t - 12} textAnchor="start" fill={MUTED}>in / week</text>
+              {rows.map((d) => (
+                <g key={d.week}>
+                  {has(d.schedIn) && <rect x={x(d.week)} width={half} y={y(d.schedIn)} height={Math.max(0, y(0) - y(d.schedIn))} fill={COLORS[0]} />}
+                  {has(d.appIn) && <rect x={x(d.week) + half + 1} width={half} y={y(d.appIn)} height={Math.max(0, y(0) - y(d.appIn))} fill={COLORS[1]} />}
+                </g>
+              ))}
+              <path d={gapPath(rows, 'etEstimate', cx, y)} fill="none" stroke={MUTED} strokeWidth="1.6" strokeDasharray="4 3" />
+              <path d={gapPath(rows, 'etActual', cx, y)} fill="none" stroke={INK} strokeWidth="2.2" />
+              <XAxis weeks={weeks} x={x} bw={bw} w={w} y0={H - m.b} m={m} />
+              {rows.map((d) => (
+                <rect key={'h' + d.week} x={x(d.week) - 2} width={bw + 4} y={m.t} height={H - m.b - m.t} fill="transparent" onMouseMove={(e) => show(e, weekTipLines(d, field))} />
+              ))}
+            </g>
+          )
+        }}
+      </ChartFrame>
+    </div>
   )
 }
 
@@ -289,16 +300,16 @@ function MoistureChart({ rows, field }) {
   const m = { l: 40, r: 10, t: 12, b: 26 }
   const weeks = rows.map((d) => d.week)
   return (
-    <ChartFrame height={H} label="Weekly soil moisture readings against the 71 to 88 percent target band" onLeave={hide} tip={<Tip tip={tip} boxW={tip ? tip.boxW : 600} />}>
+    <ChartFrame height={H} label="Weekly soil moisture readings against the 71 to 88 percent target band" onLeave={hide} tip={<Tip tip={tip} />}>
       {(w) => {
         const { x, bw } = bandScale(weeks, w, m)
         const y = (v) => H - m.b - ((v - 55) / 40) * (H - m.b - m.t)
         const cx = (d) => x(d.week) + bw / 2
-        const pts = rows.filter((d) => isRead(d.moisture))
+        const pts = rows.filter((d) => has(d.moisture))
         return (
           <g>
             <rect x={m.l} width={w - m.l - m.r} y={y(WET)} height={y(DRY) - y(WET)} fill={OK} opacity="0.14" />
-            {[60, 71, 80, 88, 90].map((t) => (
+            {[60, 71, 80, 88].map((t) => (
               <g key={t}>
                 <text x={m.l - 6} y={y(t) + 4} textAnchor="end" fill={MUTED}>{t}%</text>
                 <line x1={m.l} x2={w - m.r} y1={y(t)} y2={y(t)} stroke={GRID} strokeDasharray={t === DRY || t === WET ? '3 3' : undefined} />
@@ -319,105 +330,117 @@ function MoistureChart({ rows, field }) {
   )
 }
 
-function CompareChart({ report, fields, measure }) {
+function CompareChart({ report, picked, measure }) {
   const [tip, show, hide] = useTip()
   const M = MEASURES[measure]
   const H = 300
   const m = { l: 46, r: 10, t: 14, b: 26 }
   const weeks = report.weeks
-  const series = fields.map((name, i) => ({
-    name,
+  const series = picked.map((f, i) => ({
+    name: f.label,
     color: COLORS[i % COLORS.length],
     pts: weeks.map((wk) => {
-      const row = report.pct.get(name) && report.pct.get(name).get(wk)
-      return { week: wk, v: row && row[measure] != null ? row[measure] : null }
+      const row = report.pct.get(f.key) && report.pct.get(f.key).get(wk)
+      return { week: wk, v: row && has(row[measure]) ? row[measure] : null }
     })
   }))
   const vmax = Math.max(1, ...series.flatMap((s) => s.pts.map((p) => (p.v == null ? 0 : p.v))))
+  const anyPoint = series.some((s) => s.pts.some((p) => p.v != null))
   const top = M.band ? 95 : M.ref ? Math.max(120, niceMax(vmax * 1.05)) : niceMax(vmax * 1.1)
   const bottom = M.band ? 55 : 0
   return (
-    <ChartFrame height={H} label="Weekly values for the picked fields, one line per field" onLeave={hide} tip={<Tip tip={tip} boxW={tip ? tip.boxW : 600} />}>
-      {(w) => {
-        const { x, bw } = bandScale(weeks, w, m)
-        const y = (v) => H - m.b - ((v - bottom) / (top - bottom)) * (H - m.b - m.t)
-        const cx = (wk) => x(wk) + bw / 2
-        const ticks = M.band ? [60, 71, 80, 88, 90] : [0, 1, 2, 3, 4, 5, 6].map((i) => (top * i) / 6)
-        return (
-          <g>
-            {M.band && <rect x={m.l} width={w - m.l - m.r} y={y(WET)} height={y(DRY) - y(WET)} fill={OK} opacity="0.14" />}
-            {ticks.map((t) => (
-              <g key={t}>
-                <line x1={m.l} x2={w - m.r} y1={y(t)} y2={y(t)} stroke={GRID} />
-                <text x={m.l - 6} y={y(t) + 4} textAnchor="end" fill={MUTED}>{M.band || M.ref ? f0(t) + '%' : t % 1 ? f1(t) : f0(t)}</text>
-              </g>
-            ))}
-            {M.ref && <line x1={m.l} x2={w - m.r} y1={y(M.ref)} y2={y(M.ref)} stroke="#7a766a" strokeWidth="1.4" strokeDasharray="5 4" />}
-            {series.map((s) => {
-              const pts = s.pts.filter((p) => p.v != null)
-              // gaps break the line for the weekly views; moisture joins its readings
-              const segs = []
-              if (M.band) segs.push(pts)
-              else {
-                let cur = []
-                s.pts.forEach((p) => {
-                  if (p.v == null) {
-                    if (cur.length) segs.push(cur)
-                    cur = []
-                  } else cur.push(p)
-                })
-                if (cur.length) segs.push(cur)
-              }
-              return (
-                <g key={s.name}>
-                  {segs.map((seg, i) => (
-                    <path key={i} d={seg.map((p, j) => (j ? 'L' : 'M') + cx(p.week).toFixed(1) + ' ' + y(p.v).toFixed(1)).join(' ')} fill="none" stroke={s.color} strokeWidth="2.2" />
-                  ))}
-                  {pts.map((p) => (
-                    <circle key={p.week} cx={cx(p.week)} cy={y(p.v)} r={M.band ? 4.5 : 2.6} fill={s.color} />
-                  ))}
+    <div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', fontSize: 12, color: MUTED, marginBottom: 2 }}>
+        {series.map((s) => (
+          <span key={s.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ width: 10, height: 10, borderRadius: '50%', background: s.color, display: 'inline-block' }} />
+            {s.name}
+          </span>
+        ))}
+      </div>
+      {!anyPoint && <p style={{ ...noteStyle, margin: '4px 0' }}>No data for {M.title.toLowerCase()} on these fields yet.</p>}
+      <ChartFrame height={H} label="Weekly values for the picked fields, one line per field" onLeave={hide} tip={<Tip tip={tip} />}>
+        {(w) => {
+          const { x, bw } = bandScale(weeks, w, m)
+          const y = (v) => H - m.b - ((v - bottom) / (top - bottom)) * (H - m.b - m.t)
+          const cx = (wk) => x(wk) + bw / 2
+          const ticks = M.band ? [60, 71, 80, 88] : [0, 1, 2, 3, 4, 5, 6].map((i) => (top * i) / 6)
+          return (
+            <g>
+              {M.band && <rect x={m.l} width={w - m.l - m.r} y={y(WET)} height={y(DRY) - y(WET)} fill={OK} opacity="0.14" />}
+              {ticks.map((t) => (
+                <g key={t}>
+                  <line x1={m.l} x2={w - m.r} y1={y(t)} y2={y(t)} stroke={GRID} />
+                  <text x={m.l - 6} y={y(t) + 4} textAnchor="end" fill={MUTED}>{M.band || M.ref ? f0(t) + '%' : t % 1 ? f1(t) : f0(t)}</text>
                 </g>
-              )
-            })}
-            <XAxis weeks={weeks} x={x} bw={bw} w={w} y0={H - m.b} m={m} />
-            {weeks.map((wk) => (
-              <rect
-                key={'h' + wk}
-                x={x(wk) - 2}
-                width={bw + 4}
-                y={m.t}
-                height={H - m.b - m.t}
-                fill="transparent"
-                onMouseMove={(e) =>
-                  show(e, [
-                    <b key="h" style={{ color: INK }}>Week of {weekLabel(wk)}</b>,
-                    M.title,
-                    ...series.map((s) => {
-                      const p = s.pts.find((q) => q.week === wk)
-                      return (
-                        <div key={s.name}>
-                          <span style={{ color: s.color }}>{'●'}</span> {s.name} <b style={{ color: INK }}>{p && p.v != null ? M.fmt(p.v) : M.band ? 'no reading' : 'blank'}</b>
-                        </div>
-                      )
-                    })
-                  ])
+              ))}
+              {M.ref && <line x1={m.l} x2={w - m.r} y1={y(M.ref)} y2={y(M.ref)} stroke="#7a766a" strokeWidth="1.4" strokeDasharray="5 4" />}
+              {series.map((s) => {
+                const pts = s.pts.filter((p) => p.v != null)
+                // gaps break the line for the weekly views; moisture joins its readings
+                const segs = []
+                if (M.band) segs.push(pts)
+                else {
+                  let cur = []
+                  s.pts.forEach((p) => {
+                    if (p.v == null) {
+                      if (cur.length) segs.push(cur)
+                      cur = []
+                    } else cur.push(p)
+                  })
+                  if (cur.length) segs.push(cur)
                 }
-              />
-            ))}
-          </g>
-        )
-      }}
-    </ChartFrame>
+                return (
+                  <g key={s.name}>
+                    {segs.map((seg, i) => (
+                      <path key={i} d={seg.map((p, j) => (j ? 'L' : 'M') + cx(p.week).toFixed(1) + ' ' + y(p.v).toFixed(1)).join(' ')} fill="none" stroke={s.color} strokeWidth="2.2" />
+                    ))}
+                    {pts.map((p) => (
+                      <circle key={p.week} cx={cx(p.week)} cy={y(p.v)} r={M.band ? 4.5 : 2.6} fill={s.color} />
+                    ))}
+                  </g>
+                )
+              })}
+              <XAxis weeks={weeks} x={x} bw={bw} w={w} y0={H - m.b} m={m} />
+              {weeks.map((wk) => (
+                <rect
+                  key={'h' + wk}
+                  x={x(wk) - 2}
+                  width={bw + 4}
+                  y={m.t}
+                  height={H - m.b - m.t}
+                  fill="transparent"
+                  onMouseMove={(e) =>
+                    show(e, [
+                      <b key="h" style={{ color: INK }}>Week of {weekLabel(wk)}</b>,
+                      M.title,
+                      ...series.map((s) => {
+                        const p = s.pts.find((q) => q.week === wk)
+                        return (
+                          <div key={s.name}>
+                            <span style={{ color: s.color }}>{'●'}</span> {s.name} <b style={{ color: INK }}>{p && p.v != null ? M.fmt(p.v) : 'no data'}</b>
+                          </div>
+                        )
+                      })
+                    ])
+                  }
+                />
+              ))}
+            </g>
+          )
+        }}
+      </ChartFrame>
+    </div>
   )
 }
 
 // ---- tables ----
 function flagsFor(d) {
   const out = []
-  if (isRead(d.moisture) && d.moisture < DRY) out.push([BAD, 'Dry reading'])
-  if (isRead(d.moisture) && d.moisture > WET) out.push([WARN, 'Wet reading'])
-  if (d.etActual >= 0.3 && d.appIn < 0.85 * d.etActual) out.push([WARN, 'Applied under ET'])
-  if (d.etActual >= 0.3 && d.appIn > 1.15 * d.etActual) out.push([WARN, 'Applied over ET'])
+  if (has(d.moisture) && d.moisture < DRY) out.push([BAD, 'Dry reading'])
+  if (has(d.moisture) && d.moisture > WET) out.push([WARN, 'Wet reading'])
+  if (has(d.etActual) && has(d.appIn) && d.etActual >= 0.3 && d.appIn < 0.85 * d.etActual) out.push([WARN, 'Applied under ET'])
+  if (has(d.etActual) && has(d.appIn) && d.etActual >= 0.3 && d.appIn > 1.15 * d.etActual) out.push([WARN, 'Applied over ET'])
   return out
 }
 
@@ -442,9 +465,9 @@ function WeekTable({ rows }) {
             <tr key={d.week}>
               <td style={{ ...td, textAlign: 'left' }}>{weekLabel(d.week)}</td>
               {[d.etEstimate, d.etActual, d.rain, d.schedIn, d.appIn].map((v, i) => (
-                <td key={i} style={td}>{f2(v)}</td>
+                <td key={i} style={{ ...td, color: has(v) ? INK : MUTED }}>{d2(v)}</td>
               ))}
-              <td style={td}>{isRead(d.moisture) ? d.moisture : ''}</td>
+              <td style={td}>{has(d.moisture) ? d.moisture : ''}</td>
               <td style={{ ...td, textAlign: 'left' }}>
                 {flagsFor(d).map(([col, txt], i) => (
                   <span key={txt}>{i ? ', ' : ''}<span style={{ color: col }}>{txt}</span></span>
@@ -474,156 +497,368 @@ function Section({ title, note, children, style }) {
 
 const noteStyle = { margin: 0, color: MUTED, fontSize: 12.5, lineHeight: 1.5, maxWidth: '75ch' }
 const selectStyle = { font: 'inherit', fontSize: 13, padding: '6px 8px', border: `1px solid ${LINE}`, borderRadius: 6, background: '#fff', color: INK }
+const labelStyle = { display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13 }
+
+function Segmented({ value, onChange, options }) {
+  return (
+    <span role="group" aria-label="Data source" style={{ display: 'inline-flex', border: `1px solid ${LINE}`, borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
+      {options.map(([v, label]) => (
+        <button
+          key={v}
+          type="button"
+          aria-pressed={value === v}
+          onClick={() => onChange(v)}
+          style={{ border: 0, borderRadius: 0, padding: '6px 14px', fontSize: 13, background: value === v ? INK : '#fff', color: value === v ? '#fff' : INK }}
+        >
+          {label}
+        </button>
+      ))}
+    </span>
+  )
+}
+
+// ---- the page ----
+function todayIsoLocal() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 export default function IrrigationReports() {
-  const report = useMemo(() => buildReport(DEMO_WEEKLY), [])
-  const { fieldNames, summary } = report
-  const [fields, setFields] = useState(() => ['ENCRAFT', 'WILSON N'].filter((f) => fieldNames.includes(f)))
+  const [source, setSource] = useState('demo')
+  const [seasons, setSeasons] = useState(null)
+  const [seasonId, setSeasonId] = useState('')
+  const [live, setLive] = useState({ status: 'idle', data: null, error: '' })
+  const cache = useRef({})
+  const [farm, setFarm] = useState('all')
+  const [crop, setCrop] = useState('')
+  const [picked, setPicked] = useState([])
   const [measure, setMeasure] = useState('appPct')
 
-  const toggle = (name) =>
-    setFields((cur) => (cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name].slice(-MAXF)))
+  // Live: load the season list once, then the picked season (kept until refreshed).
+  useEffect(() => {
+    if (source !== 'live' || seasons) return undefined
+    let off = false
+    fetchSeasons()
+      .then((list) => {
+        if (off) return
+        setSeasons(list)
+        const year = new Date().getFullYear()
+        const pick = list.find((s) => s.year === year) || list[0]
+        if (pick) setSeasonId(pick.id)
+        else setLive({ status: 'error', data: null, error: 'No seasons found in AIO.' })
+      })
+      .catch((err) => { if (!off) setLive({ status: 'error', data: null, error: err.message || String(err) }) })
+    return () => { off = true }
+  }, [source, seasons])
 
-  const n = fields.length
-  const single = n === 1 ? fields[0] : null
-  const weekRows = single ? report.byField.get(single) : report.farmWeekly
+  const [reloadTick, setReloadTick] = useState(0)
+  useEffect(() => {
+    if (source !== 'live' || !seasonId || !seasons) return undefined
+    const season = seasons.find((s) => s.id === seasonId)
+    if (!season) return undefined
+    if (cache.current[seasonId]) { setLive({ status: 'ready', data: cache.current[seasonId], error: '' }); return undefined }
+    let off = false
+    setLive({ status: 'loading', data: null, error: '' })
+    loadLiveReport(season, todayIsoLocal())
+      .then((data) => { if (off) return; cache.current[seasonId] = data; setLive({ status: 'ready', data, error: '' }) })
+      .catch((err) => { if (!off) setLive({ status: 'error', data: null, error: err.message || String(err) }) })
+    return () => { off = true }
+  }, [source, seasonId, seasons, reloadTick])
+
+  const isDemo = source === 'demo'
+  const dataset = useMemo(() => {
+    if (isDemo) return { fields: DEMO_FIELDS, rows: DEMO_WEEKLY, warnings: [], ready: true }
+    if (live.status === 'ready' && live.data) return { fields: live.data.fields, rows: live.data.rows, warnings: live.data.warnings || [], ready: true }
+    return { fields: [], rows: [], warnings: [], ready: false }
+  }, [isDemo, live])
+
+  const farms = useMemo(() => [...new Set(dataset.fields.map((f) => f.farm).filter(Boolean))].sort(), [dataset])
+  const farmFields = useMemo(() => dataset.fields.filter((f) => farm === 'all' || f.farm === farm), [dataset, farm])
+  const hasRowsByKey = useMemo(() => { const s = new Set(); dataset.rows.forEach((r) => s.add(r.fieldKey)); return s }, [dataset])
+  const crops = useMemo(() => {
+    const m = new Map()
+    farmFields.forEach((f) => {
+      const c = m.get(f.crop) || { crop: f.crop, total: 0, withData: 0 }
+      c.total += 1
+      if (hasRowsByKey.has(f.key)) c.withData += 1
+      m.set(f.crop, c)
+    })
+    return [...m.values()].sort((a, b) => b.withData - a.withData || b.total - a.total || a.crop.localeCompare(b.crop))
+  }, [farmFields, hasRowsByKey])
+
+  // Keep the crop valid when the source, season or farm changes.
+  useEffect(() => {
+    if (!crops.length) return
+    if (!crops.some((c) => c.crop === crop)) {
+      const next = (isDemo && crops.find((c) => c.crop === 'Potato')) || crops[0]
+      setCrop(next.crop)
+    }
+  }, [crops, crop, isDemo])
+  useEffect(() => {
+    setPicked(isDemo && crop === 'Potato' ? ['ENCRAFT', 'WILSON N'] : [])
+    setMeasure('appPct')
+  }, [crop, isDemo, seasonId, farm])
+  useEffect(() => { setFarm('all') }, [source, seasonId])
+
+  const cropFields = useMemo(() => farmFields.filter((f) => f.crop === crop), [farmFields, crop])
+  const showFarmInLabel = farm === 'all' && farms.length > 1
+  const fieldsView = useMemo(
+    () => cropFields.map((f) => ({ ...f, label: showFarmInLabel && f.farm ? `${f.name} (${f.farm})` : f.name })),
+    [cropFields, showFarmInLabel]
+  )
+  const cropKeys = useMemo(() => new Set(cropFields.map((f) => f.key)), [cropFields])
+  const cropRows = useMemo(() => dataset.rows.filter((r) => cropKeys.has(r.fieldKey)), [dataset, cropKeys])
+  const report = useMemo(() => buildReport(cropRows, fieldsView), [cropRows, fieldsView])
+  const { summary } = report
+  const cropWord = (crop || 'crop').toLowerCase()
+  const pickedFields = picked.map((k) => fieldsView.find((f) => f.key === k)).filter(Boolean)
+  const n = pickedFields.length
+  const single = n === 1 ? pickedFields[0] : null
+  const weekRows = single ? (report.byField.get(single.key) || []) : report.farmWeekly
+  const hasMoisture = report.hasMoisture
+  const hasAnyData = cropRows.length > 0
+  const measureOptions = Object.entries(MEASURES).filter(([k]) => k !== 'moisture' || hasMoisture)
+  const activeMeasure = MEASURES[measure] && (measure !== 'moisture' || hasMoisture) ? measure : 'appPct'
   const colorOf = (i) => (n > 1 ? COLORS[i % COLORS.length] : MUTED)
+  const season = seasons && seasons.find((s) => s.id === seasonId)
+  const where = isDemo ? 'Acequia' : (farm === 'all' ? 'All farms' : farm.replace(/\w\S*/g, (t) => t[0] + t.slice(1).toLowerCase()))
+  const seasonName = isDemo ? '2026' : (season ? season.name : '')
+
+  const toggle = (key) => setPicked((cur) => (cur.includes(key) ? cur.filter((x) => x !== key) : [...cur, key].slice(-MAXF)))
 
   const fieldRows = [...report.fieldSummary].sort((a, b) => {
-    const ia = fields.indexOf(a.field)
-    const ib = fields.indexOf(b.field)
+    const ia = picked.indexOf(a.field.key)
+    const ib = picked.indexOf(b.field.key)
     if (ia >= 0 || ib >= 0) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
-    return a.field < b.field ? -1 : 1
+    if (a.hasData !== b.hasData) return a.hasData ? -1 : 1
+    return a.field.label.localeCompare(b.field.label)
   })
 
   const kpis = [
-    ['Crop ET per field (in)', f1(summary.etActual)],
-    ['Scheduled per field (in)', f1(summary.scheduled)],
-    ['Applied per field (in)', f1(summary.applied)],
-    ['Applied as share of ET (%)', f0(summary.appliedPct)]
+    ['Crop ET per field (in)', d1(summary.etActual)],
+    ['Scheduled per field (in)', d1(summary.scheduled)],
+    ['Applied per field (in)', d1(summary.applied)],
+    ['Applied as share of ET (%)', d0(summary.appliedPct)]
   ]
+
+  // Why the fields without data have none, counted for the empty-state message.
+  const reasonCounts = useMemo(() => {
+    const m = new Map()
+    cropFields.filter((f) => !hasRowsByKey.has(f.key)).forEach((f) => {
+      const r = (f.issues && f.issues[0]) || 'Nothing recorded yet'
+      m.set(r, (m.get(r) || 0) + 1)
+    })
+    return [...m.entries()].sort((a, b) => b[1] - a[1])
+  }, [cropFields, hasRowsByKey])
+
+  const topControls = (
+    <section aria-label="Report settings" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 16px' }}>
+      <Segmented value={source} onChange={setSource} options={[['demo', 'Demo data'], ['live', 'Live data']]} />
+      {!isDemo && seasons && (
+        <label style={labelStyle}>
+          <span style={{ color: MUTED }}>Season</span>
+          <select style={selectStyle} value={seasonId} onChange={(e) => setSeasonId(e.target.value)} aria-label="Season">
+            {seasons.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </label>
+      )}
+      {!isDemo && dataset.ready && farms.length > 0 && (
+        <label style={labelStyle}>
+          <span style={{ color: MUTED }}>Farm</span>
+          <select style={selectStyle} value={farm} onChange={(e) => setFarm(e.target.value)} aria-label="Farm">
+            <option value="all">All farms</option>
+            {farms.map((f) => <option key={f} value={f}>{f}</option>)}
+          </select>
+        </label>
+      )}
+      {dataset.ready && crops.length > 0 && (
+        <label style={labelStyle}>
+          <span style={{ color: MUTED }}>Crop</span>
+          <select style={selectStyle} value={crop} onChange={(e) => setCrop(e.target.value)} aria-label="Crop">
+            {crops.map((c) => (
+              <option key={c.crop} value={c.crop}>
+                {c.crop} {c.withData === 0 ? `(${c.total} ${c.total === 1 ? 'field' : 'fields'}, no data)` : c.withData < c.total ? `(${c.withData} of ${c.total} fields)` : `(${c.total} ${c.total === 1 ? 'field' : 'fields'})`}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {!isDemo && live.status === 'ready' && live.data && (
+        <span style={{ ...noteStyle, display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+          Read from AIO at {live.data.loadedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+          <button type="button" onClick={() => { delete cache.current[seasonId]; setReloadTick((t) => t + 1) }}>Refresh</button>
+        </span>
+      )}
+    </section>
+  )
+
+  const title = `${where} ${cropWord} water report${seasonName ? ', ' + seasonName : ''}`
+
+  if (!isDemo && live.status !== 'ready') {
+    return (
+      <div style={{ maxWidth: 1080, margin: '0 auto', padding: '16px 12px 40px', display: 'flex', flexDirection: 'column', gap: 18, color: INK }}>
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, lineHeight: 1.2 }}>Water report</h1>
+        {topControls}
+        <p style={{ ...noteStyle, fontSize: 14 }}>
+          {live.status === 'error' ? 'Could not read AIO: ' + live.error : 'Reading the season from AIO…'}
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div style={{ maxWidth: 1080, margin: '0 auto', padding: '16px 12px 40px', display: 'flex', flexDirection: 'column', gap: 26, color: INK }}>
       <header>
-        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, lineHeight: 1.2 }}>Acequia potato water report, 2026</h1>
-        <p style={{ display: 'inline-block', margin: '8px 0 0', padding: '3px 10px', borderRadius: 999, fontSize: 12, background: '#fff', border: `1px solid ${WARN}` }}>
-          Demo data: scheduled and applied water are modeled. Crop ET, rain and moisture readings are real.
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, lineHeight: 1.2 }}>{title}</h1>
+        <p style={{ display: 'inline-block', margin: '8px 0 0', padding: '3px 10px', borderRadius: 999, fontSize: 12, background: '#fff', border: `1px solid ${isDemo ? WARN : OK}` }}>
+          {isDemo
+            ? 'Demo data: scheduled and applied water are modeled. Crop ET, rain and moisture readings are real where they exist.'
+            : 'Live data from AIO. A dash means AIO has nothing recorded for it yet.'}
         </p>
+        <div style={{ marginTop: 12 }}>{topControls}</div>
+        {dataset.warnings.length > 0 && (
+          <p style={{ ...noteStyle, marginTop: 8, color: WARN }}>{dataset.warnings.join(' ')}</p>
+        )}
         <p style={{ margin: '12px 0 0', fontSize: 16, lineHeight: 1.55, maxWidth: '70ch' }}>
-          Across <b>{summary.fields}</b> potato fields, applied water covered <b>{summary.appliedPct}</b>% of crop ET from April to September.
-          Of <b>{summary.readings}</b> moisture readings, <b>{summary.dry}</b> were below the 71% line. The Monday ET estimate missed the week's actual ET by <b>{summary.estMiss}</b>% on average.
+          {!hasAnyData && <>No data for {cropWord} yet.</>}
+          {hasAnyData && (
+            <>
+              <b>{summary.fields}</b> of {cropFields.length} {cropWord} {cropFields.length === 1 ? 'field has' : 'fields have'} data.
+              {summary.appliedPct != null
+                ? <> Applied water covered <b>{summary.appliedPct}</b>% of crop ET in the weeks both were recorded.</>
+                : <> No applied water is recorded yet.</>}
+              {hasMoisture
+                ? <> Of <b>{summary.readings}</b> moisture readings, <b>{summary.dry}</b> were below the 71% line.</>
+                : <> No moisture readings are logged for {cropWord}.</>}
+              {summary.estMiss != null && <> The Monday ET estimate missed the week's actual ET by <b>{summary.estMiss}</b>% on average.</>}
+            </>
+          )}
         </p>
+        {isDemo && DEMO_CROP_NOTES[crop] && <p style={{ ...noteStyle, marginTop: 8 }}>{DEMO_CROP_NOTES[crop]}</p>}
+        {!hasAnyData && reasonCounts.length > 0 && (
+          <ul style={{ ...noteStyle, margin: '8px 0 0', paddingLeft: 18 }}>
+            {reasonCounts.map(([r, c]) => <li key={r}>{c} {c === 1 ? 'field' : 'fields'}: {r}</li>)}
+          </ul>
+        )}
       </header>
 
-      <section aria-label="Season totals per field" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
-        {kpis.map(([label, val]) => (
-          <div key={label} style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-            <span style={{ fontSize: 12, color: MUTED }}>{label}</span>
-            <span style={{ fontSize: 28, lineHeight: 1.1, fontVariantNumeric: 'tabular-nums' }}>{val}</span>
-          </div>
-        ))}
-      </section>
+      {hasAnyData && (
+        <section aria-label="Season totals per field" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
+          {kpis.map(([label, val]) => (
+            <div key={label} style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: 10, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+              <span style={{ fontSize: 12, color: MUTED }}>{label}</span>
+              <span style={{ fontSize: 28, lineHeight: 1.1, fontVariantNumeric: 'tabular-nums', color: val === '—' ? MUTED : INK }}>{val}</span>
+              {val === '—' && <span style={{ fontSize: 11, color: MUTED }}>No data yet</span>}
+            </div>
+          ))}
+        </section>
+      )}
 
-      <section aria-label="Choose fields" style={{ position: 'sticky', top: 0, zIndex: 6, background: '#f7f5f0', padding: '10px 0', borderBottom: `1px solid ${LINE}` }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minHeight: 34, alignItems: 'center' }}>
-            {fields.map((name, i) => (
-              <button key={name} type="button" title={'Take ' + name + ' out'} onClick={() => toggle(name)}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 10px', borderRadius: 999, fontSize: 12.5 }}>
-                <Swatch color={colorOf(i)} />
-                <span>{name}</span>
-                <span style={{ color: MUTED }}>{'×'}</span>
-              </button>
-            ))}
-            {!n && <span style={noteStyle}>All potato fields (average)</span>}
+      {hasAnyData && (
+        <section aria-label="Choose fields" style={{ position: 'sticky', top: 0, zIndex: 6, background: '#f7f5f0', padding: '10px 0', borderBottom: `1px solid ${LINE}` }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minHeight: 34, alignItems: 'center' }}>
+              {pickedFields.map((f, i) => (
+                <button key={f.key} type="button" title={'Take ' + f.label + ' out'} onClick={() => toggle(f.key)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 10px', borderRadius: 999, fontSize: 12.5 }}>
+                  <Swatch color={colorOf(i)} />
+                  <span>{f.label}</span>
+                  <span style={{ color: MUTED }}>{'×'}</span>
+                </button>
+              ))}
+              {!n && <span style={noteStyle}>All {cropWord} fields (average)</span>}
+            </div>
+            <select
+              style={selectStyle}
+              aria-label="Add a field"
+              value=""
+              onChange={(e) => {
+                const v = e.target.value
+                if (v === '__all') setPicked([])
+                else if (v) toggle(v)
+              }}
+            >
+              <option value="">{n ? 'Add a field…' : 'Pick a field…'}</option>
+              {fieldsView.filter((f) => !picked.includes(f.key)).map((f) => (
+                <option key={f.key} value={f.key}>{f.label}{hasRowsByKey.has(f.key) ? '' : ' (no data)'}</option>
+              ))}
+              {n > 0 && <option value="__all">All fields (average)</option>}
+            </select>
           </div>
-          <select
-            style={selectStyle}
-            aria-label="Add a field"
-            value=""
-            onChange={(e) => {
-              const v = e.target.value
-              if (v === '__all') setFields([])
-              else if (v) toggle(v)
-            }}
-          >
-            <option value="">{n ? 'Add a field…' : 'Pick a field…'}</option>
-            {fieldNames.filter((f) => !fields.includes(f)).map((f) => (
-              <option key={f} value={f}>{f}</option>
-            ))}
-            {n > 0 && <option value="__all">All fields (average)</option>}
-          </select>
-        </div>
-        <p style={{ ...noteStyle, marginTop: 6 }}>
-          {n === 0 && 'No field picked, so this is the average of all the potato fields. Add a field to look at it alone, or add two or more to compare them.'}
-          {n === 1 && 'One field picked. Add another to compare them side by side.'}
-          {n >= 2 && 'Comparing fields side by side. Up to 4 at a time: picking a fifth drops the first one.'}
-        </p>
-      </section>
+          <p style={{ ...noteStyle, marginTop: 6 }}>
+            {n === 0 && `No field picked, so this is the average of the ${cropWord} fields that have data. Add a field to look at it alone, or add two or more to compare them.`}
+            {n === 1 && 'One field picked. Add another to compare them side by side.'}
+            {n >= 2 && 'Comparing fields side by side. Up to 4 at a time: picking a fifth drops the first one.'}
+          </p>
+        </section>
+      )}
 
-      {n >= 2 ? (
+      {hasAnyData && (n >= 2 ? (
         <Section title="Fields side by side">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <label htmlFor="rp-measure" style={noteStyle}>Compare</label>
-            <select id="rp-measure" style={selectStyle} value={measure} onChange={(e) => setMeasure(e.target.value)} aria-label="What to compare">
-              {Object.entries(MEASURES).map(([k, v]) => (
+            <select id="rp-measure" style={selectStyle} value={activeMeasure} onChange={(e) => setMeasure(e.target.value)} aria-label="What to compare">
+              {measureOptions.map(([k, v]) => (
                 <option key={k} value={k}>{v.label}</option>
               ))}
             </select>
           </div>
           <div style={{ marginTop: 8 }}>
-            <CompareChart report={report} fields={fields} measure={measure} />
+            <CompareChart report={report} picked={pickedFields} measure={activeMeasure} />
           </div>
           <p style={{ ...noteStyle, marginTop: 8 }}>
-            One line per field. Point at a week to see every field's number for it. For the percent views, 100% means the field got what the crop used. Weeks before planting or with almost no ET are left blank.
+            One line per field. Point at a week to see every field's number for it. For the percent views, 100% means the field got what the crop used. Weeks before planting, with almost no ET, or with no data are left blank.
           </p>
         </Section>
       ) : (
-        <>
-          <Section title={single ? 'Water against crop ET, week by week: ' + single : 'Water against crop ET, week by week'}>
-            <WaterChart rows={weekRows} field={single} />
-            <h2 style={{ fontSize: 16, fontWeight: 600, margin: '22px 0 6px' }}>Soil moisture readings</h2>
-            <MoistureChart rows={weekRows} field={single} />
-          </Section>
-        </>
+        <Section title={single ? 'Water against crop ET, week by week: ' + single.label : 'Water against crop ET, week by week'}>
+          {weekRows.length ? <WaterChart rows={weekRows} field={single ? single.label : null} /> : <p style={noteStyle}>No data for this field yet.</p>}
+          {hasMoisture && weekRows.length > 0 && (
+            <>
+              <h2 style={{ fontSize: 16, fontWeight: 600, margin: '22px 0 6px' }}>Soil moisture readings</h2>
+              <MoistureChart rows={weekRows} field={single ? single.label : null} />
+            </>
+          )}
+        </Section>
+      ))}
+
+      {hasAnyData && hasMoisture && (
+        <Section title="What the water looked like around each kind of reading"
+          note={`Each moisture reading is matched to the same week's schedule. Scheduled is compared with the Monday ET estimate, applied with the week's actual ET. This one covers every ${cropWord} field. A dash means that number isn't recorded for those weeks.`}>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ ...tableStyle, minWidth: 560 }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, textAlign: 'left' }}>Moisture reading</th>
+                  <th style={th}>Readings</th>
+                  <th style={th}>Scheduled vs estimate (%)</th>
+                  <th style={th}>Applied vs ET (%)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.bands.map((b) => (
+                  <tr key={b.band}>
+                    <td style={{ ...td, textAlign: 'left' }}>{b.band}</td>
+                    <td style={td}>{b.readings}</td>
+                    <td style={td}>{b.readings ? d0(b.schedPct) : ''}</td>
+                    <td style={td}>{b.readings ? d0(b.appPct) : ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
       )}
 
-      <Section title="What the water looked like around each kind of reading"
-        note="Each moisture reading is matched to the same week's schedule. Scheduled is compared with the Monday ET estimate, applied with the week's actual ET. This one covers every potato field.">
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ ...tableStyle, minWidth: 560 }}>
-            <thead>
-              <tr>
-                <th style={{ ...th, textAlign: 'left' }}>Moisture reading</th>
-                <th style={th}>Readings</th>
-                <th style={th}>Scheduled vs estimate (%)</th>
-                <th style={th}>Applied vs ET (%)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {report.bands.map((b) => (
-                <tr key={b.band}>
-                  <td style={{ ...td, textAlign: 'left' }}>{b.band}</td>
-                  <td style={td}>{b.readings}</td>
-                  <td style={td}>{b.schedPct == null ? '' : f0(b.schedPct)}</td>
-                  <td style={td}>{b.appPct == null ? '' : f0(b.appPct)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Section>
-
-      {n < 2 && (
-        <Section title={single ? 'Week by week: ' + single : 'Week by week: average of all fields'}>
+      {hasAnyData && n < 2 && weekRows.length > 0 && (
+        <Section title={single ? 'Week by week: ' + single.label : 'Week by week: average of the fields with data'}>
           <WeekTable rows={weekRows} />
         </Section>
       )}
 
-      <Section title="Every field, whole season" note="Tap a field to add it to the comparison, or tap it again to take it out. Picked fields come first.">
+      <Section title={`Every ${cropWord} field, whole season`} note={hasAnyData ? 'Tap a field to add it to the comparison, or tap it again to take it out. Picked fields come first, then the fields with data.' : 'These are the fields in AIO for this crop. None has data yet.'}>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ ...tableStyle, minWidth: 700 }}>
+          <table style={{ ...tableStyle, minWidth: hasMoisture ? 880 : 700 }}>
             <thead>
               <tr>
                 <th style={{ ...th, textAlign: 'left' }}>Field</th>
@@ -631,33 +866,37 @@ export default function IrrigationReports() {
                 <th style={th}>Scheduled (in)</th>
                 <th style={th}>Applied (in)</th>
                 <th style={th}>Applied vs ET (%)</th>
-                <th style={th}>Readings</th>
-                <th style={th}>Below 71%</th>
+                {hasMoisture && <th style={th}>Readings</th>}
+                {hasMoisture && <th style={th}>Below 71%</th>}
+                <th style={{ ...th, textAlign: 'left' }}>Status</th>
               </tr>
             </thead>
             <tbody>
               {fieldRows.map((d) => {
-                const i = fields.indexOf(d.field)
+                const f = d.field
+                const i = picked.indexOf(f.key)
+                const status = d.hasData ? ((f.notes && f.notes.length) ? f.notes.join('. ') : '') : 'No data: ' + ((f.issues && f.issues.length) ? f.issues.join('. ') : 'nothing recorded yet')
                 return (
                   <tr
-                    key={d.field}
+                    key={f.key}
                     tabIndex={0}
-                    onClick={() => toggle(d.field)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(d.field) } }}
-                    style={{ cursor: 'pointer', background: i >= 0 ? '#fff' : undefined }}
+                    onClick={() => toggle(f.key)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(f.key) } }}
+                    style={{ cursor: 'pointer', background: i >= 0 ? '#fff' : undefined, color: d.hasData ? INK : MUTED }}
                   >
                     <td style={{ ...td, textAlign: 'left' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                         {i >= 0 && <Swatch color={colorOf(i)} />}
-                        {d.field}
+                        {f.label}
                       </span>
                     </td>
-                    <td style={td}>{f1(d.etActual)}</td>
-                    <td style={td}>{f1(d.scheduled)}</td>
-                    <td style={td}>{f1(d.applied)}</td>
-                    <td style={td}>{f0(d.appliedPct)}</td>
-                    <td style={td}>{d.readings}</td>
-                    <td style={td}>{d.dry}</td>
+                    <td style={td}>{d1(d.etActual)}</td>
+                    <td style={td}>{d1(d.scheduled)}</td>
+                    <td style={td}>{d1(d.applied)}</td>
+                    <td style={td}>{d0(d.appliedPct)}</td>
+                    {hasMoisture && <td style={td}>{d.hasData ? d.readings : '—'}</td>}
+                    {hasMoisture && <td style={td}>{d.hasData && d.readings ? d.dry : '—'}</td>}
+                    <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 220, fontSize: 12, color: MUTED }}>{status}</td>
                   </tr>
                 )
               })}
@@ -669,10 +908,18 @@ export default function IrrigationReports() {
       <details style={{ borderTop: `1px solid ${LINE}`, paddingTop: 10 }}>
         <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Where these numbers come from</summary>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8, fontSize: 14, lineHeight: 1.55, maxWidth: '75ch' }}>
-          <p style={{ margin: 0 }}>Crop ET is the AgriMet Rupert station's measured daily alfalfa-reference ET for 2026, multiplied by AIO's draft potato crop curve and each field's plant date from AgWorld. Rupert is the station AIO uses for Acequia.</p>
+          <p style={{ margin: 0 }}>Crop ET is the AgriMet station's measured daily alfalfa-reference ET, multiplied by AIO's draft crop curve for the crop and each field's plant date from AgWorld (alfalfa uses a fixed season-average curve with no plant date). The crop curves are drafts still being checked.</p>
           <p style={{ margin: 0 }}>The ET estimate is what AIO could have said on Monday, using the previous seven days of weather for the whole week. Actual ET uses the measured days.</p>
           <p style={{ margin: 0 }}>Moisture readings are the percentages logged from the weekly digs and imported into the Agronomy scouting data. A week with no reading shows no dot.</p>
-          <p style={{ margin: 0 }}>Scheduled and applied water are modeled for this demo, because the 2026 season was not scheduled in AIO. The model leans the schedule down in weeks with a dry reading and up in weeks with a wet one, and assumes 6.5 gallons per minute per acre. A few weeks include a pivot stop that cut applied water. None of it comes from the farm's records.</p>
+          {isDemo ? (
+            <p style={{ margin: 0 }}>In the demo, scheduled and applied water are modeled, because the 2026 season was not scheduled in AIO. They assume 6.5 gallons per minute per acre, and a few weeks include a pivot stop that cut applied water. For fields with moisture readings the model leans the schedule down in weeks with a dry reading and up in weeks with a wet one. None of it comes from the farm's records.</p>
+          ) : (
+            <>
+              <p style={{ margin: 0 }}>Scheduled inches come from the saved weekly schedules, using the pivot's GPM and the field's acres. A week with no saved schedule is blank, not zero.</p>
+              <p style={{ margin: 0 }}>Applied inches come from the weekly pivot run log (wet hours times the pivot's GPM), the same way the Applied column on the schedule works. AIO started counting on the week of Nov 9, 2026, so earlier weeks are blank.</p>
+              <p style={{ margin: 0 }}>Rain is not saved in AIO yet, so the rain column is blank. Weather for weeks before AIO started saving AgriMet each morning is also missing, so older weeks may show no ET until that history is loaded.</p>
+            </>
+          )}
         </div>
       </details>
     </div>
