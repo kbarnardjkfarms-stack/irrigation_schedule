@@ -11,6 +11,7 @@ import { onAuthStateChanged, signOut } from 'firebase/auth'
 import { auth, db } from './firebase.js'
 
 import LiveData from './LiveData.jsx'
+import IrrigationReports from './IrrigationReports.jsx'
 
 import Login from './Login.jsx'
 
@@ -396,7 +397,8 @@ export default function App() {
   const [profileAttempt, setProfileAttempt] = useState(0)
   const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', 'contracts', 'yields', 'harvest' (Operations schedule), 'seed' or 'map' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
-  const [view, setView] = useState('schedule')
+  const [view, setView] = useState('schedule') // 'schedule', 'live-data' or 'reports' (the Irrigation views dropdown)
+  const [viewMenuOpen, setViewMenuOpen] = useState(false)
   const [online, setOnline] = useState(navigator.onLine)
   const [eventsByField, setEventsByField] = useState({})
   const [gpmByField, setGpmByField] = useState({})
@@ -511,6 +513,7 @@ export default function App() {
   }
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const settingsMenuRef = useRef(null)
+  const viewMenuRef = useRef(null)
   const profileMenuRef = useRef(null)
 
   useEffect(() => {
@@ -581,6 +584,7 @@ export default function App() {
 
   useEffect(() => {
     function handleClickOutside(e) {
+      if (viewMenuRef.current && !viewMenuRef.current.contains(e.target)) setViewMenuOpen(false)
       if (settingsMenuRef.current && !settingsMenuRef.current.contains(e.target)) setSettingsMenuOpen(false)
       if (profileMenuRef.current && !profileMenuRef.current.contains(e.target)) setProfileMenuOpen(false)
     }
@@ -666,6 +670,15 @@ export default function App() {
   // locked out of in firestore.rules — don't even try to listen for them.
   const staffReady = !!userRole && userRole !== 'customer'
   const canSeeAgronomy = (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager') && hasModule('agronomy')
+  // Irrigation Reports: same people as Agronomy (Admin, Owner, Farm manager).
+  const canSeeReports = (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager') && hasModule('irrigation')
+  // The views dropdown in the header. A new view is one more line here.
+  const irrigationViews = [
+    { id: 'schedule', label: 'Schedule' },
+    { id: 'live-data', label: 'Live Data' },
+    ...(canSeeReports ? [{ id: 'reports', label: 'Reports' }] : [])
+  ]
+  const currentViewLabel = (irrigationViews.find((v) => v.id === view) || irrigationViews[0]).label
 
   // If someone's module access changes while they're sitting on a page they
   // no longer have, send them home rather than leaving a dead screen.
@@ -677,6 +690,11 @@ export default function App() {
       : null
     if (needs && !hasModule(needs)) setPage('home')
   }, [page, userRole, userProfile]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Someone sitting on Reports whose access is taken away goes back to the schedule.
+  useEffect(() => {
+    if (userRole && view === 'reports' && !canSeeReports) setView('schedule')
+  }, [view, userRole, userProfile]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mirrors firestore.rules' canViewContracts() + hasModule('contracts'):
   // Admin/Owner edit, Farm manager view-only. A profile with no modules
@@ -1195,17 +1213,35 @@ export default function App() {
             {online ? 'Online' : 'Offline — changes will sync automatically'}
           </span>
         </div>
-        {page === 'irrigation' && (
-          <div className="view-toggle">
-            <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
-            <button className={view === 'live-data' ? 'active' : ''} onClick={() => setView('live-data')}>Live Data</button>
-          </div>
-        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginLeft: '10px' }}>
+          {page === 'irrigation' && (
+            <div ref={viewMenuRef} style={{ position: 'relative' }}>
+              <button
+                onClick={() => { setViewMenuOpen((o) => !o); setSettingsMenuOpen(false); setProfileMenuOpen(false) }}
+                aria-haspopup="menu"
+                aria-expanded={viewMenuOpen}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
+              >
+                {currentViewLabel} {'\u25be'}
+              </button>
+              {viewMenuOpen && (
+                <div role="menu" style={{ position: 'absolute', top: '100%', left: 0, marginTop: '6px', background: '#fff', border: '0.5px solid #ddd8cc', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.12)', minWidth: '170px', zIndex: 10, overflow: 'hidden' }}>
+                  {irrigationViews.map((v, i) => (
+                    <button
+                      key={v.id}
+                      role="menuitem"
+                      onClick={() => { setView(v.id); setViewMenuOpen(false) }}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: i ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: view === v.id ? '#EAF2E2' : '#fff', fontWeight: view === v.id ? 600 : 400 }}
+                    >{v.label}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {(userRole === 'admin' || userRole === 'owner' || (page === 'irrigation' && (userRole === 'farm_manager' || selectedFarmId !== 'all'))) && (
             <div ref={settingsMenuRef} style={{ position: 'relative' }}>
               <button
-                onClick={() => { setSettingsMenuOpen((o) => !o); setProfileMenuOpen(false) }}
+                onClick={() => { setSettingsMenuOpen((o) => !o); setProfileMenuOpen(false); setViewMenuOpen(false) }}
                 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
               >
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
@@ -1246,7 +1282,7 @@ export default function App() {
           )}
           <div ref={profileMenuRef} style={{ position: 'relative' }}>
             <button
-              onClick={() => { setProfileMenuOpen((o) => !o); setSettingsMenuOpen(false) }}
+              onClick={() => { setProfileMenuOpen((o) => !o); setSettingsMenuOpen(false); setViewMenuOpen(false) }}
               aria-label="Your account"
               style={{ width: '34px', height: '34px', borderRadius: '50%', background: '#185FA5', color: '#fff', border: 'none', fontWeight: 600, fontSize: '13px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             >{myInitials}</button>
@@ -1481,6 +1517,7 @@ export default function App() {
       {page === 'irrigation' && hasModule('irrigation') && (
         <>
           {view === 'live-data' && <LiveData />}
+          {view === 'reports' && canSeeReports && <IrrigationReports userRole={userRole} />}
           {view === 'schedule' && <div className="filter-bar">
             {seasons.length > 0 && (
               <select
