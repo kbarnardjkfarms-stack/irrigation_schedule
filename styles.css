@@ -149,6 +149,19 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .inches-head, .inches-cell { width: 84px; min-width: 84px; max-width: 84px; padding-left: 3px; padding-right: 3px; }
 .inches-label-short { display: none; }
 
+/* Red warning triangle in the Scheduled / Applied cells of a pivot with water
+   scheduled but no GPM. Fades slowly in and out; pauses when pointed at. */
+.gpm-warn { background: none; border: none; padding: 2px; line-height: 0; cursor: pointer; animation: gpm-pulse 2.4s ease-in-out infinite; }
+.gpm-warn:hover { animation-play-state: paused; }
+@keyframes gpm-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .gpm-warn { animation: none; } }
+.gpm-backdrop { z-index: 1060; }
+.gpm-dialog-head { margin: -1rem -1.25rem 12px; padding: 10px 1.25rem; background: #DDE8D3; border-radius: 14px 14px 0 0; }
+.gpm-dialog-text { font-size: 14px; line-height: 1.5; margin: 0 0 10px; }
+.gpm-dialog-rec { background: #FBF1D5; border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.5; margin-bottom: 12px; }
+.gpm-dialog .editor-row { display: flex; gap: 8px; }
+.gpm-dialog .editor-row button { flex: 1; }
+
 @media (max-width: 700px) {
   table { table-layout: fixed; min-width: 0; width: max-content; }
   .col-shift { width: calc((100vw - 262px) / 4); }
