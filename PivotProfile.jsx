@@ -31,6 +31,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const [thresholdInput, setThresholdInput] = useState('60')
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState(null)
+  const [uploadError, setUploadError] = useState(null)
   const [gpmSaved, setGpmSaved] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [fieldNames, setFieldNames] = useState([])
@@ -125,6 +126,15 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   async function handleUpload(e) {
     const file = e.target.files && e.target.files[0]
     if (!file) return
+    // Packages must be PDFs: the reader that finds the GPM only works on
+    // PDFs. A photo is turned away here, before anything is saved.
+    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')
+    if (!isPdf) {
+      setUploadError('AIO needs a PDF. Use a scanning app to turn the photo into a PDF, then upload that.')
+      e.target.value = ''
+      return
+    }
+    setUploadError(null)
     setUploading(true)
     setError(null)
     try {
@@ -441,6 +451,10 @@ export default function PivotProfile({ pivotGuid, onBack }) {
               No package printout available
             </label>
           </>
+        )}
+        <div style={{ fontSize: '10px', color: '#888', marginTop: '8px' }}>PDF only. Have a paper printout? A free scanning app (or the Notes app on iPhone) can turn a photo into a PDF.</div>
+        {uploadError && (
+          <div style={{ background: '#FBEAEA', border: '1px solid #E8B4B4', borderRadius: '8px', padding: '8px 12px', marginTop: '8px', fontSize: '12px', color: '#A32D2D' }}>{uploadError}</div>
         )}
         {historyCount > 0 && (
           <div style={{ marginTop: '14px', borderTop: '1px solid #e4e1d8', paddingTop: '10px' }}>
