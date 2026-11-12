@@ -37,7 +37,7 @@ import PivotDetailPanel from './PivotDetailPanel.jsx'
 
 import EtDetail from './EtDetail.jsx'
 import AppliedDetail from './AppliedDetail.jsx'
-import { computeApplied } from './appliedMath.js'
+import { computeApplied, WET_LOG_START_WEEK } from './appliedMath.js'
 
 import { weeklyEt, scheduledBand, scheduledShare, stationsForField, normalizeIsoDate } from './etMath.js'
 
@@ -370,6 +370,8 @@ export default function App() {
   const [agrimetByStation, setAgrimetByStation] = useState({})
   const [etDetailFieldId, setEtDetailFieldId] = useState(null)
   const [appliedDetailFieldId, setAppliedDetailFieldId] = useState(null)
+  // The "no GPM" explainer pop-up (red triangle in the Scheduled / Applied cells).
+  const [noGpmFieldId, setNoGpmFieldId] = useState(null)
   const [wetLogByPivot, setWetLogByPivot] = useState({})
   const [selected, setSelected] = useState(null)
   const [editingMode, setEditingMode] = useState(null)
@@ -545,6 +547,14 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [selected])
+
+  // Escape closes the "no GPM" pop-up too.
+  useEffect(() => {
+    if (!noGpmFieldId) return
+    function onKey(e) { if (e.key === 'Escape') setNoGpmFieldId(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [noGpmFieldId])
 
   useEffect(() => {
     if (!user) { setUserRole(null); setUserProfile(null); setProfileStatus('loading'); return }
@@ -896,6 +906,30 @@ export default function App() {
     } catch (err) {
       console.warn('Applied inches failed for', field && field.fieldName, err)
       return { ok: false, reason: 'error' }
+    }
+  }
+  // A pivot with water scheduled (or that actually ran this week) but no GPM
+  // on its profile: Scheduled and Applied inches can't be worked out. Both cells
+  // show a flashing red triangle that explains it. Needs a pivot on the field
+  // (the pop-up sends the person to that pivot's profile).
+  function noGpmFor(field) {
+    const none = { scheduled: false, applied: false }
+    try {
+      const guid = pivotGuidByFieldId[field.id]
+      if (!guid) return none
+      const gpm = Number(pivotProfilesByGuid[guid] && pivotProfilesByGuid[guid].currentGpm)
+      if (gpm > 0) return none
+      const events = eventsByField[field.id] || []
+      const scheduledHours = overlapHours(onIntervals(events), 0, 168)
+      const wetHours = Number(wetLogByPivot && wetLogByPivot[guid] && wetLogByPivot[guid].wetHours) || 0
+      const trackedWeek = weekId >= WET_LOG_START_WEEK && weekId <= currentWeekId
+      return {
+        scheduled: scheduledHours > 0,
+        applied: trackedWeek && (scheduledHours > 0 || wetHours > 0)
+      }
+    } catch (err) {
+      console.warn('No-GPM check failed for', field && field.fieldName, err)
+      return none
     }
   }
   function computeEtInfo(field) {
@@ -1588,6 +1622,7 @@ export default function App() {
                   const isPivotExpanded = expandedPivotFieldId === field.id
                   const etInfo = etInfoFor(field)
                   const applied = appliedFor(field)
+                  const noGpm = noGpmFor(field)
 
                   function onNameClick() {
                     if (mode === 'copy-source') { setCopySourceId(field.id); setMode('copy-targets'); setCopyTargets(new Set()); return }
@@ -1665,14 +1700,23 @@ export default function App() {
                           })
                         ))}
                         <td className="inches-cell">
-                          {etInfo.scheduled != null && (
+                          {noGpm.scheduled && (
+                            <button className="gpm-warn" onClick={() => setNoGpmFieldId(field.id)} aria-label={`No GPM for ${field.fieldName}: scheduled inches can't be calculated. Tap for details.`}>
+                              <svg width="30" height="28" viewBox="0 0 30 28" aria-hidden="true"><path d="M15 2 L28 25 H2 Z" fill="#D32F2F" stroke="#D32F2F" strokeWidth="2" strokeLinejoin="round" /><rect x="13.6" y="9" width="2.8" height="9" rx="1.2" fill="#fff" /><circle cx="15" cy="21.2" r="1.7" fill="#fff" /></svg>
+                            </button>
+                          )}
+                          {etInfo.scheduled != null && (!noGpm.scheduled) && (
                             <button className={`sched-cell sched-${etInfo.band}`} onClick={() => setEtDetailFieldId(field.id)} aria-label={`Scheduled inches for ${field.fieldName}, tap for details`}>
                               {etInfo.scheduled.toFixed(2)}
                             </button>
                           )}
                         </td>
-                        <td className="inches-cell applied-cell" style={{ cursor: 'pointer', fontVariantNumeric: 'tabular-nums', color: applied.ok ? '#2b2b26' : '#999' }} onClick={() => setAppliedDetailFieldId(field.id)}>
-                          {applied.ok ? <>{applied.inches.toFixed(2)}<span className="et-mark">{applied.estimate ? '~' : ''}{applied.unknownMark ? '+?' : ''}</span></> : '—'}
+                        <td className="inches-cell applied-cell" style={{ cursor: 'pointer', fontVariantNumeric: 'tabular-nums', color: applied.ok ? '#2b2b26' : '#999' }} onClick={() => (noGpm.applied ? setNoGpmFieldId(field.id) : setAppliedDetailFieldId(field.id))}>
+                          {noGpm.applied ? (
+                            <button className="gpm-warn" onClick={(e) => { e.stopPropagation(); setNoGpmFieldId(field.id) }} aria-label={`No GPM for ${field.fieldName}: applied inches can't be calculated. Tap for details.`}>
+                              <svg width="30" height="28" viewBox="0 0 30 28" aria-hidden="true"><path d="M15 2 L28 25 H2 Z" fill="#D32F2F" stroke="#D32F2F" strokeWidth="2" strokeLinejoin="round" /><rect x="13.6" y="9" width="2.8" height="9" rx="1.2" fill="#fff" /><circle cx="15" cy="21.2" r="1.7" fill="#fff" /></svg>
+                            </button>
+                          ) : applied.ok ? <>{applied.inches.toFixed(2)}<span className="et-mark">{applied.estimate ? '~' : ''}{applied.unknownMark ? '+?' : ''}</span></> : '—'}
                         </td>
                         <td className="inches-cell et-cell" onClick={() => setEtDetailFieldId(field.id)}>
                           {etInfo.et ? <>{etInfo.et.inches.toFixed(2)}<span className="et-mark">{etInfo.stationInfo && etInfo.stationInfo.codes.length > 1 ? '*' : ''}{etInfo.et.approximate ? '~' : ''}</span></> : '—'}
@@ -1701,6 +1745,28 @@ export default function App() {
           </div>}
         </>
       )}
+      {noGpmFieldId && (() => {
+        const f = fields.find((x) => x.id === noGpmFieldId)
+        if (!f) return null
+        const guid = pivotGuidByFieldId[f.id]
+        return createPortal(
+          <div className="editor-backdrop gpm-backdrop" onClick={(e) => { if (e.target === e.currentTarget) setNoGpmFieldId(null) }}>
+            <div className="editor-panel gpm-dialog" role="dialog" aria-modal="true" aria-label={`No GPM for ${f.fieldName}`}>
+              <div className="editor-header gpm-dialog-head">
+                <div className="editor-field-name">Can't calculate inches for {f.fieldName}</div>
+                <button className="editor-close" aria-label="Close" onClick={() => setNoGpmFieldId(null)}>×</button>
+              </div>
+              <p className="gpm-dialog-text">AIO can't calculate scheduled or applied inches without knowing this pivot's GPM (gallons per minute).</p>
+              <div className="gpm-dialog-rec"><strong>To fix it:</strong> upload this pivot's sprinkler package, or enter the GPM by hand on the pivot profile.</div>
+              <div className="editor-row">
+                {guid && <button className="save" onClick={() => { setPivotProfileGuid(guid); setPage('pivot-profile'); setNoGpmFieldId(null) }}>Open pivot profile &rarr;</button>}
+                <button onClick={() => setNoGpmFieldId(null)}>Close</button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )
+      })()}
       {etDetailFieldId && (() => {
         const f = fields.find((x) => x.id === etDetailFieldId)
         if (!f) return null
