@@ -72,7 +72,10 @@ export default function EtDetail({ field, info, weekStart, todayIso, onClose }) 
             <strong>{et ? `${et.inches.toFixed(2)} in` : 'Blank'}</strong>
           </div>
           {!et && <p className="et-note">{blankReason(field, info)}</p>}
-          {et && (
+          {et && et.demo && (
+            <p className="et-note">Demo number: an example forecast for presentations, not real AgriMet weather.</p>
+          )}
+          {et && !et.demo && (
             <p className="et-note">
               Made of {plural(et.measuredDays, 'measured day')}, {plural(et.forecastDays, 'forecast day')} and {plural(et.averageDays, 'day')} estimated from the recent average
               {et.growingDays < 7 ? `. The crop is only growing ${plural(et.growingDays, 'day')} of this week.` : '.'}
