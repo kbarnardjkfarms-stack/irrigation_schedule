@@ -7,6 +7,7 @@ import {
   packRing, potBucket, shapeAcres, unpackRing
 } from './mapMath.js'
 import { FieldsTable, MapImport } from './FarmMapSetup.jsx'
+import FarmMapFeed from './FarmMapFeed.jsx'
 
 // Farm Map module — AIO's own map of every field, from the JKF Google farm
 // map, coloured by the Main Field Plan for any year.
@@ -175,7 +176,7 @@ export default function FarmMap({ userRole }) {
   }
   function saveField(id, patch) { run(() => updateDoc(doc(db, 'farmFields', id), { ...patch, updatedBy: who(), updatedAt: Date.now() }), 'Saved.') }
 
-  const tabs = [['map', 'Map'], ['fields', 'Fields & links'], ...(canEdit ? [['import', 'Import']] : [])]
+  const tabs = [['map', 'Map'], ['fields', 'Fields & links'], ...(canEdit ? [['import', 'Import'], ['feed', 'Public feed']] : [])]
   return (
     <div className="agronomy farmmap">
       {error && <div className="agronomy-error-banner">{error}</div>}
@@ -262,6 +263,7 @@ export default function FarmMap({ userRole }) {
       {view === 'fields' && <FieldsTable fields={fields} planByKey={planByKey} canEdit={canEdit} onSave={saveField} year={year}
         onOpen={(id) => { setSelId(id); setView('map') }} />}
       {view === 'import' && canEdit && <MapImport rawFields={rawFields} points={points} planRows={planRows} run={run} />}
+      {view === 'feed' && canEdit && <FarmMapFeed years={years} />}
     </div>
   )
 }
