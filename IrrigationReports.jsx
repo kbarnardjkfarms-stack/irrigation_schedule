@@ -338,7 +338,8 @@ function CompareChart({ report, picked, measure }) {
   const weeks = report.weeks
   const series = picked.map((f, i) => ({
     name: f.label,
-    color: COLORS[i % COLORS.length],
+    color: f.dashed ? MUTED : COLORS[i % COLORS.length],
+    dashed: !!f.dashed,
     pts: weeks.map((wk) => {
       const row = report.pct.get(f.key) && report.pct.get(f.key).get(wk)
       return { week: wk, v: row && has(row[measure]) ? row[measure] : null }
@@ -353,12 +354,14 @@ function CompareChart({ report, picked, measure }) {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', fontSize: 12, color: MUTED, marginBottom: 2 }}>
         {series.map((s) => (
           <span key={s.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ width: 10, height: 10, borderRadius: '50%', background: s.color, display: 'inline-block' }} />
+            {s.dashed
+              ? <svg width="16" height="10" aria-hidden="true"><line x1="0" x2="16" y1="5" y2="5" stroke={s.color} strokeWidth="2" strokeDasharray="4 3" /></svg>
+              : <span style={{ width: 10, height: 10, borderRadius: '50%', background: s.color, display: 'inline-block' }} />}
             {s.name}
           </span>
         ))}
       </div>
-      {!anyPoint && <p style={{ ...noteStyle, margin: '4px 0' }}>No data for {M.title.toLowerCase()} on these fields yet.</p>}
+      {!anyPoint && <p style={{ ...noteStyle, margin: '4px 0' }}>Nothing recorded yet for {'\u201c' + M.title + '\u201d'}. Try another measure.</p>}
       <ChartFrame height={H} label="Weekly values for the picked fields, one line per field" onLeave={hide} tip={<Tip tip={tip} />}>
         {(w) => {
           const { x, bw } = bandScale(weeks, w, m)
@@ -393,9 +396,9 @@ function CompareChart({ report, picked, measure }) {
                 return (
                   <g key={s.name}>
                     {segs.map((seg, i) => (
-                      <path key={i} d={seg.map((p, j) => (j ? 'L' : 'M') + cx(p.week).toFixed(1) + ' ' + y(p.v).toFixed(1)).join(' ')} fill="none" stroke={s.color} strokeWidth="2.2" />
+                      <path key={i} d={seg.map((p, j) => (j ? 'L' : 'M') + cx(p.week).toFixed(1) + ' ' + y(p.v).toFixed(1)).join(' ')} fill="none" stroke={s.color} strokeWidth={s.dashed ? 1.8 : 2.2} strokeDasharray={s.dashed ? '5 4' : undefined} />
                     ))}
-                    {pts.map((p) => (
+                    {!s.dashed && pts.map((p) => (
                       <circle key={p.week} cx={cx(p.week)} cy={y(p.v)} r={M.band ? 4.5 : 2.6} fill={s.color} />
                     ))}
                   </g>
@@ -499,9 +502,9 @@ const noteStyle = { margin: 0, color: MUTED, fontSize: 12.5, lineHeight: 1.5, ma
 const selectStyle = { font: 'inherit', fontSize: 13, padding: '6px 8px', border: `1px solid ${LINE}`, borderRadius: 6, background: '#fff', color: INK }
 const labelStyle = { display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13 }
 
-function Segmented({ value, onChange, options }) {
+function Segmented({ value, onChange, options, label: groupLabel = 'Data source' }) {
   return (
-    <span role="group" aria-label="Data source" style={{ display: 'inline-flex', border: `1px solid ${LINE}`, borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
+    <span role="group" aria-label={groupLabel} style={{ display: 'inline-flex', border: `1px solid ${LINE}`, borderRadius: 8, overflow: 'hidden', background: '#fff' }}>
       {options.map(([v, label]) => (
         <button
           key={v}
@@ -533,6 +536,9 @@ export default function IrrigationReports() {
   const [crop, setCrop] = useState('')
   const [picked, setPicked] = useState([])
   const [measure, setMeasure] = useState('appPct')
+  const [measureChosen, setMeasureChosen] = useState(false)
+  const [compareBy, setCompareBy] = useState('fields')
+  const [pickedFarms, setPickedFarms] = useState([])
 
   // Live: load the season list once, then the picked season (kept until refreshed).
   useEffect(() => {
@@ -599,6 +605,8 @@ export default function IrrigationReports() {
     setMeasure('appPct')
   }, [crop, isDemo, seasonId, farm])
   useEffect(() => { setFarm('all') }, [source, seasonId])
+  useEffect(() => { if (isDemo) setCompareBy('fields') }, [isDemo])
+  useEffect(() => { if (compareBy === 'farms') setFarm('all') }, [compareBy])
 
   const cropFields = useMemo(() => farmFields.filter((f) => f.crop === crop), [farmFields, crop])
   const showFarmInLabel = farm === 'all' && farms.length > 1
@@ -617,6 +625,55 @@ export default function IrrigationReports() {
   const weekRows = single ? (report.byField.get(single.key) || []) : report.farmWeekly
   const hasMoisture = report.hasMoisture
   const hasAnyData = cropRows.length > 0
+  const farmMode = !isDemo && compareBy === 'farms' && farms.length > 1
+
+  // Farm vs farm: each farm is the plain average of its own fields that have
+  // data, for the one crop picked. Weeks with no number for a field are skipped.
+  const farmData = useMemo(() => {
+    if (!farmMode) return null
+    const METRICS = ['appPct', 'schedPct', 'appIn', 'etActual', 'moisture']
+    const weeks = report.weeks
+    const pctOf = (key, wk) => (report.pct.get(key) && report.pct.get(key).get(wk)) || {}
+    const average = (list) => {
+      const m = new Map()
+      weeks.forEach((wk) => {
+        const entry = {}
+        METRICS.forEach((k) => {
+          const v = list.map((f) => pctOf(f.key, wk)[k]).filter(has).map(Number)
+          entry[k] = v.length ? mean(v) : null
+        })
+        m.set(wk, entry)
+      })
+      return m
+    }
+    const sumByKey = new Map(report.fieldSummary.map((x) => [x.field.key, x]))
+    const out = farms.map((name) => {
+      const fl = fieldsView.filter((f) => f.farm === name)
+      const withData = fl.filter((f) => report.byField.has(f.key))
+      const sums = withData.map((f) => sumByKey.get(f.key)).filter(Boolean)
+      const avg = (k) => { const v = sums.map((x) => x[k]).filter(has); return v.length ? mean(v) : null }
+      const issues = new Map()
+      fl.filter((f) => !report.byField.has(f.key)).forEach((f) => { const r = (f.issues && f.issues[0]) || 'Nothing recorded yet'; issues.set(r, (issues.get(r) || 0) + 1) })
+      const topIssue = [...issues.entries()].sort((a, b) => b[1] - a[1])[0]
+      return {
+        farm: name, total: fl.length, nData: withData.length, hasData: withData.length > 0,
+        acres: withData.reduce((a, f) => a + (Number(f.acres) || 0), 0),
+        etActual: avg('etActual'), scheduled: avg('scheduled'), applied: avg('applied'), appliedPct: avg('appliedPct'),
+        stations: [...new Set(withData.map((f) => f.station).filter(Boolean))].join(', '),
+        status: withData.length ? '' : 'No data: ' + (topIssue ? topIssue[0] + (topIssue[1] > 1 ? ` (${topIssue[1]} fields)` : '') : 'nothing recorded yet'),
+        pct: average(withData)
+      }
+    }).filter((f) => f.total > 0)
+    const everyone = fieldsView.filter((f) => report.byField.has(f.key))
+    return { farms: out, baseline: average(everyone), weeks }
+  }, [farmMode, report, fieldsView, farms])
+
+  // Start farm mode on the two farms with the most fields reporting.
+  useEffect(() => {
+    if (!farmData) return
+    setPickedFarms(farmData.farms.filter((f) => f.hasData).sort((a, b) => b.nData - a.nData || a.farm.localeCompare(b.farm)).slice(0, 2).map((f) => f.farm))
+  }, [farmData])
+  const toggleFarm = (name) => setPickedFarms((cur) => (cur.includes(name) ? cur.filter((x) => x !== name) : [...cur, name].slice(-MAXF)))
   const measureOptions = Object.entries(MEASURES).filter(([k]) => k !== 'moisture' || hasMoisture)
   const activeMeasure = MEASURES[measure] && (measure !== 'moisture' || hasMoisture) ? measure : 'appPct'
   const colorOf = (i) => (n > 1 ? COLORS[i % COLORS.length] : MUTED)
@@ -662,7 +719,13 @@ export default function IrrigationReports() {
           </select>
         </label>
       )}
-      {!isDemo && dataset.ready && farms.length > 0 && (
+      {!isDemo && dataset.ready && farms.length > 1 && (
+        <span style={labelStyle}>
+          <span style={{ color: MUTED }}>Compare</span>
+          <Segmented label="Compare by" value={compareBy} onChange={setCompareBy} options={[['fields', 'Fields'], ['farms', 'Farms']]} />
+        </span>
+      )}
+      {!isDemo && dataset.ready && farms.length > 0 && !farmMode && (
         <label style={labelStyle}>
           <span style={{ color: MUTED }}>Farm</span>
           <select style={selectStyle} value={farm} onChange={(e) => setFarm(e.target.value)} aria-label="Farm">
@@ -702,6 +765,147 @@ export default function IrrigationReports() {
         <p style={{ ...noteStyle, fontSize: 14 }}>
           {live.status === 'error' ? 'Could not read AIO: ' + live.error : 'Reading the season from AIO…'}
         </p>
+      </div>
+    )
+  }
+
+  if (farmMode && farmData) {
+    const byName = new Map(farmData.farms.map((f) => [f.farm, f]))
+    const chosen = pickedFarms.map((nme) => byName.get(nme)).filter(Boolean)
+    const pseudoPicked = [...chosen.map((f) => ({ key: f.farm, label: f.farm })), { key: '__avg', label: 'All farms average', dashed: true }]
+    const pctReport = { weeks: farmData.weeks, pct: new Map([...farmData.farms.map((f) => [f.farm, f.pct]), ['__avg', farmData.baseline]]) }
+    const reporting = farmData.farms.filter((f) => f.hasData)
+    const tableRows = [...farmData.farms].sort((a, b) => {
+      const ia = pickedFarms.indexOf(a.farm)
+      const ib = pickedFarms.indexOf(b.farm)
+      if (ia >= 0 || ib >= 0) return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib)
+      if (a.hasData !== b.hasData) return a.hasData ? -1 : 1
+      return a.farm.localeCompare(b.farm)
+    })
+    const farmHas = (m) => farmData.farms.some((f) => [...f.pct.values()].some((r) => r && has(r[m])))
+    const farmMeasure = !measureChosen && !farmHas(activeMeasure) ? (['etActual', 'appIn', 'schedPct', 'appPct'].find(farmHas) || activeMeasure) : activeMeasure
+    const farmColor = (nme) => COLORS[pickedFarms.indexOf(nme) % COLORS.length]
+    return (
+      <div style={{ maxWidth: 1080, margin: '0 auto', padding: '16px 12px 40px', display: 'flex', flexDirection: 'column', gap: 26, color: INK }}>
+        <header>
+          <h1 style={{ margin: 0, fontSize: 26, fontWeight: 600, lineHeight: 1.2 }}>{(crop || 'Crop') + ' water report by farm'}{seasonName ? ', ' + seasonName : ''}</h1>
+          <p style={{ display: 'inline-block', margin: '8px 0 0', padding: '3px 10px', borderRadius: 999, fontSize: 12, background: '#fff', border: `1px solid ${OK}` }}>
+            Live data from AIO. A dash means AIO has nothing recorded for it yet.
+          </p>
+          <div style={{ marginTop: 12 }}>{topControls}</div>
+          {dataset.warnings.length > 0 && <p style={{ ...noteStyle, marginTop: 8, color: WARN }}>{dataset.warnings.join(' ')}</p>}
+          <p style={{ margin: '12px 0 0', fontSize: 16, lineHeight: 1.55, maxWidth: '70ch' }}>
+            {reporting.length === 0
+              ? <>No data for {cropWord} on any farm yet.</>
+              : <><b>{reporting.length}</b> of {farmData.farms.length} {farmData.farms.length === 1 ? 'farm' : 'farms'} growing {cropWord} {reporting.length === 1 ? 'has' : 'have'} data.</>}
+          </p>
+          <p style={{ ...noteStyle, marginTop: 8 }}>
+            Each farm is the average of its own {cropWord} fields that have data. Only {cropWord} is compared, so the farms are on equal footing. The table shows how many fields each number is based on.
+          </p>
+        </header>
+
+        {reporting.length > 0 && (
+          <section aria-label="Choose farms" style={{ position: 'sticky', top: 0, zIndex: 6, background: '#f7f5f0', padding: '10px 0', borderBottom: `1px solid ${LINE}` }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minHeight: 34, alignItems: 'center' }}>
+                {chosen.map((f) => (
+                  <button key={f.farm} type="button" aria-label={'Take ' + f.farm + ' out'} title={'Take ' + f.farm + ' out'} onClick={() => toggleFarm(f.farm)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 10px', borderRadius: 999, fontSize: 12.5 }}>
+                    <Swatch color={farmColor(f.farm)} />
+                    <span>{f.farm}</span>
+                    <span style={{ color: MUTED }}>{'×'}</span>
+                  </button>
+                ))}
+                {!chosen.length && <span style={noteStyle}>No farm picked</span>}
+              </div>
+              <select
+                style={selectStyle}
+                aria-label="Add a farm"
+                value=""
+                onChange={(e) => { if (e.target.value) toggleFarm(e.target.value) }}
+              >
+                <option value="">Add a farm{'…'}</option>
+                {tableRows.filter((f) => !pickedFarms.includes(f.farm)).map((f) => (
+                  <option key={f.farm} value={f.farm}>{f.farm}{f.hasData ? '' : ' (no data)'}</option>
+                ))}
+              </select>
+            </div>
+            <p style={{ ...noteStyle, marginTop: 6 }}>Up to 4 farms at a time: picking a fifth drops the first one. The dashed line is the average of every farm's {cropWord} fields.</p>
+          </section>
+        )}
+
+        {reporting.length > 0 && (
+          <Section title="Farms side by side">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <label htmlFor="rp-measure" style={noteStyle}>Compare</label>
+              <select id="rp-measure" style={selectStyle} value={farmMeasure} onChange={(e) => { setMeasureChosen(true); setMeasure(e.target.value) }} aria-label="What to compare">
+                {measureOptions.map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <CompareChart report={pctReport} picked={pseudoPicked} measure={farmMeasure} />
+            </div>
+            <p style={{ ...noteStyle, marginTop: 8 }}>
+              One line per farm. Point at a week to see every farm's number for it. For the percent views, 100% means the average field got what the crop used. Weeks with no data are left blank.
+            </p>
+          </Section>
+        )}
+
+        <Section title={`Every farm growing ${cropWord}`} note="Each number is the average of the farm's fields that have data. Tap a farm to add it to the chart, or tap it again to take it out.">
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ ...tableStyle, minWidth: 880 }}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, textAlign: 'left' }}>Farm</th>
+                  <th style={th}>Fields with data</th>
+                  <th style={th}>Acres</th>
+                  <th style={th}>Crop ET (in)</th>
+                  <th style={th}>Scheduled (in)</th>
+                  <th style={th}>Applied (in)</th>
+                  <th style={th}>Applied vs ET (%)</th>
+                  <th style={{ ...th, textAlign: 'left' }}>Weather</th>
+                  <th style={{ ...th, textAlign: 'left' }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tableRows.map((f) => {
+                  const i = pickedFarms.indexOf(f.farm)
+                  return (
+                    <tr
+                      key={f.farm}
+                      tabIndex={0}
+                      onClick={() => toggleFarm(f.farm)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleFarm(f.farm) } }}
+                      style={{ cursor: 'pointer', background: i >= 0 ? '#fff' : undefined, color: f.hasData ? INK : MUTED }}
+                    >
+                      <td style={{ ...td, textAlign: 'left' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                          {i >= 0 && <Swatch color={farmColor(f.farm)} />}
+                          {f.farm}
+                        </span>
+                      </td>
+                      <td style={td}>{f.nData} of {f.total}</td>
+                      <td style={td}>{f.hasData ? d0(f.acres) : '—'}</td>
+                      <td style={td}>{d1(f.etActual)}</td>
+                      <td style={td}>{d1(f.scheduled)}</td>
+                      <td style={td}>{d1(f.applied)}</td>
+                      <td style={td}>{d0(f.appliedPct)}</td>
+                      <td style={{ ...td, textAlign: 'left', fontSize: 12, color: MUTED }}>{f.stations || '—'}</td>
+                      <td style={{ ...td, textAlign: 'left', whiteSpace: 'normal', minWidth: 200, fontSize: 12, color: MUTED }}>
+                        {f.status}
+                        {f.hasData && (
+                          <button type="button" style={{ padding: '2px 8px' }} onClick={(e) => { e.stopPropagation(); setCompareBy('fields'); setFarm(f.farm) }}>
+                            See its fields
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Section>
       </div>
     )
   }
