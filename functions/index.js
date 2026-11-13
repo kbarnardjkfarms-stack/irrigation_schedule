@@ -3241,3 +3241,8 @@ exports.syncFieldnetPivots = fieldnetSync.syncFieldnetPivots;
 // see publicMapFeed.js.
 const publicMapFeed = require('./publicMapFeed');
 exports.publicFieldsKml = publicMapFeed.publicFieldsKml;
+
+// One-time Agworld discovery: what activity types (plans, work orders,
+// actuals) the API really returns, for the Operations plan sync. Lives in
+// its own file — see agworldCensus.js. Remove once that sync is built.
+exports.agworldActivityCensus = require('./agworldCensus').makeExports(AGWORLD_TOKEN, agworldGet).agworldActivityCensus;
