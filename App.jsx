@@ -19,7 +19,7 @@ import PotatoStorage from './PotatoStorage.jsx'
 import Users from './Users.jsx'
 import ScheduleImport from './ScheduleImport.jsx'
 import PivotProfile from './PivotProfile.jsx'
-import PivotProfilesList from './PivotProfilesList.jsx'
+import PivotProfilesSheet from './PivotProfilesSheet.jsx'
 import Agronomy from './Agronomy.jsx'
 import CustomerPortal from './CustomerPortal.jsx'
 import Contracts from './Contracts.jsx'
@@ -398,7 +398,7 @@ export default function App() {
   const [profileAttempt, setProfileAttempt] = useState(0)
   const [page, setPage] = useState('home') // 'home', 'irrigation', 'potato-storage', 'users', 'agronomy', 'contracts', 'yields', 'harvest' (Operations schedule), 'seed' or 'map' — more modules join this list later
   const [weekOffset, setWeekOffset] = useState(0)
-  const [view, setView] = useState('schedule') // 'schedule', 'live-data' or 'reports' (the Irrigation views dropdown)
+  const [view, setView] = useState('schedule') // 'schedule', 'live-data', 'reports' or 'pivot-profiles' (the Irrigation views dropdown)
   const [viewMenuOpen, setViewMenuOpen] = useState(false)
   const [online, setOnline] = useState(navigator.onLine)
   const [eventsByField, setEventsByField] = useState({})
@@ -673,11 +673,14 @@ export default function App() {
   const canSeeAgronomy = (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager') && hasModule('agronomy')
   // Irrigation Reports: same people as Agronomy (Admin, Owner, Farm manager).
   const canSeeReports = (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager') && hasModule('irrigation')
+  // Pivot Profiles spreadsheet view (replaces the old Pivot profiles list that lived in Settings).
+  const canSeePivotSheet = (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager') && hasModule('irrigation')
   // The views dropdown in the header. A new view is one more line here.
   const irrigationViews = [
     { id: 'schedule', label: 'Schedule' },
     { id: 'live-data', label: 'Live Data' },
-    ...(canSeeReports ? [{ id: 'reports', label: 'Reports' }] : [])
+    ...(canSeeReports ? [{ id: 'reports', label: 'Reports' }] : []),
+    ...(canSeePivotSheet ? [{ id: 'pivot-profiles', label: 'Pivot Profiles' }] : [])
   ]
   const currentViewLabel = (irrigationViews.find((v) => v.id === view) || irrigationViews[0]).label
 
@@ -687,10 +690,14 @@ export default function App() {
     if (!userRole) return
     const needs = page === 'potato-storage' ? 'potato-storage'
       : page === 'agronomy' ? 'agronomy'
-      : (page === 'irrigation' || page === 'pivot-profile' || page === 'pivot-profiles-list') ? 'irrigation'
+      : (page === 'irrigation' || page === 'pivot-profile') ? 'irrigation'
       : null
     if (needs && !hasModule(needs)) setPage('home')
   }, [page, userRole, userProfile]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (userRole && view === 'pivot-profiles' && !canSeePivotSheet) setView('schedule')
+  }, [view, userRole, userProfile]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Someone sitting on Reports whose access is taken away goes back to the schedule.
   useEffect(() => {
@@ -1134,7 +1141,6 @@ export default function App() {
   const canClearStuckAlerts = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager' || userRole === 'irrigation_manager'
   const showUsersMenuItem = userRole === 'admin' || userRole === 'owner'
   const showScheduleImportMenuItem = userRole === 'admin' || userRole === 'owner'
-  const showPivotProfilesMenuItem = page === 'irrigation' && (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager')
   const showCopyLinkMenuItem = page === 'irrigation' && selectedFarmId !== 'all'
   const showDemoEtMenuItem = page === 'irrigation' && (userRole === 'admin' || userRole === 'owner')
   const demoEtActive = demoEt && weekId === DEMO_ET_WEEK
@@ -1266,16 +1272,10 @@ export default function App() {
                       style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: showUsersMenuItem ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
                     >Import schedule from Excel</button>
                   )}
-                  {showPivotProfilesMenuItem && (
-                    <button
-                      onClick={() => { setPage('pivot-profiles-list'); setSettingsMenuOpen(false) }}
-                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: showUsersMenuItem ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
-                    >Pivot profiles</button>
-                  )}
                   {showCopyLinkMenuItem && (
                     <button
                       onClick={copyWatchLink}
-                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: (showUsersMenuItem || showPivotProfilesMenuItem) ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: showUsersMenuItem ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
                     >{linkCopied ? 'Copied!' : 'Copy irrigator link'}</button>
                   )}
                   {showDemoEtMenuItem && (
@@ -1503,20 +1503,6 @@ export default function App() {
       {page === 'users' && <Users />}
       {page === 'schedule-import' && hasModule('irrigation') && <ScheduleImport userRole={userRole} onBack={() => setPage('irrigation')} />}
       {page === 'pivot-profile' && hasModule('irrigation') && <PivotProfile pivotGuid={pivotProfileGuid} onBack={() => setPage('irrigation')} />}
-      {page === 'pivot-profiles-list' && hasModule('irrigation') && (
-        <PivotProfilesList
-          farms={farms}
-          pivotsByGuid={pivotsByGuid}
-          pivotProfilesByGuid={pivotProfilesByGuid}
-          pivotGuidByFieldId={pivotGuidByFieldId}
-          baseFieldsById={baseFieldsById}
-          userRole={userRole}
-          userProfile={userProfile}
-          selectedFarmId={selectedFarmId}
-          onOpenProfile={(guid) => { setPivotProfileGuid(guid); setPage('pivot-profile') }}
-          onBack={() => setPage('irrigation')}
-        />
-      )}
       {page === 'agronomy' && canSeeAgronomy && <Agronomy userRole={userRole} />}
       {page === 'contracts' && canSeeContracts && <Contracts userRole={userRole} />}
       {page === 'yields' && canSeeYields && <Yields userRole={userRole} />}
@@ -1527,6 +1513,20 @@ export default function App() {
         <>
           {view === 'live-data' && <LiveData />}
           {view === 'reports' && canSeeReports && <IrrigationReports userRole={userRole} />}
+          {view === 'pivot-profiles' && canSeePivotSheet && (
+            <PivotProfilesSheet
+              farms={farms}
+              pivotsByGuid={pivotsByGuid}
+              pivotProfilesByGuid={pivotProfilesByGuid}
+              pivotGuidByFieldId={pivotGuidByFieldId}
+              baseFieldsById={baseFieldsById}
+              seasonDataByField={seasonDataByField}
+              userRole={userRole}
+              userProfile={userProfile}
+              selectedFarmId={selectedFarmId}
+              onOpenProfile={(guid) => { setPivotProfileGuid(guid); setPage('pivot-profile') }}
+            />
+          )}
           {view === 'schedule' && <div className="filter-bar">
             {seasons.length > 0 && (
               <select
