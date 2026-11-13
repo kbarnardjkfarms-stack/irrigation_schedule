@@ -1302,11 +1302,11 @@ export default function App() {
         <ProfileRecovery status={profileStatus} slow={profileSlow} onRetry={() => setProfileAttempt((n) => n + 1)} onSignOut={handleSignOut} />
       )}
       {page === 'home' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, 160px)', gap: '16px', padding: '24px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', padding: '24px' }}>
           {hasModule('irrigation') && (
           <div
             onClick={() => setPage('irrigation')}
-            style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
           >
             <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#E6F1FB', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <svg width="56" height="56" viewBox="0 0 48 48">
@@ -1329,7 +1329,7 @@ export default function App() {
           {hasModule('potato-storage') && (
           <div
             onClick={() => setPage('potato-storage')}
-            style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
           >
             <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#F1E7D3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="58" height="58" viewBox="0 0 48 48">
@@ -1374,7 +1374,7 @@ export default function App() {
           {canSeeAgronomy && (
             <div
               onClick={() => setPage('agronomy')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+              style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
               <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#DEEAD2', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="56" height="56" viewBox="0 0 48 48">
@@ -1396,7 +1396,7 @@ export default function App() {
           {canSeeContracts && (
             <div
               onClick={() => setPage('contracts')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+              style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
               <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#F6EBD3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="56" height="56" viewBox="0 0 48 48">
@@ -1418,7 +1418,7 @@ export default function App() {
           {canSeeYields && (
             <div
               onClick={() => setPage('yields')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+              style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
               <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#E3EDF7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="56" height="56" viewBox="0 0 48 48">
@@ -1436,7 +1436,7 @@ export default function App() {
           {canSeeHarvest && (
             <div
               onClick={() => setPage('harvest')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+              style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
               <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#F6EBDD', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="58" height="58" viewBox="0 0 48 48">
@@ -1455,7 +1455,7 @@ export default function App() {
           {canSeeSeed && (
             <div
               onClick={() => setPage('seed')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+              style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
               <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#EFE6D6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="58" height="58" viewBox="0 0 48 48">
@@ -1474,7 +1474,7 @@ export default function App() {
           {canSeeMap && (
             <div
               onClick={() => setPage('map')}
-              style={{ cursor: 'pointer', width: '160px', height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 16px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+              style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
               <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#E4EBDD', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <svg width="58" height="58" viewBox="0 0 48 48">
