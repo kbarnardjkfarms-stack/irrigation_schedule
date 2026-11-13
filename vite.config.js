@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { readFileSync } from 'node:fs'
 
 // A stamp unique to each build. It's baked into the app (as __BUILD_ID__) and
 // also written to /version.json, which is never cached. The running app
@@ -15,11 +16,25 @@ const emitVersionFile = () => ({
   }
 })
 
+// The home-screen icons sit at the project root (flat layout), and Vite only copies
+// files from a public/ folder, so without this they never reached the deployed site
+// and phones showed a plain letter instead of the logo. This puts them into the build.
+const ICON_FILES = ['icon-192.png', 'icon-512.png', 'icon-maskable-512.png']
+const emitIcons = () => ({
+  name: 'emit-home-screen-icons',
+  generateBundle() {
+    ICON_FILES.forEach((fileName) => {
+      this.emitFile({ type: 'asset', fileName, source: readFileSync(fileName) })
+    })
+  }
+})
+
 export default defineConfig({
   define: { __BUILD_ID__: JSON.stringify(BUILD_ID) },
   plugins: [
     react(),
     emitVersionFile(),
+    emitIcons(),
     VitePWA({
       // autoUpdate: a new deploy installs, takes over and reloads the page on its
       // own — no waiting-worker/banner step, which is what used to leave the
@@ -36,7 +51,8 @@ export default defineConfig({
         start_url: '/',
         icons: [
           { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'icon-512.png', sizes: '512x512', type: 'image/png' }
+          { src: 'icon-512.png', sizes: '512x512', type: 'image/png' },
+          { src: 'icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
         ]
       },
       workbox: {
