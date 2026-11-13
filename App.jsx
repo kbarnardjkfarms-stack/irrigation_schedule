@@ -17,6 +17,7 @@ import Login from './Login.jsx'
 
 import PotatoStorage from './PotatoStorage.jsx'
 import Users from './Users.jsx'
+import ScheduleImport from './ScheduleImport.jsx'
 import PivotProfile from './PivotProfile.jsx'
 import PivotProfilesList from './PivotProfilesList.jsx'
 import Agronomy from './Agronomy.jsx'
@@ -1132,6 +1133,7 @@ export default function App() {
   const hasAnyExpandedAlert = expandedPivotIsStuck || expandedPivotHasDrift
   const canClearStuckAlerts = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager' || userRole === 'irrigation_manager'
   const showUsersMenuItem = userRole === 'admin' || userRole === 'owner'
+  const showScheduleImportMenuItem = userRole === 'admin' || userRole === 'owner'
   const showPivotProfilesMenuItem = page === 'irrigation' && (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager')
   const showCopyLinkMenuItem = page === 'irrigation' && selectedFarmId !== 'all'
   const showDemoEtMenuItem = page === 'irrigation' && (userRole === 'admin' || userRole === 'owner')
@@ -1257,6 +1259,12 @@ export default function App() {
                       onClick={() => { setPage('users'); setSettingsMenuOpen(false) }}
                       style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
                     >Users &amp; Permissions</button>
+                  )}
+                  {showScheduleImportMenuItem && (
+                    <button
+                      onClick={() => { setPage('schedule-import'); setSettingsMenuOpen(false) }}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', border: 'none', borderTop: showUsersMenuItem ? '0.5px solid #eee' : 'none', borderRadius: 0, padding: '10px 14px', background: '#fff' }}
+                    >Import schedule from Excel</button>
                   )}
                   {showPivotProfilesMenuItem && (
                     <button
@@ -1493,6 +1501,7 @@ export default function App() {
       )}
       {page === 'potato-storage' && hasModule('potato-storage') && <PotatoStorage />}
       {page === 'users' && <Users />}
+      {page === 'schedule-import' && hasModule('irrigation') && <ScheduleImport userRole={userRole} onBack={() => setPage('irrigation')} />}
       {page === 'pivot-profile' && hasModule('irrigation') && <PivotProfile pivotGuid={pivotProfileGuid} onBack={() => setPage('irrigation')} />}
       {page === 'pivot-profiles-list' && hasModule('irrigation') && (
         <PivotProfilesList
