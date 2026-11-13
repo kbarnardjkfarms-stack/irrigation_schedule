@@ -64,7 +64,11 @@ function fmtHour(h) {
   return hr12 + (mins ? ':' + String(mins).padStart(2, '0') : '') + period
 }
 
-function fmtShort(d) { return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) }
+function fmtShort(d, lang) { return d.toLocaleDateString(lang === 'es' ? 'es' : 'en-US', { month: 'short', day: 'numeric' }) }
+function fmtWeekday(d, lang) {
+  const w = d.toLocaleDateString(lang === 'es' ? 'es' : 'en-US', { weekday: 'long' })
+  return w.charAt(0).toUpperCase() + w.slice(1)
+}
 
 function onIntervals(events) {
   const evs = [...events].sort((a, b) => a.ts - b.ts)
@@ -146,6 +150,26 @@ const STRINGS = {
     connecting: 'Conectando\u2026'
   }
 }
+
+// Layout for this phone page only (kept here so the main app's styles.css is untouched).
+// The schedule fills the whole screen: the table runs edge to edge, the header and legend
+// are slim, and the table scrolls inside whatever height is left.
+const WATCH_CSS = `
+.watch-page { display: flex; flex-direction: column; height: 100vh; height: 100dvh; padding: 6px 6px 6px; box-sizing: border-box; }
+.watch-page .topbar { padding: 6px 10px; margin-bottom: 6px; flex: none; }
+.watch-page .table-scroll { max-height: none; flex: 0 1 auto; min-height: 0; }
+.watch-page .watch-table { width: 100%; }
+.watch-page .day-head { height: 38px; top: 0; padding: 2px; line-height: 1.2; }
+.watch-page .shift-head { top: 38px; padding: 3px 2px; }
+.watch-page .cell-btn { height: 64px; font-size: 10px; }
+.watch-page .cell-btn .tiny { font-size: 7.5px; }
+.watch-page .legend { flex: none; margin-top: 6px; gap: 3px 10px; font-size: 10.5px; }
+@media (max-width: 700px) {
+  .watch-page .sticky-col { width: 164px; min-width: 164px; max-width: 164px; }
+  .watch-page .watch-col-sticky { width: 164px; }
+  .watch-page .watch-col-shift { width: calc((100% - 164px) / 4); }
+}
+`
 
 export default function PublicScheduleView({ slug }) {
   const {
@@ -358,7 +382,8 @@ export default function PublicScheduleView({ slug }) {
   }
 
   return (
-    <div className="app">
+    <div className="app watch-page">
+      <style>{WATCH_CSS}</style>
       <header className="topbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <img src={aioLogoIcon} alt="AIO" style={{ height: '40px' }} />
@@ -385,8 +410,8 @@ export default function PublicScheduleView({ slug }) {
           <thead>
             <tr>
               <th className="sticky-col" rowSpan={2}>{t.fieldCrop}</th>
-              <th colSpan={2} className="day-head" style={{ background: dayTint(dayIdxToday) }}>{t.today}<br /><span className="tiny">{fmtShort(now)}</span></th>
-              <th colSpan={2} className="day-head" style={{ background: dayTint(dayIdxTomorrow) }}>{t.tomorrow}<br /><span className="tiny">{fmtShort(tomorrowDate)}</span></th>
+              <th colSpan={2} className="day-head" style={{ background: dayTint(dayIdxToday) }}>{fmtWeekday(now, lang)}<br /><span className="tiny">{fmtShort(now, lang)}</span></th>
+              <th colSpan={2} className="day-head" style={{ background: dayTint(dayIdxTomorrow) }}>{fmtWeekday(tomorrowDate, lang)}<br /><span className="tiny">{fmtShort(tomorrowDate, lang)}</span></th>
             </tr>
             <tr>
               <th className="shift-head" style={{ background: dayTint(dayIdxToday) }}>AM</th>
@@ -415,7 +440,11 @@ export default function PublicScheduleView({ slug }) {
                       onClick={() => field.pivot && setExpandedFieldId(isExpanded ? null : field.id)}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <PivotIcon pivot={field.pivot} size={55} flagged={field.flagged} />
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '62px', flex: 'none' }}>
+                          <PivotIcon pivot={field.pivot} size={50} flagged={field.flagged} />
+                          {/* Always this tall, label or not, so every row is the same height. Two lines at most. */}
+                          <div style={{ marginTop: '1px', height: '22px', width: '100%', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', fontSize: '10px', lineHeight: '11px', textAlign: 'center', fontWeight: 500, color: '#1A1A1A' }}>{field.pivot && field.pivot.statusLabel ? field.pivot.statusLabel : ''}</div>
+                        </div>
                         <div>
                           <div><strong>{field.fieldName}</strong></div>
                           <div style={{ marginTop: '4px' }}>
