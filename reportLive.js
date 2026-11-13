@@ -226,7 +226,7 @@ export function buildLiveReport(inp) {
     else if (!gpm) notes.push('Its pivot has no GPM yet')
     if (!acres) notes.push('No acres in AgWorld')
 
-    const field = { key: id, name: base.name || base.fieldName || id, label: base.name || base.fieldName || id, farm: farmName, crop, acres, issues, notes, hasData: false }
+    const field = { key: id, name: base.name || base.fieldName || id, label: base.name || base.fieldName || id, farm: farmName, crop, acres, station: stationInfo ? stationInfo.codes.join(' + ') : '', issues, notes, hasData: false }
     fields.push(field)
 
     weeks.forEach((w) => {
