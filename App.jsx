@@ -40,6 +40,7 @@ import PivotDetailPanel from './PivotDetailPanel.jsx'
 import EtDetail from './EtDetail.jsx'
 import AppliedDetail from './AppliedDetail.jsx'
 import { computeApplied, WET_LOG_START_WEEK } from './appliedMath.js'
+import { gpmForWeek } from './gpmHistory.js'
 
 import { weeklyEt, scheduledBand, scheduledShare, stationsForField, normalizeIsoDate, curveKeyForCrop } from './etMath.js'
 
@@ -991,7 +992,7 @@ export default function App() {
     try {
       const guid = pivotGuidByFieldId[field.id]
       if (!guid) return none
-      const gpm = Number(pivotProfilesByGuid[guid] && pivotProfilesByGuid[guid].currentGpm)
+      const gpm = gpmForWeek(pivotProfilesByGuid[guid], weekId)
       if (gpm > 0) return none
       const events = eventsByField[field.id] || []
       const scheduledHours = overlapHours(onIntervals(events), 0, 168)
@@ -1008,7 +1009,7 @@ export default function App() {
   }
   function computeEtInfo(field) {
     const events = eventsByField[field.id] || []
-    const gpm = pivotProfilesByGuid[pivotGuidByFieldId[field.id]]?.currentGpm
+    const gpm = gpmForWeek(pivotProfilesByGuid[pivotGuidByFieldId[field.id]], weekId)
     const hours = overlapHours(onIntervals(events), 0, 168)
     const haveInches = !!(gpm && field.acres)
     // Nothing scheduled this week is exactly 0.00 inches whether or not the
