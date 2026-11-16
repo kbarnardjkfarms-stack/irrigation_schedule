@@ -7,9 +7,6 @@ admin.initializeApp();
 // The token lives here, as a Firebase secret — never in client code.
 // Set it once with: firebase functions:secrets:set AGWORLD_API_TOKEN
 const AGWORLD_TOKEN = defineSecret('AGWORLD_API_TOKEN');
-// Satellite crop history (USDA Cropland Data Layer) — own file, see satelliteRotation.js.
-const satelliteRotation = require('./satelliteRotation');
-const { removeStaleSeasonRecords } = require('./seasonCleanup');
 
 // Change this to match your Agworld region if you're not on the US instance:
 // Australia - https://my.agworld.com.au
@@ -28,18 +25,9 @@ const AGWORLD_BASE_URL = 'https://us.agworld.co';
 // automatically the next time this runs (as a natural side effect of the
 // general stale-field cleanup below, since excluded-farm fields never
 // appear in the current valid set either).
-// Still skipped entirely - never synced anywhere in AIO.
-const EXCLUDED_FARM_IDS = new Set(['211414']);
-// 211414 = TETON TREES
-
-// Synced like any other farm so Agronomy (and Potato Storage) can see their
-// fields, but every such field is stamped hiddenFromIrrigation: true on its
-// fields/{id} doc. The irrigation schedule, the public watch page and
-// Contracts leave those fields out; Agronomy and Potato Storage do not.
-// No farms/{id} doc is written for these farms either, so farm pickers
-// elsewhere don't list them.
-const HIDDEN_FROM_IRRIGATION_FARM_IDS = new Set(['175660', '219606']);
+const EXCLUDED_FARM_IDS = new Set(['175660', '211414', '219606']);
 // 175660 = SUBLEASED AND ROTATION LEASE FIELDS
+// 211414 = TETON TREES
 // 219606 = ZARCHIVE
 
 // Agworld returns measurements as strings with units attached, e.g.
@@ -67,87 +55,7 @@ async function agworldGet(path, params, token) {
   if (!res.ok) throw new Error(`Agworld API error ${res.status} on ${path}: ${await res.text()}`);
   return res.json();
 }
-// =============================================================================
-// TEMPORARY - Agworld N-application endpoint discovery (Phase 2, Oct 2026)
-// =============================================================================
-// Paste this into functions/index.js, anywhere after the agworldGet() helper
-// is defined (it reuses that function and the existing AGWORLD_TOKEN secret -
-// don't duplicate either one).
-//
-// Same situation we were in with Stukenholtz before confirming its real
-// sample-type keys: the fields/seasons endpoints are confirmed working, but
-// there's no confirmed endpoint for nitrogen application/input records. This
-// probes several plausible endpoint names against one real field+season and
-// reports back what each actually returns, so the real sync can be built
-// against whichever one comes back with real data instead of a 404.
-//
-// Usage: open (while logged into the Firebase project)
-//   https://<your-region>-irrigation-schedule-f8b69.cloudfunctions.net/testAgworldApplicationEndpoints?fieldId=XXXX&seasonId=YYYY
-// where fieldId/seasonId are the Agworld field + season you already know has
-// nitrogen applications logged this year. Both are easy to find without
-// touching Agworld itself - they're already synced 1:1 as Firestore document
-// IDs: open the `fields` collection in the Firestore console, find the field
-// by name, and its document ID is the Agworld field ID; open `seasons` and
-// match the season name (e.g. "2026") the same way.
-//
-// Once you've got a result, send me the JSON it prints - I'll use whichever
-// endpoint actually returned nitrogen/application data to build the real
-// sync, the same way we built syncStukenholtzSamplesHourly once we knew the
-// real SO/PL/NEMA/CM response shapes. Remove this function once that's done;
-// it's a one-time discovery tool, not something that should stay deployed.
-exports.testAgworldApplicationEndpoints = onRequest(
-  { secrets: [AGWORLD_TOKEN], timeoutSeconds: 120 },
-  async (req, res) => {
-    const token = AGWORLD_TOKEN.value();
-    const fieldId = req.query.fieldId;
-    const seasonId = req.query.seasonId;
-    if (!fieldId || !seasonId) {
-      res
-        .status(400)
-        .send(
-          'Pass ?fieldId=...&seasonId=... — use the Agworld field/season you know has nitrogen ' +
-          'applications logged this year. Both IDs match the Firestore fields/{id} and seasons/{id} ' +
-          'document IDs already synced by syncAgworldFields.'
-        );
-      return;
-    }
 
-    // Candidate endpoint names - Agworld's user_api/v1 almost certainly
-    // exposes applied inputs somewhere under one of these, based on common
-    // ag-software naming, but none of these are confirmed against real
-    // Agworld docs, so several are tried rather than guessing just one.
-    const candidates = [
-      ['/user_api/v1/activities', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }],
-      ['/user_api/v1/field_activities', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }],
-      ['/user_api/v1/applications', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }],
-      ['/user_api/v1/jobs', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }],
-      ['/user_api/v1/recommendations', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }],
-      ['/user_api/v1/products', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }],
-      ['/user_api/v1/inputs', { field_id: fieldId, season_id: seasonId, 'page[size]': '25' }]
-    ];
-
-    const results = {};
-    for (const [path, paramsObj] of candidates) {
-      try {
-        const params = new URLSearchParams(paramsObj);
-        const json = await agworldGet(path, params, token);
-        const data = json.data || [];
-        results[path] = {
-          ok: true,
-          count: data.length,
-          // Just the first record's raw shape - enough to tell at a glance
-          // whether this is nitrogen/application data or something else
-          // entirely (e.g. irrigation events, scouting notes).
-          sample: data[0] || null
-        };
-      } catch (err) {
-        results[path] = { ok: false, error: err.message };
-      }
-    }
-
-    res.json(results);
-  }
-);
 // Only sync seasons from this year onward — older seasons are historical
 // noise the irrigation program doesn't need. Raise this in a future year
 // only if you actually want to re-pull older history; otherwise leave it.
@@ -207,69 +115,6 @@ async function fetchFieldsForSeason(seasonId, token) {
   return { fields, farmsById };
 }
 
-// ---------------------------------------------------------------------------
-// Yield history (Yields.jsx). Agworld's /fields endpoint, when asked for a
-// season, also returns harvest_date / harvested_area / harvested_weight.
-// syncFields() turns those into yieldHistory/{FIELDKEY}__{YEAR} docs so new
-// harvests show up next to the imported workbook history.
-//
-// canonCrop() and yieldFieldKey() MUST match yieldMath.js in the app
-// (canonCrop / fieldKey) or Agworld rows and workbook rows for the same
-// field-year won't line up.
-// ---------------------------------------------------------------------------
-function canonCrop(raw) {
-  const s = String(raw || '').trim().toUpperCase().replace(/\s+/g, ' ');
-  if (!s) return null;
-  if (/^(RENTED )?POTATO(ES)?$/.test(s)) return 'POTATO';
-  if (/^MINI POTATO(ES)?$/.test(s)) return 'MINI POTATOES';
-  if (/^(SUGAR ?)?BEETS?$/.test(s)) return 'BEETS';
-  if (/^SWEET CORN$/.test(s)) return 'SWEET CORN';
-  if (/^(FIELD |SILAGE |GRAIN )?CORN$/.test(s)) return 'CORN';
-  if (/^HAY\b/.test(s) || s === 'TIMOTHY' || s === 'ALFALFA') return 'HAY';
-  if (/^RYE\b/.test(s)) return 'RYE';
-  if (/^BEANS?$/.test(s) || /\bBEANS?$/.test(s)) return 'BEANS';
-  if (/^ONIONS?$/.test(s)) return 'ONIONS';
-  if (/^MELONS?$|WATERMELON/.test(s)) return 'MELONS';
-  if (/^PUMPKINS?$/.test(s)) return 'PUMPKINS';
-  if (/^LETTUCE$/.test(s)) return 'LETTUCE';
-  return s;
-}
-function yieldFieldKey(name) {
-  return String(name || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-}
-const CROP_YIELD_UNIT = {
-  POTATO: 'cwt', 'MINI POTATOES': 'cwt', BEETS: 'tons', CORN: 'tons', 'SWEET CORN': 'tons',
-  BEANS: 'cwt', HAY: 'tons', ONIONS: 'cwt', RYE: 'tons'
-};
-// Pounds per unit, for converting whatever Agworld reports into the unit
-// the yield workbook uses for that crop. "t"/"tonne" is metric.
-const LBS_PER = {
-  lb: 1, lbs: 1, pound: 1, pounds: 1, cwt: 100, ton: 2000, tons: 2000, short_ton: 2000,
-  t: 2204.62, tonne: 2204.62, tonnes: 2204.62, mt: 2204.62, kg: 2.20462
-};
-// Agworld sends measurements as "1234.5 cwt"-style strings (like area).
-// Returns { value, unit } in the crop's yield unit when it can convert,
-// otherwise the raw number and Agworld's own unit.
-function parseHarvestWeight(raw, crop) {
-  if (raw == null || raw === '') return null;
-  const m = String(raw).match(/^\s*(-?[\d,]*\.?\d+)\s*([a-zA-Z_ ]*)/);
-  if (!m) return null;
-  const value = parseFloat(m[1].replace(/,/g, ''));
-  if (!Number.isFinite(value) || value <= 0) return null;
-  const fromUnit = (m[2] || '').trim().toLowerCase().replace(/\s+/g, '_');
-  const target = CROP_YIELD_UNIT[crop];
-  if (target && LBS_PER[fromUnit] && LBS_PER[target]) {
-    return { value: (value * LBS_PER[fromUnit]) / LBS_PER[target], unit: target, rawUnit: fromUnit };
-  }
-  return { value, unit: fromUnit || null, rawUnit: fromUnit || null };
-}
-function seasonYear(season) {
-  const fromName = String(season.name || '').match(/\b(19|20)\d{2}\b/);
-  if (fromName) return parseInt(fromName[0], 10);
-  const d = season.startDate || season.endDate;
-  return d ? parseInt(String(d).slice(0, 4), 10) : null;
-}
-
 async function syncFields() {
   const token = AGWORLD_TOKEN.value();
   const db = admin.firestore();
@@ -296,18 +141,7 @@ async function syncFields() {
   const allFarmsById = {};
   const fieldNamesById = {}; // field id -> { name, farmId }
   const skippedFieldIds = new Set(); // distinct fields skipped, across all seasons
-  const writtenBySeason = {}; // season id -> Set of field ids AgWorld returned (seasons fetched OK only)
   let totalFieldSeasonDocs = 0;
-  let totalYieldDocs = 0;
-
-  // yieldHistory docs that already exist for the seasons being synced. A doc
-  // that exists (imported from the workbook) only gets its `agworld` block
-  // updated; a brand-new field-year also gets the top-level fields the
-  // Yields module reads (crop, variety, acres, ...).
-  const minYear = Math.min(...seasons.map(seasonYear).filter((y) => Number.isFinite(y)), MIN_SEASON_YEAR);
-  const existingYieldIds = new Set(
-    (await db.collection('yieldHistory').where('year', '>=', minYear).select().get()).docs.map((d) => d.id)
-  );
 
   // Fetch every season's fields one season at a time to keep each batch
   // small and to avoid one bad season response taking down the whole sync.
@@ -320,40 +154,25 @@ async function syncFields() {
       continue;
     }
     Object.assign(allFarmsById, farmsById);
-    const writtenThisSeason = new Set();
-    writtenBySeason[season.id] = writtenThisSeason;
 
-    // Firestore batches cap at 500 writes; each field can write three docs
-    // (season, yield history, boundary), so chunk at 150.
-    const year = seasonYear(season);
-    for (let i = 0; i < fields.length; i += 150) {
-      const chunk = fields.slice(i, i + 150);
+    // Firestore batches cap at 500 writes; chunk defensively.
+    for (let i = 0; i < fields.length; i += 400) {
+      const chunk = fields.slice(i, i + 400);
       const batch = db.batch();
       chunk.forEach((f) => {
         if (EXCLUDED_FARM_IDS.has(String(f.attributes.farm_id))) {
           skippedFieldIds.add(f.id);
           return; // skip fields under junk farms
         }
-        writtenThisSeason.add(String(f.id));
-        const hiddenFromIrrigation = HIDDEN_FROM_IRRIGATION_FARM_IDS.has(String(f.attributes.farm_id));
         fieldNamesById[f.id] = {
           name: f.attributes.name,
-          farmId: f.attributes.farm_id,
-          hiddenFromIrrigation
+          farmId: f.attributes.farm_id
         };
         // crops comes back as an array (a field can carry more than one
         // crop or blend for a given season) — take the primary entry
         // rather than assuming there's only one.
         const crops = f.attributes.crops || [];
-        // Agworld also returns the field's own crop_name/variety_name for the
-        // season — the crop it shows next to the field (e.g. Pumpkin on State
-        // Park Middle). Prefer that one when it's in the list, so a field
-        // carrying a second crop (an established hay stand, a fall-planted
-        // wheat) doesn't show the wrong one; then 'primary', then the first.
-        const shownName = f.attributes.crop_name || null;
-        const primaryCrop = (shownName && crops.find((c) => c.crop_name === shownName))
-          || crops.find((c) => c.crop_blend === 'primary') || crops[0]
-          || (shownName ? { crop_name: shownName, variety_name: f.attributes.variety_name || null, crop_use: f.attributes.crop_use || null } : null);
+        const primaryCrop = crops.find((c) => c.crop_blend === 'primary') || crops[0] || null;
         // Per-season crop/acreage data lives in a subcollection keyed by
         // season id, so the app can switch years without losing history.
         const seasonRef = db
@@ -369,12 +188,6 @@ async function syncFields() {
             cropName: primaryCrop ? primaryCrop.crop_name : null,
             varietyName: primaryCrop ? primaryCrop.variety_name : null,
             cropUse: primaryCrop ? primaryCrop.crop_use : null,
-            // Every crop on the field this season, for the Rotation tab's hover text.
-            crops: crops.map((c) => ({
-              name: c.crop_name || null, variety: c.variety_name || null,
-              blend: c.crop_blend || null, use: c.crop_use || null
-            })),
-            agworldFieldCropName: shownName,
             // planting_date lives on the field's own attributes, not
             // nested inside the crop object - confirmed via Agworld's docs
             // showing it as a sibling of area/irrigation/cropping_method
@@ -384,71 +197,11 @@ async function syncFields() {
             acres: parseAreaToAcres(f.attributes.area),
             irrigationMethod: f.attributes.irrigation || null,
             croppingMethod: f.attributes.cropping_method || null,
-            harvestDate: f.attributes.harvest_date || null,
-            harvestedArea: parseAreaToAcres(f.attributes.harvested_area),
-            harvestedWeight: f.attributes.harvested_weight || null,
             syncedFromAgworldAt: admin.firestore.FieldValue.serverTimestamp()
           },
           { merge: true }
         );
         totalFieldSeasonDocs++;
-
-        // Field outline for the satellite crop history (satelliteRotation.js).
-        // Its own small collection so the season docs every screen reads stay small.
-        const compact = satelliteRotation.compactBoundary(f.attributes.boundary);
-        if (compact) {
-          batch.set(db.collection('fieldBoundaries').doc(String(f.id)), {
-            boundary: compact, seasonId: String(season.id), source: 'agworld-sync',
-            updatedAt: admin.firestore.FieldValue.serverTimestamp()
-          }, { merge: true });
-        }
-
-        // Harvest recorded in Agworld -> yield history for that field-year.
-        const crop = canonCrop(primaryCrop ? primaryCrop.crop_name : null);
-        const weight = parseHarvestWeight(f.attributes.harvested_weight, crop);
-        const key = yieldFieldKey(f.attributes.name);
-        // Subleased / archive fields get yield records too (Yield History
-        // shows them; only the irrigation screens hide those fields).
-        if (weight && key && Number.isFinite(year)) {
-          const harvestedAcres = parseAreaToAcres(f.attributes.harvested_area);
-          const fieldAcres = parseAreaToAcres(f.attributes.area);
-          const acres = harvestedAcres > 0 ? harvestedAcres : fieldAcres;
-          const docId = `${key}__${year}`;
-          const agworld = {
-            fieldId: String(f.id),
-            fieldName: f.attributes.name || null,
-            farmName: farmsById[f.attributes.farm_id] || null,
-            seasonId: String(season.id),
-            crop,
-            variety: primaryCrop ? primaryCrop.variety_name : null,
-            harvestDate: f.attributes.harvest_date || null,
-            harvestedArea: acres || null,
-            harvestedWeightRaw: String(f.attributes.harvested_weight),
-            harvestedWeight: weight.value,
-            weightUnit: weight.unit,
-            yieldPerAcre: acres > 0 ? weight.value / acres : null,
-            yieldPrice: f.attributes.yield_price || null,
-            syncedAt: admin.firestore.FieldValue.serverTimestamp()
-          };
-          const yieldDoc = existingYieldIds.has(docId)
-            ? { agworld }
-            : {
-                agworld,
-                fieldKey: key,
-                fieldName: f.attributes.name,
-                year,
-                crop,
-                variety: agworld.variety,
-                acres: acres || null,
-                area: agworld.farmName,
-                unit: CROP_YIELD_UNIT[crop] || weight.unit || null,
-                harvestDate: agworld.harvestDate,
-                source: 'agworld'
-              };
-          batch.set(db.collection('yieldHistory').doc(docId), yieldDoc, { merge: true });
-          existingYieldIds.add(docId);
-          totalYieldDocs++;
-        }
       });
       await batch.commit();
     }
@@ -460,7 +213,7 @@ async function syncFields() {
   // untouched, since Agworld has no concept of those.
   const farmsBatch = db.batch();
   Object.entries(allFarmsById).forEach(([farmId, farmName]) => {
-    if (EXCLUDED_FARM_IDS.has(String(farmId)) || HIDDEN_FROM_IRRIGATION_FARM_IDS.has(String(farmId))) return; // no farm docs for these
+    if (EXCLUDED_FARM_IDS.has(String(farmId))) return; // skip junk farms
     const ref = db.collection('farms').doc(String(farmId));
     farmsBatch.set(ref, { agworldId: farmId, name: farmName }, { merge: true });
   });
@@ -471,7 +224,7 @@ async function syncFields() {
     const chunkIds = fieldIds.slice(i, i + 400);
     const batch = db.batch();
     chunkIds.forEach((fieldId) => {
-      const { name, farmId, hiddenFromIrrigation } = fieldNamesById[fieldId];
+      const { name, farmId } = fieldNamesById[fieldId];
       const ref = db.collection('fields').doc(String(fieldId));
       batch.set(
         ref,
@@ -480,7 +233,6 @@ async function syncFields() {
           name,
           farmId,
           farmName: allFarmsById[farmId] || null,
-          hiddenFromIrrigation: !!hiddenFromIrrigation,
           syncedFromAgworldAt: admin.firestore.FieldValue.serverTimestamp()
         },
         { merge: true }
@@ -522,18 +274,12 @@ async function syncFields() {
     }
   }
 
-  // Season-level cleanup: a field can stay in AgWorld (e.g. in 2026 and 2028)
-  // but be taken out of one season (e.g. 2027). Remove its leftover record for
-  // that season so it stops showing on that year's schedule. Guarded: a run
-  // that would remove an unusually large share leaves them and logs a warning.
-  const seasonCleanup = await removeStaleSeasonRecords(db, writtenBySeason);
-
   // Separately clean up farm docs for the excluded farm IDs, in case any
   // were sitting in Firestore from before this exclusion existed. Farms
   // aren't part of the field-diffing logic above since a farm can validly
   // have zero currently-synced fields without being stale itself.
   const excludedFarmCleanupBatch = db.batch();
-  [...EXCLUDED_FARM_IDS, ...HIDDEN_FROM_IRRIGATION_FARM_IDS].forEach((id) => excludedFarmCleanupBatch.delete(db.collection('farms').doc(id)));
+  EXCLUDED_FARM_IDS.forEach((id) => excludedFarmCleanupBatch.delete(db.collection('farms').doc(id)));
   await excludedFarmCleanupBatch.commit();
 
   return {
@@ -541,10 +287,7 @@ async function syncFields() {
     seasonCount: seasons.length,
     fieldSeasonRecords: totalFieldSeasonDocs,
     skippedFieldCount: skippedFieldIds.size,
-    staleFieldsRemoved: staleFieldDocs.length,
-    staleSeasonRecordsRemoved: seasonCleanup.removed,
-    staleSeasonsBlocked: seasonCleanup.blockedSeasons.length,
-    yieldRecords: totalYieldDocs
+    staleFieldsRemoved: staleFieldDocs.length
   };
 }
 
@@ -561,7 +304,7 @@ exports.syncAgworldFields = onSchedule(
   async () => {
     const result = await syncFields();
     console.log(
-      `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields and ${result.staleSeasonRecordsRemoved} leftover season records${result.staleSeasonsBlocked ? ` (${result.staleSeasonsBlocked} season(s) skipped: too many to remove automatically, see logs)` : ''}, ${result.yieldRecords} harvest yields).`
+      `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields).`
     );
   }
 );
@@ -575,7 +318,7 @@ exports.syncAgworldFieldsNow = onRequest(
     try {
       const result = await syncFields();
       res.status(200).send(
-        `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields and ${result.staleSeasonRecordsRemoved} leftover season records${result.staleSeasonsBlocked ? ` (${result.staleSeasonsBlocked} season(s) skipped: too many to remove automatically, see logs)` : ''}, ${result.yieldRecords} harvest yields).`
+        `Synced ${result.fieldCount} fields across ${result.seasonCount} seasons (${result.fieldSeasonRecords} field-season records, skipped ${result.skippedFieldCount} fields from excluded farms, removed ${result.staleFieldsRemoved} stale fields).`
       );
     } catch (err) {
       console.error(err);
@@ -638,7 +381,7 @@ exports.chirpstackWebhook = onRequest(async (req, res) => {
 // 'customer' = an outside buyer's login: no staff access, just the read-only
 // customer portal (their customers/customerKeys are set by Users.jsx right
 // after the account is created). Not farm-scoped, so it needs no farmIds.
-const VALID_ROLES = ['admin', 'owner', 'farm_manager', 'irrigation_manager', 'irrigator', 'planting_staff', 'customer'];
+const VALID_ROLES = ['admin', 'owner', 'farm_manager', 'irrigation_manager', 'irrigator', 'customer'];
 const FARM_SCOPED_ROLES = ['farm_manager', 'irrigation_manager', 'irrigator'];
 
 // Confirms the calling user's own Firestore profile says admin or owner.
@@ -654,193 +397,7 @@ async function requireAdminOrOwner(auth) {
     throw new HttpsError('permission-denied', 'Only an Admin or Owner can manage team members.');
   }
 }
-// =============================================================================
-// Agronomy "Targets" tab - editable criteria backend (Oct 2026)
-// =============================================================================
-// Paste this into functions/index.js, anywhere after requireAdminOrOwner()
-// is defined (it reuses that, plus admin/onCall/onRequest/HttpsError already
-// required at the top of the file - don't duplicate any of those).
-//
-// Moves the flat target ranges and weekly N Rec/target curves that used to
-// be hardcoded in AgronomyConfig.js into two Firestore collections, so
-// Admin/Owner can tune them from the app's new Targets tab with no GitHub
-// deploy involved:
-//   - agronomyCriteria/flatTargets - one doc, the flat fallback ranges
-//   - agronomyCurves/{cropKey} - one doc per crop ("POTATO") or per
-//     crop+variety override ("POTATO::RUSSET NORKOTAH TX 278"), holding
-//     that crop's full weekly curve.
-//
-// seedAgronomyCriteriaOnce writes the CURRENT AgronomyConfig.js values in
-// as a one-time starting point - call its URL once after deploying, then
-// never again (it's safe to re-run since it always overwrites with the
-// same hardcoded values below, not user edits, so re-running it WOULD wipe
-// out any edits made from the Targets tab since - that's the only reason
-// not to just leave it as a standing "reset to defaults" button for now).
-//
-// updateAgronomyCriteria is what the Targets tab actually calls to save
-// edits - Admin/Owner only (requireAdminOrOwner, same check used for team
-// management), using the Admin SDK so it bypasses firestore.rules'
-// `allow write: if false` on these two collections (that rule only blocks
-// direct browser writes).
-const { FieldValue: AgronomyCriteriaFieldValue } = admin.firestore;
 
-exports.seedAgronomyCriteriaOnce = onRequest({ timeoutSeconds: 60 }, async (req, res) => {
-  const db = admin.firestore();
-
-  const flatTargets = {
-    soil: { NO3: [15, 25], Salts: [0, 2] },
-    petiole: { no3: [18000, 28000], p: [0.25, 0.4], k: [8, 11], sulfur: [0.25, 0.4] },
-    compost: { n: [1, 2] }
-  };
-
-  const curves = {
-    POTATO: {
-      cropName: 'POTATO',
-      varietyName: null,
-      weeks: [
-        { week: 1, nRec: 20, soilNO3: [35, 50] },
-        { week: 2, nRec: 20, soilNO3: [33, 48] },
-        { week: 3, nRec: 40, soilNO3: [32, 47], petioleNO3: [20000, 25000], petioleP: [0.45, 0.5], petioleK: [11.5, 12.5], petioleS: [0.18, 0.2] },
-        { week: 4, nRec: 40, soilNO3: [31, 46], petioleNO3: [19200, 24000], petioleP: [0.45, 0.5], petioleK: [11, 12], petioleS: [0.18, 0.2] },
-        { week: 5, nRec: 54, soilNO3: [25, 40], petioleNO3: [18400, 23000], petioleP: [0.4, 0.45], petioleK: [10.5, 12], petioleS: [0.18, 0.2] },
-        { week: 6, nRec: 54, soilNO3: [20, 35], petioleNO3: [17600, 22000], petioleP: [0.38, 0.4], petioleK: [10.5, 11], petioleS: [0.15, 0.18] },
-        { week: 7, nRec: 40, soilNO3: [15, 30], petioleNO3: [15000, 21000], petioleP: [0.38, 0.4], petioleK: [10, 10.5], petioleS: [0.15, 0.18] },
-        { week: 8, nRec: 40, soilNO3: [10, 25], petioleNO3: [14500, 20000], petioleP: [0.33, 0.35], petioleK: [9.5, 10], petioleS: [0.15, 0.18] },
-        { week: 9, nRec: 20, soilNO3: [10, 20], petioleNO3: [14000, 19000], petioleP: [0.33, 0.35], petioleK: [9.5, 10], petioleS: [0.14, 0.16] },
-        { week: 10, nRec: 20, soilNO3: [5, 15], petioleNO3: [13500, 18000], petioleP: [0.28, 0.3], petioleK: [9, 9.5], petioleS: [0.14, 0.16] },
-        { week: 11, nRec: 27, soilNO3: [5, 10], petioleNO3: [13000, 17300], petioleP: [0.28, 0.3], petioleK: [9, 9.5], petioleS: [0.12, 0.14] },
-        { week: 12, nRec: 27, soilNO3: [5, 10], petioleNO3: [12500, 16600], petioleP: [0.28, 0.3], petioleK: [8.5, 9], petioleS: [0.12, 0.14] },
-        { week: 13, nRec: 0, soilNO3: [5, 9], petioleNO3: [12000, 15800], petioleP: [0.28, 0.3], petioleK: [7.5, 8], petioleS: [0.1, 0.12], stage: 'DYING' },
-        { week: 14, nRec: 0, soilNO3: [5, 8], petioleNO3: [11500, 15000], petioleP: [0.23, 0.25], petioleK: [6.5, 7], petioleS: [0.08, 0.1], stage: '10% DEAD' },
-        { week: 15, nRec: 0, soilNO3: [4, 7], petioleNO3: [10000, 12500], petioleP: [0.2, 0.25], petioleK: [5.5, 6], petioleS: [0.08, 0.1], stage: '20% DEAD' },
-        { week: 16, nRec: 0, soilNO3: [4, 5], petioleNO3: [7500, 10000], petioleP: [0.2, 0.25], petioleK: [5.5, 6], petioleS: [0.06, 0.08], stage: '30% DEAD' },
-        { week: 17, nRec: 0, stage: '40% DEAD' }
-      ]
-    },
-    BEETS: {
-      cropName: 'BEETS',
-      varietyName: null,
-      weeks: [
-        { week: 1, nRec: 0, soilNO3: [20, 35], petioleNO3: [10000, 15000] },
-        { week: 2, nRec: 5, soilNO3: [17, 30], petioleNO3: [10000, 15000] },
-        { week: 3, nRec: 15, soilNO3: [15, 25], petioleNO3: [10000, 15000] },
-        { week: 4, nRec: 25, soilNO3: [13, 20], petioleNO3: [10000, 15000] },
-        { week: 5, nRec: 30, soilNO3: [12, 17], petioleNO3: [10000, 15000] },
-        { week: 6, nRec: 35, soilNO3: [10, 15], petioleNO3: [10000, 14000] },
-        { week: 7, nRec: 35, soilNO3: [8, 13], petioleNO3: [8750, 13000] },
-        { week: 8, nRec: 35, soilNO3: [6, 11], petioleNO3: [7500, 11750] },
-        { week: 9, nRec: 35, soilNO3: [5, 9], petioleNO3: [6250, 10500] },
-        { week: 10, nRec: 35, soilNO3: [5, 7], petioleNO3: [5000, 9250], stage: 'END N' },
-        { week: 11, nRec: 35, soilNO3: [5, 7], petioleNO3: [3750, 8000] },
-        { week: 12, nRec: null, soilNO3: [5, 7], petioleNO3: [2500, 6750] },
-        { week: 13, nRec: null, soilNO3: [5, 7], petioleNO3: [2500, 5500] }
-      ]
-    },
-    CORN: {
-      cropName: 'CORN',
-      varietyName: null,
-      weeks: [
-        { week: 1, nRec: 0, soilNO3: [20, 35], petioleNO3: [2000, 3000] },
-        { week: 2, nRec: 5, soilNO3: [17, 30], petioleNO3: [1800, 2800] },
-        { week: 3, nRec: 10, soilNO3: [15, 25], petioleNO3: [1600, 2600] },
-        { week: 4, nRec: 20, soilNO3: [13, 20], petioleNO3: [1400, 2400] },
-        { week: 5, nRec: 30, soilNO3: [12, 17], petioleNO3: [1200, 2200] },
-        { week: 6, nRec: 50, soilNO3: [10, 15], petioleNO3: [1000, 2000] },
-        { week: 7, nRec: 50, soilNO3: [8, 13], petioleNO3: [800, 1800] },
-        { week: 8, nRec: 50, soilNO3: [6, 11], petioleNO3: [700, 1600] },
-        { week: 9, nRec: 50, soilNO3: [5, 9], petioleNO3: [600, 1400] },
-        { week: 10, nRec: 15, soilNO3: [5, 7], petioleNO3: [500, 800], stage: 'VT' },
-        { week: 11, nRec: 15, soilNO3: [5, 7], petioleNO3: [400, 600] },
-        { week: 12, nRec: 5, soilNO3: [5, 7], petioleNO3: [300, 400] },
-        { week: 13, nRec: 0, soilNO3: [5, 7], petioleNO3: [200, 200] },
-        { week: 14, nRec: null, soilNO3: [5, 7], petioleNO3: [100, 100] }
-      ]
-    }
-  };
-
-  try {
-    await db.collection('agronomyCriteria').doc('flatTargets').set(flatTargets);
-    const batch = db.batch();
-    Object.entries(curves).forEach(([cropKey, data]) => {
-      batch.set(db.collection('agronomyCurves').doc(cropKey), data);
-    });
-    await batch.commit();
-    res.status(200).send('Seeded agronomyCriteria/flatTargets and agronomyCurves/{POTATO,BEETS,CORN}.');
-  } catch (err) {
-    console.error('seedAgronomyCriteriaOnce failed:', err);
-    res.status(500).send(err.message);
-  }
-});
-
-// Called from the Targets tab. `kind` picks what's being saved:
-//   { kind: 'flat', data: { soil: {...}, petiole: {...}, compost: {...} } }
-//   { kind: 'curve', cropKey: 'POTATO', data: { cropName, varietyName, weeks: [...] } }
-//   { kind: 'deleteCurve', cropKey: 'POTATO::SOME VARIETY' }
-exports.updateAgronomyCriteria = onCall(async (request) => {
-  await requireAdminOrOwner(request.auth);
-
-  const { kind, cropKey, data } = request.data || {};
-  const db = admin.firestore();
-
-  if (kind === 'flat') {
-    if (!data || typeof data !== 'object') {
-      throw new HttpsError('invalid-argument', 'data is required for kind "flat".');
-    }
-    await db.collection('agronomyCriteria').doc('flatTargets').set(data);
-    return { ok: true };
-  }
-
-  if (kind === 'curve') {
-    if (!cropKey || !data || !Array.isArray(data.weeks)) {
-      throw new HttpsError('invalid-argument', 'cropKey and data.weeks[] are required for kind "curve".');
-    }
-    await db.collection('agronomyCurves').doc(cropKey).set({
-      cropName: data.cropName || null,
-      varietyName: data.varietyName || null,
-      weeks: data.weeks,
-      updatedAt: AgronomyCriteriaFieldValue.serverTimestamp(),
-      updatedBy: request.auth.uid
-    });
-    return { ok: true };
-  }
-
-  // Rename a curve = move it to the new crop / variety key (the key is what
-  // fields are matched on: "CROP" or "CROP::VARIETY").
-  if (kind === 'renameCurve') {
-    const { newCropName, newVarietyName } = request.data || {};
-    const crop = String(newCropName || '').trim().toUpperCase();
-    const variety = String(newVarietyName || '').trim().toUpperCase() || null;
-    if (!cropKey || !crop) {
-      throw new HttpsError('invalid-argument', 'cropKey and a new crop name are required for kind "renameCurve".');
-    }
-    const newKey = variety ? `${crop}::${variety}` : crop;
-    if (newKey.includes('/')) throw new HttpsError('invalid-argument', 'Names can\'t contain "/".');
-    const oldRef = db.collection('agronomyCurves').doc(cropKey);
-    const newRef = db.collection('agronomyCurves').doc(newKey);
-    await db.runTransaction(async (tx) => {
-      const [oldSnap, newSnap] = await Promise.all([tx.get(oldRef), tx.get(newRef)]);
-      if (!oldSnap.exists) throw new HttpsError('not-found', `No curve named ${cropKey}.`);
-      if (newKey === cropKey) return;
-      if (newSnap.exists) throw new HttpsError('already-exists', `There's already a curve named ${newKey} — rename or delete that one first.`);
-      tx.set(newRef, {
-        ...oldSnap.data(), cropName: crop, varietyName: variety, renamedFrom: cropKey,
-        updatedAt: AgronomyCriteriaFieldValue.serverTimestamp(), updatedBy: request.auth.uid
-      });
-      tx.delete(oldRef);
-    });
-    return { ok: true, cropKey: newKey };
-  }
-
-  if (kind === 'deleteCurve') {
-    if (!cropKey) {
-      throw new HttpsError('invalid-argument', 'cropKey is required for kind "deleteCurve".');
-    }
-    await db.collection('agronomyCurves').doc(cropKey).delete();
-    return { ok: true };
-  }
-
-  throw new HttpsError('invalid-argument', `Unrecognized kind "${kind}".`);
-});
 // Mirrors canViewAgronomy() in firestore.rules - Admin, Owner, or Farm
 // manager only.
 async function requireAgronomyAccess(auth) {
@@ -864,7 +421,7 @@ async function requireAgronomyAccess(auth) {
 exports.createUser = onCall(async (request) => {
   await requireAdminOrOwner(request.auth);
 
-  const { name, email, role, farmIds, canEditSchedule, phone, receiveTextAlerts } = request.data || {};
+  const { name, email, role, farmIds, canEditSchedule } = request.data || {};
   if (!name || !email || !role) {
     throw new HttpsError('invalid-argument', 'Name, email, and role are required.');
   }
@@ -886,10 +443,6 @@ exports.createUser = onCall(async (request) => {
   }
 
   const profile = { name, email, role };
-  if (phone) {
-    profile.phone = phone;
-    profile.receiveTextAlerts = !!receiveTextAlerts;
-  }
   if (FARM_SCOPED_ROLES.includes(role)) {
     profile.farmIds = farmIds.map(String);
   }
@@ -997,30 +550,13 @@ async function stukenholtzGet(path, apikey) {
 
 async function stukenholtzPost(path, body, apikey) {
   const url = `${STUKENHOLTZ_BASE_URL}${path}?apikey=${apikey}`;
-  // Retry a busy / flaky lab server (429, 5xx, dropped connection) a couple
-  // of times with a pause, since a re-check asks for many windows in a row.
-  for (let attempt = 1; ; attempt++) {
-    let res;
-    try {
-      res = await fetch(url, {
-        method: 'POST',
-        headers: { accept: 'application/json', 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(90000) // a hung request mustn't eat the whole function's time
-      });
-    } catch (err) {
-      if (attempt >= 3) throw new Error(`Couldn't reach Stukenholtz (${err.message})`);
-      await new Promise((r) => setTimeout(r, 2000 * attempt));
-      continue;
-    }
-    if (res.ok) return res.json();
-    const text = (await res.text()).slice(0, 300);
-    if ((res.status === 429 || res.status >= 500) && attempt < 3) {
-      await new Promise((r) => setTimeout(r, 3000 * attempt));
-      continue;
-    }
-    throw new Error(`Stukenholtz API error ${res.status} on ${path}: ${text}`);
-  }
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(`Stukenholtz API error ${res.status} on ${path}: ${await res.text()}`);
+  return res.json();
 }
 
 // Matches a Stukenholtz field/location label against our own `fields`
@@ -1060,255 +596,36 @@ function levenshteinDistance(a, b) {
   return dp[n];
 }
 
-// =============================================================================
-// Smarter field matching for Stukenholtz samples (Oct 2026)
-// =============================================================================
-// Scores how alike a lab label is to each field name (ignoring words like
-// "soil" and years, treating SOUTH/S the same, forgiving typos and
-// abbreviations, and never linking when a direction or number differs).
-// findFuzzyFieldMatch is used by mapResultToSample at sync time;
-// rematchUnmappedSamples is what the Cleanup tab's "Smart auto-match" panel
-// calls to preview/link the existing backlog.
-
-// Words that show up in lab sample labels but aren't part of a field's name.
-const FIELD_MATCH_NOISE_WORDS = new Set([
-  'field', 'fld', 'pivot', 'pvt', 'soil', 'petiole', 'nema', 'nematode', 'sample', 'test', 'tissue'
-]);
-
-// Direction/size words spelled out vs abbreviated ("WILSON SOUTH" vs
-// "WILSON S") are the same thing - collapse them to one spelling.
-const FIELD_MATCH_SYNONYMS = {
-  north: 'n', south: 's', east: 'e', west: 'w',
-  northeast: 'ne', northwest: 'nw', southeast: 'se', southwest: 'sw',
-  middle: 'mid', center: 'ctr', centre: 'ctr'
-};
-
-// Score at/above which a label is auto-linked to a field, and how far ahead
-// of the runner-up the best candidate has to be.
-const FUZZY_AUTO_LINK_SCORE = 0.9;
-const FUZZY_MIN_MARGIN = 0.05;
-
-const fieldMatchTokenCache = new Map();
-
-function fieldMatchTokens(normalized) {
-  if (fieldMatchTokenCache.has(normalized)) return fieldMatchTokenCache.get(normalized);
-  // Split glued numbers and letters ("17S" -> "17", "S"; "11A" -> "11", "A")
-  // so "VERBREE 17S" and "VERBREE 17 S" read the same.
-  const raw = (normalized.match(/\d+|[a-z]+/g) || []).map((t) => FIELD_MATCH_SYNONYMS[t] || t);
-  const kept = raw.filter((t) => !FIELD_MATCH_NOISE_WORDS.has(t) && !/^(19|20)\d{2}$/.test(t));
-  const tokens = kept.length ? kept : raw;
-  fieldMatchTokenCache.set(normalized, tokens);
-  return tokens;
-}
-
-function fieldMatchSimilarity(a, b) {
-  const longest = Math.max(a.length, b.length);
-  const edit = longest === 0 ? 1 : 1 - levenshteinDistance(a, b) / longest;
-  // Abbreviations: the shorter word is the longer one with letters left out
-  // (WPR for WIPER, MDL for MIDDLE) - same first letter, letters in order,
-  // and at least half of the longer word's length.
-  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
-  if (short.length >= 3 && long.length > short.length && short[0] === long[0]) {
-    let i = 0;
-    for (const ch of long) if (i < short.length && ch === short[i]) i++;
-    if (i === short.length && short.length / long.length >= 0.5) return Math.max(edit, 0.9);
-  }
-  return edit;
-}
-
-// 0..1 how alike two normalized names are. Numbers and 1-2 letter tokens
-// ("S", "N", "12", "NE") are what tell "WILSON N" from "WILSON S" or
-// "FIELD 12" from "FIELD 13", so they must match exactly or the pair scores
-// 0 - no amount of other similarity can paper over a different direction or
-// number. Longer words are matched with typo tolerance, weighted by length.
-function scoreFieldMatch(normalizedLabel, normalizedName) {
-  if (normalizedLabel === normalizedName) return 1;
-  const a = fieldMatchTokens(normalizedLabel);
-  const b = fieldMatchTokens(normalizedName);
-  const isHard = (t) => t.length <= 2 || /^\d+$/.test(t);
-  const hardA = a.filter(isHard).sort();
-  const hardB = b.filter(isHard).sort();
-  if (hardA.length !== hardB.length || hardA.some((t, i) => t !== hardB[i])) return 0;
-
-  const softA = a.filter((t) => !isHard(t));
-  const softB = b.filter((t) => !isHard(t));
-  // Nothing but numbers/short codes on both sides ("11A" vs "11 A"): they
-  // already matched exactly above, so that is a full match.
-  if (!softA.length && !softB.length) return hardA.length ? 1 : 0;
-  if (!softA.length || !softB.length) return 0;
-
-  const pairs = [];
-  softA.forEach((ta, i) => softB.forEach((tb, j) => {
-    const sim = fieldMatchSimilarity(ta, tb);
-    if (sim >= 0.8) pairs.push({ i, j, sim, w: ta.length + tb.length });
-  }));
-  pairs.sort((x, y) => y.sim - x.sim);
-  const usedA = new Set(), usedB = new Set();
-  let num = hardA.join('').length * 2;
-  pairs.forEach((p) => {
-    if (usedA.has(p.i) || usedB.has(p.j)) return;
-    usedA.add(p.i); usedB.add(p.j);
-    num += p.sim * p.w;
-  });
-  const den = a.join('').length + b.join('').length;
-  return den === 0 ? 0 : num / den;
-}
-
-// Best few candidate fields for a label, highest score first.
-function rankFieldMatches(normalizedLabel, byNormalizedName, limit = 3) {
-  const ranked = [];
-  for (const [name, fieldId] of Object.entries(byNormalizedName)) {
-    const score = scoreFieldMatch(normalizedLabel, name);
-    if (score > 0) ranked.push({ fieldId, name, score });
-  }
-  ranked.sort((x, y) => y.score - x.score);
-  return ranked.slice(0, limit);
-}
-
-// Same name and arguments as before, so mapResultToSample needs no change.
-function findFuzzyFieldMatch(normalizedLabel, byNormalizedName, minScore = FUZZY_AUTO_LINK_SCORE) {
+// Fallback for when the exact normalized match fails. Deliberately
+// conservative: a wrong fuzzy match silently corrupts a field's sample
+// history, which is worse than leaving a sample unmapped for manual
+// review, so this only accepts a match that's both close (within ~20% of
+// the label's own length) AND unambiguous (no other field tied for
+// closest). Anything shorter than 3 characters is skipped entirely - too
+// short for edit distance to mean much.
+function findFuzzyFieldMatch(normalizedLabel, byNormalizedName) {
   if (normalizedLabel.length < 3) return null;
-  const [best, second] = rankFieldMatches(normalizedLabel, byNormalizedName, 2);
-  if (!best || best.score < minScore) return null;
-  if (second && best.score - second.score < FUZZY_MIN_MARGIN) return null;
-  return best.fieldId;
-}
-
-// Re-runs the matcher over every sample that has no field yet, which is what
-// finally fixes the backlog (the sync only matches a sample once, at the
-// moment it's first pulled in). Called from the Cleanup tab's "Smart
-// auto-match" panel:
-//   { apply: false, minScore: 0.9 }  -> preview only, nothing is written
-//   { apply: true,  minScore: 0.9 }  -> links every label that clears the bar
-// Labels are grouped, so 400 samples labelled "WILSON SOUTH" are one row in
-// the preview and one decision. Linked samples are marked fieldMatchType
-// 'fuzzy' with the score kept in fuzzyScore, so they still show up in the
-// "Suggested matches to confirm" list and can be corrected there. Never
-// touches a sample that already has a field, and never touches compost.
-exports.rematchUnmappedSamples = onCall({ timeoutSeconds: 540, memory: '1GiB' }, async (request) => {
-  await requireAgronomyAccess(request.auth);
-
-  const { apply, minScore } = request.data || {};
-  const threshold = Number(minScore);
-  if (!Number.isFinite(threshold) || threshold < 0.7 || threshold > 1) {
-    throw new HttpsError('invalid-argument', 'minScore must be between 0.7 and 1.');
-  }
-
-  const db = admin.firestore();
-  const fieldSnap = await db.collection('fields').get();
-  const lookup = buildFieldLookup(fieldSnap.docs);
-  const nameByFieldId = {};
-  fieldSnap.forEach((d) => { nameByFieldId[d.id] = d.data().name; });
-  const decidedLabels = await loadSampleAliases(db); // labels a person already decided: never re-guess
-
-  // Pull every unmapped sample (in pages) and group by normalized label.
-  const groups = new Map();
-  let totalUnmapped = 0;
-  let last = null;
-  for (;;) {
-    let q = db.collection('samples').where('fieldId', '==', null).limit(1000);
-    if (last) q = q.startAfter(last);
-    const snap = await q.get();
-    if (snap.empty) break;
-    snap.forEach((doc) => {
-      const data = doc.data();
-      if (data.type === 'compost' || !data.rawFieldLabel || data.fieldMatchType === 'ignored') return;
-      const key = normalizeFieldLabel(data.rawFieldLabel);
-      if (decidedLabels[key]) return;
-      totalUnmapped++;
-      if (!groups.has(key)) groups.set(key, { label: data.rawFieldLabel, refs: [] });
-      groups.get(key).refs.push(doc.ref);
-    });
-    last = snap.docs[snap.docs.length - 1];
-    if (snap.size < 1000) break;
-  }
-
-  const rows = [];
-  groups.forEach((g, key) => {
-    const [best, second] = key.length < 3 ? [] : rankFieldMatches(key, lookup, 2);
-    const margin = best && second ? best.score - second.score : null;
-    const willLink = !!best && best.score >= threshold && (margin === null || margin >= FUZZY_MIN_MARGIN);
-    rows.push({
-      label: g.label,
-      sampleCount: g.refs.length,
-      fieldId: best ? best.fieldId : null,
-      fieldName: best ? nameByFieldId[best.fieldId] || null : null,
-      score: best ? Math.round(best.score * 1000) / 1000 : null,
-      runnerUp: second ? { fieldName: nameByFieldId[second.fieldId] || null, score: Math.round(second.score * 1000) / 1000 } : null,
-      willLink,
-      _refs: g.refs
-    });
-  });
-
-  const linkable = rows.filter((r) => r.willLink);
-  // The biggest labels that did NOT link, by sample count - these are what
-  // is actually worth looking at (a label with no candidate at all usually
-  // means there is no such field in the app).
-  const biggestUnmatched = rows
-    .filter((r) => !r.willLink)
-    .sort((a, b) => b.sampleCount - a.sampleCount)
-    .slice(0, 40)
-    .map(({ _refs, ...rest }) => rest);
-  const noCandidateLabels = rows.filter((r) => r.fieldId === null).length;
-  const linkableSamples = linkable.reduce((n, r) => n + r.sampleCount, 0);
-
-  let linked = 0;
-  if (apply === true) {
-    for (const r of linkable) {
-      for (let i = 0; i < r._refs.length; i += 400) {
-        const batch = db.batch();
-        r._refs.slice(i, i + 400).forEach((ref) => {
-          batch.update(ref, {
-            fieldId: r.fieldId,
-            fieldMatchType: 'fuzzy',
-            fuzzyScore: r.score,
-            fuzzyMatchedBy: request.auth.uid,
-            fuzzyMatchedAt: admin.firestore.FieldValue.serverTimestamp()
-          });
-        });
-        await batch.commit();
-      }
-      linked += r._refs.length;
+  const maxDistance = Math.max(1, Math.floor(normalizedLabel.length * 0.2));
+  let bestFieldId = null;
+  let bestDistance = Infinity;
+  let tied = false;
+  for (const [name, fieldId] of Object.entries(byNormalizedName)) {
+    const distance = levenshteinDistance(normalizedLabel, name);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestFieldId = fieldId;
+      tied = false;
+    } else if (distance === bestDistance) {
+      tied = true;
     }
   }
+  return bestFieldId && bestDistance <= maxDistance && !tied ? bestFieldId : null;
+}
 
-  // Closest-to-linking first, then biggest backlog; capped so the response
-  // stays small even with hundreds of odd labels.
-  rows.sort((a, b) => (b.willLink - a.willLink) || ((b.score || 0) - (a.score || 0)) || (b.sampleCount - a.sampleCount));
-  return {
-    applied: apply === true,
-    threshold,
-    totalUnmappedSamples: totalUnmapped,
-    uniqueLabels: rows.length,
-    fieldCount: fieldSnap.size,
-    noCandidateLabels,
-    biggestUnmatched,
-    linkableLabels: linkable.length,
-    linkableSamples,
-    linkedSamples: linked,
-    rows: rows.slice(0, 300).map(({ _refs, ...rest }) => rest)
-  };
-});
 // Best-guess extraction of a usable sample doc from one raw Stukenholtz
 // result - see the file-level note above. Candidate property names are
 // checked in order; adjust once you've seen a real response.
-// Remembered lab-label decisions (sampleLabelAliases/{normalized label}),
-// made on the Agronomy "Field mapping" tab. A saved decision always beats the
-// automatic matcher, for new samples and for the nightly re-sync alike:
-//   { fieldId: 'abc' }              -> this label is that field
-//   { fieldId: null, ignore: true } -> not a field (shop soil, test samples...)
-//   { fieldId: null }               -> deliberately left unlinked
-async function loadSampleAliases(db) {
-  const snap = await db.collection('sampleLabelAliases').get();
-  const map = {};
-  snap.forEach((d) => {
-    const v = d.data();
-    map[d.id] = { fieldId: v.fieldId || null, ignore: v.ignore === true };
-  });
-  return map;
-}
-
-function mapResultToSample(result, fieldLookup, aliases = {}) {
+function mapResultToSample(result, fieldLookup) {
   const sourceId = result._id || result.id || null;
   if (!sourceId) return null; // can't upsert safely without a stable id
 
@@ -1340,12 +657,7 @@ function mapResultToSample(result, fieldLookup, aliases = {}) {
   // match from an auto-corrected guess worth a human glance, from
   // nothing found at all.
   let fieldMatchType = fieldId ? 'exact' : null;
-  const decided = normalizedLabel ? aliases[normalizedLabel] : null;
-  if (decided) {
-    // A person already decided what this label is - no guessing.
-    fieldId = decided.fieldId;
-    fieldMatchType = decided.ignore ? 'ignored' : (decided.fieldId ? 'manual' : null);
-  } else if (!fieldId && normalizedLabel) {
+  if (!fieldId && normalizedLabel) {
     const fuzzyMatch = findFuzzyFieldMatch(normalizedLabel, fieldLookup);
     if (fuzzyMatch) {
       fieldId = fuzzyMatch;
@@ -1478,20 +790,15 @@ const STUKENHOLTZ_PAGE_SIZE = 1000;
 // repeatedly, walking forward through bounded date windows). Queries all
 // four sample type codes separately rather than ANY in one call - see
 // the note on fetchResultsSince for why.
-async function loadStukenholtzContext() {
+async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt) {
   const apikey = STUKENHOLTZ_API_KEY.value();
   const db = admin.firestore();
+
   const [contactIds, fieldDocsSnap] = await Promise.all([
     fetchAllContactIds(apikey),
     db.collection('fields').get()
   ]);
-  return { apikey, db, contactIds, fieldLookup: buildFieldLookup(fieldDocsSnap.docs), aliases: await loadSampleAliases(db) };
-}
-
-// ctx (optional) lets a caller that runs many windows load contacts, fields
-// and aliases once. typeCodes (optional) limits which sample types are asked for.
-async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt, ctx, typeCodes) {
-  const { apikey, db, contactIds, fieldLookup, aliases } = ctx || await loadStukenholtzContext();
+  const fieldLookup = buildFieldLookup(fieldDocsSnap.docs);
 
   let totalFetched = 0;
   let written = 0;
@@ -1501,43 +808,19 @@ async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt, ctx
   // the cap and need to shrink the window" check looks at the right
   // number (see windowTruncated below).
   let maxFetchedForAnyType = 0;
-  let added = 0; // samples AIO didn't have before this run
-  const byType = {};
-  const capped = []; // type codes that came back at the 1000 cap (window too wide)
 
-  for (const sampleTypeCode of (typeCodes || STUKENHOLTZ_SAMPLE_TYPE_CODES)) {
+  for (const sampleTypeCode of STUKENHOLTZ_SAMPLE_TYPE_CODES) {
     const results = await fetchResultsSince(startingReceivedDt, contactIds, apikey, endingReceivedDt, sampleTypeCode);
     totalFetched += results.length;
     maxFetchedForAnyType = Math.max(maxFetchedForAnyType, results.length);
-    byType[sampleTypeCode] = (byType[sampleTypeCode] || 0) + results.length;
-    if (results.length >= STUKENHOLTZ_PAGE_SIZE) capped.push(sampleTypeCode);
 
     for (let i = 0; i < results.length; i += 400) {
       const chunk = results.slice(i, i + 400);
       const batch = db.batch();
-      // A sample someone already linked (or ignored) by hand keeps that
-      // choice: the rolling re-sync must not overwrite it with the
-      // matcher's guess.
-      const sampleRefs = chunk
-        .map((raw) => raw && (raw._id || raw.id))
-        .filter(Boolean)
-        .map((id) => db.collection('samples').doc(String(id)));
-      const humanChoice = new Set();
-      if (sampleRefs.length) {
-        const existing = await db.getAll(...sampleRefs, { fieldMask: ['fieldMatchType'] });
-        existing.forEach((snap) => {
-          if (!snap.exists) { added++; return }
-          const t = snap.get('fieldMatchType');
-          if (t === 'manual' || t === 'ignored') humanChoice.add(snap.id);
-        });
-      }
       chunk.forEach((raw) => {
-        const sample = mapResultToSample(raw, fieldLookup, aliases);
+        const sample = mapResultToSample(raw, fieldLookup);
         if (!sample) return;
-        if (humanChoice.has(sample.sourceId)) {
-          delete sample.fieldId;
-          delete sample.fieldMatchType;
-        } else if (!sample.type || !sample.fieldId) {
+        if (!sample.type || !sample.fieldId) {
           unmapped++;
           console.warn('Unmapped Stukenholtz sample, needs manual review:', JSON.stringify(raw));
         }
@@ -1548,56 +831,7 @@ async function syncOneStukenholtzBatch(startingReceivedDt, endingReceivedDt, ctx
     }
   }
 
-  return { fetched: totalFetched, written, unmapped, maxFetchedForAnyType, added, byType, capped };
-}
-
-// Walks [from, to) in windows small enough that no sample type hits
-// Stukenholtz's 1000-per-call cap: a window that comes back capped is split
-// in half and re-asked (down to one hour), so nothing is cut off. Used by
-// the hourly sync and by the "re-check a date range" button.
-async function syncStukenholtzRange(fromIso, toIso, { windowMs = 3 * 86400000, deadlineMs = Date.now() + 480000 } = {}) {
-  const ctx = await loadStukenholtzContext();
-  const totals = { fetched: 0, written: 0, unmapped: 0, added: 0, windows: 0, byType: {}, stillCapped: [] }
-  const end = new Date(toIso).getTime()
-  let cursor = new Date(fromIso).getTime()
-  let finishedAt = cursor
-  // queue of [start, end, typeCodes]
-  const queue = []
-  while (cursor < end) { const e = Math.min(end, cursor + windowMs); queue.push([cursor, e, null]); cursor = e }
-  while (queue.length) {
-    if (Date.now() > deadlineMs) { totals.timedOut = true; break }
-    const [a, b, types] = queue.shift()
-    let r
-    try {
-      r = await syncOneStukenholtzBatch(new Date(a).toISOString(), new Date(b).toISOString(), ctx, types)
-    } catch (err) {
-      // one bad window shouldn't sink the whole run - note it and keep going
-      console.error(`Stukenholtz window ${new Date(a).toISOString()} - ${new Date(b).toISOString()} failed:`, err)
-      ;(totals.errors = totals.errors || []).push({ from: new Date(a).toISOString(), to: new Date(b).toISOString(), message: String(err && err.message || err).slice(0, 300) })
-      finishedAt = Math.max(finishedAt, b)
-      continue
-    }
-    totals.windows++
-    totals.written += r.written; totals.unmapped += r.unmapped; totals.added += r.added
-    const willSplit = r.capped.length && b - a > 3600000
-    // a capped type is asked again in halves, so count it there, not here
-    Object.entries(r.byType).forEach(([k, v]) => {
-      if (willSplit && r.capped.includes(k)) return
-      totals.byType[k] = (totals.byType[k] || 0) + v; totals.fetched += v
-    })
-    if (r.capped.length) {
-      if (willSplit) {
-        // re-ask just the capped types, in two halves (put in front so we stay in date order)
-        const mid = a + Math.floor((b - a) / 2)
-        queue.unshift([a, mid, r.capped], [mid, b, r.capped])
-        continue
-      }
-      totals.stillCapped.push({ from: new Date(a).toISOString(), types: r.capped })
-    }
-    finishedAt = Math.max(finishedAt, b)
-  }
-  totals.checkedThrough = new Date(finishedAt).toISOString()
-  return totals
+  return { fetched: totalFetched, written, unmapped, maxFetchedForAnyType };
 }
 
 // Runs hourly, checking a rolling lookback window rather than an
@@ -1612,9 +846,13 @@ async function syncStukenholtzRange(fromIso, toIso, { windowMs = 3 * 86400000, d
 // report id), so this trades a bit of redundant querying for actually
 // catching late-approved results.
 //
-// Nov 2026: now windowed (syncStukenholtzRange), so a busy stretch can no
-// longer run past the 1000-per-call cap - that cap is the likely reason
-// samples went missing in late Aug / early Sep 2026.
+// NOTE: still doesn't paginate past 1000 per type - if a single type
+// ever produced 1000+ results within the lookback window (soil alone hit
+// exactly 1000 in one month during backfill testing, so this isn't
+// impossible), anything past the cap would be missed until the backlog
+// thinned out. Shorten STUKENHOLTZ_HOURLY_LOOKBACK_DAYS if that ever
+// shows up as unmapped/missing data, or add windowed pagination here
+// too, matching the backfill's approach.
 const STUKENHOLTZ_HOURLY_LOOKBACK_DAYS = 14;
 
 exports.syncStukenholtzSamplesHourly = onSchedule(
@@ -1630,58 +868,15 @@ exports.syncStukenholtzSamplesHourly = onSchedule(
     const lookbackStart = new Date(
       Date.now() - STUKENHOLTZ_HOURLY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000
     ).toISOString();
-    // Windowed (3 days at a time, split further if a type still hits the
-    // 1000 cap) - one open-ended 14-day call used to get cut off at 1000
-    // per type in the busiest weeks, silently dropping samples.
-    const result = await syncStukenholtzRange(lookbackStart, new Date().toISOString())
+    const result = await syncOneStukenholtzBatch(lookbackStart);
     // Kept for visibility/debugging (e.g. confirming the schedule is
     // actually firing) - no longer used to compute the next query's
     // starting point.
     await db.collection('syncState').doc('stukenholtz').set(
-      { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp(), lookbackStart, lastAdded: result.added, lastFetched: result.fetched },
+      { lastSyncedAt: admin.firestore.FieldValue.serverTimestamp(), lookbackStart },
       { merge: true }
     );
-    console.log(`Stukenholtz sync: fetched ${result.fetched}, ${result.added} new, wrote ${result.written}, ${result.unmapped} unmapped, ${result.windows} windows.`);
-  }
-);
-
-// Weekly deeper re-check: results approved more than 14 days after the
-// sample was received would fall outside the hourly window, so once a week
-// look back 60 days.
-exports.recheckStukenholtzWeekly = onSchedule(
-  { schedule: 'every sunday 03:17', timeZone: 'America/Denver', secrets: [STUKENHOLTZ_API_KEY], timeoutSeconds: 540, memory: '1GiB' },
-  async () => {
-    const from = new Date(Date.now() - 60 * 86400000).toISOString()
-    const r = await syncStukenholtzRange(from, new Date().toISOString())
-    await admin.firestore().collection('syncState').doc('stukenholtzRecheck').set({ ...r, from, trigger: 'weekly', ranAt: admin.firestore.FieldValue.serverTimestamp() })
-    console.log(`Stukenholtz weekly re-check: fetched ${r.fetched}, ${r.added} new, ${r.windows} windows.`)
-  }
-);
-
-// "Re-check Stukenholtz" button in Agronomy > All samples: re-asks the lab
-// for every sample received in a date range and saves anything missing.
-// Admin / Owner / Farm manager. Up to ~8 minutes per call; if the range is
-// too long it stops part way and says how far it got (call again from there).
-exports.recheckStukenholtzRange = onCall(
-  { secrets: [STUKENHOLTZ_API_KEY], timeoutSeconds: 540, memory: '1GiB' },
-  async (request) => {
-    await requireAgronomyAccess(request.auth)
-    const { from, to } = request.data || {}
-    const a = new Date(from), b = new Date(to)
-    if (!from || !to || isNaN(a) || isNaN(b) || b <= a) throw new HttpsError('invalid-argument', 'Give a from and to date (to after from).')
-    if (b - a > 400 * 86400000) throw new HttpsError('invalid-argument', 'Pick a range of about a year or less.')
-    let r
-    try {
-      r = await syncStukenholtzRange(a.toISOString(), b.toISOString(), { deadlineMs: Date.now() + 240000 })
-    } catch (err) {
-      // Pass the real reason back to the screen instead of a bare "INTERNAL".
-      console.error('recheckStukenholtzRange failed:', err)
-      throw new HttpsError('internal', `Re-check failed: ${String(err && err.message || err).slice(0, 400)}`)
-    }
-    try {
-      await admin.firestore().collection('syncState').doc('stukenholtzRecheck').set(JSON.parse(JSON.stringify({ ...r, from: a.toISOString(), to: b.toISOString(), trigger: 'manual', by: request.auth.uid, ranAt: new Date().toISOString() })))
-    } catch (err) { console.error('could not save re-check status', err) }
-    return r
+    console.log(`Stukenholtz sync: fetched ${result.fetched}, wrote ${result.written}, ${result.unmapped} unmapped.`);
   }
 );
 
@@ -1832,631 +1027,6 @@ exports.reassignSampleField = onCall(async (request) => {
 
   return { ok: true };
 });
-
-// ---------------------------------------------------------------------
-// Field mapping tool (Agronomy "Field mapping" tab) - Oct 2026
-//
-// Stukenholtz's sample names never quite match Agworld's field names, so the
-// fix has to be remembered at the LABEL level, not sample by sample:
-//   listSampleLabels   -> every distinct lab label with how many samples it
-//                         has, what field it points at, and suggestions.
-//   setSampleLabelLink -> link a label to a field, unlink it, mark it "not a
-//                         field", or reset it to automatic. The decision is
-//                         saved in sampleLabelAliases (so every future sync
-//                         uses it) AND applied to all samples already saved
-//                         under that label.
-// Labels that differ only in case, spacing or punctuation are one label
-// (same normalisation the matcher uses).
-// ---------------------------------------------------------------------
-exports.listSampleLabels = onCall({ timeoutSeconds: 300, memory: '1GiB' }, async (request) => {
-  await requireAgronomyAccess(request.auth);
-  const db = admin.firestore();
-
-  const [fieldSnap, aliases] = await Promise.all([db.collection('fields').get(), loadSampleAliases(db)]);
-  const lookup = buildFieldLookup(fieldSnap.docs);
-
-  const groups = new Map();
-  let total = 0;
-  let last = null;
-  for (;;) {
-    let q = db.collection('samples')
-      .select('rawFieldLabel', 'fieldId', 'fieldMatchType', 'type', 'receivedDt')
-      .orderBy(admin.firestore.FieldPath.documentId())
-      .limit(2000);
-    if (last) q = q.startAfter(last);
-    const snap = await q.get();
-    if (snap.empty) break;
-    snap.forEach((doc) => {
-      const d = doc.data();
-      if (d.type === 'compost' || !d.rawFieldLabel) return;
-      total++;
-      const key = normalizeFieldLabel(d.rawFieldLabel);
-      if (!key) return;
-      let g = groups.get(key);
-      if (!g) {
-        g = { key, spellings: {}, count: 0, fieldCounts: {}, unlinked: 0, ignored: 0, auto: 0, types: {}, years: {}, first: null, last: null };
-        groups.set(key, g);
-      }
-      g.count++;
-      g.spellings[d.rawFieldLabel] = (g.spellings[d.rawFieldLabel] || 0) + 1;
-      if (d.fieldMatchType === 'ignored') g.ignored++;
-      else if (d.fieldId) {
-        g.fieldCounts[d.fieldId] = (g.fieldCounts[d.fieldId] || 0) + 1;
-        if (d.fieldMatchType === 'fuzzy') g.auto++;
-      } else g.unlinked++;
-      if (d.type) g.types[d.type] = (g.types[d.type] || 0) + 1;
-      const ms = d.receivedDt && d.receivedDt.toMillis ? d.receivedDt.toMillis() : null;
-      if (ms != null) {
-        const yr = new Date(ms).getUTCFullYear();
-        g.years[yr] = (g.years[yr] || 0) + 1;
-        if (g.first == null || ms < g.first) g.first = ms;
-        if (g.last == null || ms > g.last) g.last = ms;
-      }
-    });
-    last = snap.docs[snap.docs.length - 1];
-    if (snap.size < 2000) break;
-  }
-
-  const labels = [];
-  groups.forEach((g) => {
-    const fieldIds = Object.keys(g.fieldCounts);
-    const top = fieldIds.sort((a, b) => g.fieldCounts[b] - g.fieldCounts[a])[0] || null;
-    let status;
-    if (g.ignored === g.count) status = 'ignored';
-    else if (!fieldIds.length) status = 'unlinked';
-    else if (g.unlinked || g.ignored || fieldIds.length > 1) status = 'mixed';
-    else status = g.auto === g.count ? 'auto' : 'linked';
-    const decision = aliases[g.key] || null;
-    const suggestions = (status === 'unlinked' || status === 'mixed' || status === 'auto') && g.key.length >= 3
-      ? rankFieldMatches(g.key, lookup, 3).map((r) => ({ fieldId: r.fieldId, score: Math.round(r.score * 100) / 100 }))
-      : [];
-    const spellings = Object.entries(g.spellings).sort((a, b) => b[1] - a[1]).map(([name]) => name);
-    labels.push({
-      key: g.key,
-      label: spellings[0],
-      spellings,
-      count: g.count,
-      status,
-      fieldId: top,
-      remembered: !!decision,
-      types: g.types,
-      years: g.years,
-      first: g.first,
-      last: g.last,
-      suggestions
-    });
-  });
-  labels.sort((a, b) => b.count - a.count);
-  return { totalSamples: total, labels };
-});
-
-exports.setSampleLabelLink = onCall({ timeoutSeconds: 300, memory: '512MiB' }, async (request) => {
-  await requireAgronomyAccess(request.auth);
-  const { label, fieldId, mode } = request.data || {};
-  const key = normalizeFieldLabel(label);
-  if (!key || key.length > 200) throw new HttpsError('invalid-argument', 'A lab label is required.');
-  if (!['link', 'unlink', 'ignore', 'reset'].includes(mode)) {
-    throw new HttpsError('invalid-argument', 'mode must be link, unlink, ignore or reset.');
-  }
-  const db = admin.firestore();
-  const aliasRef = db.collection('sampleLabelAliases').doc(key);
-  const by = request.auth.uid;
-  const now = admin.firestore.FieldValue.serverTimestamp();
-
-  let samplePatch; // what every sample under this label becomes
-  if (mode === 'link') {
-    if (!fieldId) throw new HttpsError('invalid-argument', 'fieldId is required to link.');
-    const f = await db.doc(`fields/${fieldId}`).get();
-    if (!f.exists) throw new HttpsError('not-found', 'That field no longer exists.');
-    await aliasRef.set({ fieldId, ignore: false, label: String(label), updatedBy: by, updatedAt: now });
-    samplePatch = { fieldId, fieldMatchType: 'manual' };
-  } else if (mode === 'ignore') {
-    await aliasRef.set({ fieldId: null, ignore: true, label: String(label), updatedBy: by, updatedAt: now });
-    samplePatch = { fieldId: null, fieldMatchType: 'ignored' };
-  } else if (mode === 'unlink') {
-    // Remembered as "leave this one unlinked" so the automatic matcher
-    // doesn't quietly put it back.
-    await aliasRef.set({ fieldId: null, ignore: false, label: String(label), updatedBy: by, updatedAt: now });
-    samplePatch = { fieldId: null, fieldMatchType: null };
-  } else {
-    // reset: forget the decision and let the matcher have another go.
-    await aliasRef.delete();
-    const lookup = buildFieldLookup((await db.collection('fields').get()).docs);
-    let id = lookup[key] || null;
-    let type = id ? 'exact' : null;
-    if (!id) {
-      const guess = findFuzzyFieldMatch(key, lookup);
-      if (guess) { id = guess; type = 'fuzzy'; }
-    }
-    samplePatch = { fieldId: id, fieldMatchType: type };
-  }
-
-  let updated = 0;
-  let last = null;
-  for (;;) {
-    let q = db.collection('samples').select('rawFieldLabel', 'type')
-      .orderBy(admin.firestore.FieldPath.documentId()).limit(2000);
-    if (last) q = q.startAfter(last);
-    const snap = await q.get();
-    if (snap.empty) break;
-    const refs = [];
-    snap.forEach((doc) => {
-      const d = doc.data();
-      if (d.type !== 'compost' && d.rawFieldLabel && normalizeFieldLabel(d.rawFieldLabel) === key) refs.push(doc.ref);
-    });
-    for (let i = 0; i < refs.length; i += 400) {
-      const batch = db.batch();
-      refs.slice(i, i + 400).forEach((ref) => batch.update(ref, { ...samplePatch, reviewedBy: by, reviewedAt: now }));
-      await batch.commit();
-    }
-    updated += refs.length;
-    last = snap.docs[snap.docs.length - 1];
-    if (snap.size < 2000) break;
-  }
-  return { ok: true, updated, fieldId: samplePatch.fieldId, fieldMatchType: samplePatch.fieldMatchType };
-});
-
-// ---------------------------------------------------------------------
-// Scouting reports (Agworld Scout "Weekly Dig" export) - Oct 2026
-//
-// The Agronomy tab "Scouting" uploads the CSV exported from Agworld's scout
-// app / scouting report. Each row becomes one document in
-// scoutingObservations (Field Moisture % pulled out as `moisture`, every
-// other column kept under `values`), matched to a field by its Location
-// name the same way lab samples are: a saved alias first (see
-// assignScoutingLocation), then an exact name match, then the fuzzy matcher
-// at 90%+. Rows whose Location can't be matched are still saved (fieldId
-// null) so they can be assigned from the Scouting tab afterwards.
-//
-// Re-uploading the same or a bigger report is safe: a row's document id is a
-// hash of its location + date + author + template, so it just overwrites
-// itself instead of duplicating.
-// ---------------------------------------------------------------------
-async function loadScoutingAliases(db) {
-  const snap = await db.collection('scoutingAliases').get();
-  const map = {};
-  snap.forEach((d) => { map[d.id] = d.data().fieldId; });
-  return map;
-}
-
-exports.importScoutingReport = onCall({ timeoutSeconds: 300, memory: '512MiB' }, async (request) => {
-  await requireAgronomyAccess(request.auth);
-  const crypto = require('crypto');
-
-  const rows = (request.data && request.data.rows) || [];
-  if (!Array.isArray(rows) || rows.length === 0) {
-    throw new HttpsError('invalid-argument', 'rows[] is required.');
-  }
-  if (rows.length > 1000) {
-    throw new HttpsError('invalid-argument', 'Send at most 1000 rows per call.');
-  }
-
-  const db = admin.firestore();
-  const fieldSnap = await db.collection('fields').get();
-  const lookup = buildFieldLookup(fieldSnap.docs);
-  const aliases = await loadScoutingAliases(db);
-
-  const docs = [];
-  const unmatched = {};
-  let skipped = 0;
-  let matchedRows = 0;
-
-  rows.forEach((r) => {
-    const location = String(r.location || '').trim();
-    const observed = r.observedAt ? new Date(r.observedAt) : null;
-    if (!location || !observed || Number.isNaN(observed.getTime())) { skipped++; return; }
-
-    const locNorm = normalizeFieldLabel(location);
-    let fieldId = aliases[locNorm] || null;
-    let matchType = fieldId ? 'alias' : null;
-    if (!fieldId && lookup[locNorm]) { fieldId = lookup[locNorm]; matchType = 'exact'; }
-    if (!fieldId) {
-      const fuzzy = findFuzzyFieldMatch(locNorm, lookup);
-      if (fuzzy) { fieldId = fuzzy; matchType = 'fuzzy'; }
-    }
-    if (fieldId) matchedRows++;
-    else unmatched[location] = (unmatched[location] || 0) + 1;
-
-    const author = String(r.author || '').trim();
-    const template = String(r.template || '').trim();
-    const id = crypto
-      .createHash('sha1')
-      .update(`${locNorm}|${observed.toISOString()}|${author}|${template}`)
-      .digest('hex');
-
-    const moisture = typeof r.moisture === 'number' && Number.isFinite(r.moisture) ? r.moisture : null;
-    docs.push({
-      id,
-      data: {
-        fieldId,
-        matchType,
-        rawLocation: location,
-        locNorm,
-        observedAt: admin.firestore.Timestamp.fromDate(observed),
-        author,
-        template,
-        moisture,
-        values: r.values && typeof r.values === 'object' ? r.values : {},
-        photos: r.photos ? String(r.photos) : null,
-        comments: r.comments ? String(r.comments) : null,
-        importedBy: request.auth.uid,
-        importedAt: admin.firestore.FieldValue.serverTimestamp()
-      }
-    });
-  });
-
-  // How many of these were already there (for the "N new, M updated" line).
-  let existing = 0;
-  for (let i = 0; i < docs.length; i += 300) {
-    const refs = docs.slice(i, i + 300).map((d) => db.collection('scoutingObservations').doc(d.id));
-    const snaps = await db.getAll(...refs);
-    existing += snaps.filter((s) => s.exists).length;
-  }
-
-  for (let i = 0; i < docs.length; i += 400) {
-    const batch = db.batch();
-    docs.slice(i, i + 400).forEach((d) => {
-      batch.set(db.collection('scoutingObservations').doc(d.id), d.data);
-    });
-    await batch.commit();
-  }
-
-  return {
-    received: rows.length,
-    saved: docs.length,
-    newRows: docs.length - existing,
-    updatedRows: existing,
-    matchedRows,
-    unmatchedRows: docs.length - matchedRows,
-    skippedRows: skipped,
-    unmatchedLocations: Object.entries(unmatched).map(([label, count]) => ({ label, count }))
-  };
-});
-
-// Assigns a Location label that wouldn't match on its own to a field -
-// remembered (scoutingAliases) so future uploads match it automatically, and
-// applied to every observation already saved under that label.
-exports.assignScoutingLocation = onCall({ timeoutSeconds: 120 }, async (request) => {
-  await requireAgronomyAccess(request.auth);
-
-  const { location, fieldId } = request.data || {};
-  if (!location || !fieldId) {
-    throw new HttpsError('invalid-argument', 'location and fieldId are required.');
-  }
-  const db = admin.firestore();
-  const locNorm = normalizeFieldLabel(location);
-
-  await db.collection('scoutingAliases').doc(locNorm).set({
-    fieldId,
-    label: String(location),
-    updatedBy: request.auth.uid,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp()
-  });
-
-  const snap = await db.collection('scoutingObservations').where('locNorm', '==', locNorm).get();
-  let updated = 0;
-  for (let i = 0; i < snap.docs.length; i += 400) {
-    const batch = db.batch();
-    snap.docs.slice(i, i + 400).forEach((d) => batch.update(d.ref, { fieldId, matchType: 'manual' }));
-    await batch.commit();
-    updated += Math.min(400, snap.docs.length - i);
-  }
-  return { ok: true, updated };
-});
-
-// ---------------------------------------------------------------------
-// Nitrogen applied, from Agworld activities (Oct 2026)
-//
-// Powers the "N applied" bars on the petiole chart and the N applied
-// last week / Total N applied cards on the Agronomy By field tab.
-//
-// Agworld's /user_api/v1/activities returns each logged job with its
-// products (activity_inputs: product name, rate, total_weight, total_area,
-// categories, substance) and the fields it covered (activity_fields). The
-// API docs don't say how much N a product carries, so pounds of N per acre
-// is worked out here:
-//   product lbs/ac  = total_weight / total_area when Agworld gives those,
-//                     otherwise the rate converted to lbs (liquids use a
-//                     per-gallon weight - UAN 32 is 11.06 lbs/gal etc.)
-//   N %             = product_substance when it names nitrogen, otherwise
-//                     read from the product name ("UAN 32", "32-0-0",
-//                     "10-34-0", "Urea", "AMS"...)
-// Anything that looks like fertilizer but can't be converted is listed in
-// the result (unresolved) so it can be fixed rather than silently missed.
-//
-// One doc per activity-field in nApplications/{activityId}__{fieldId}.
-// Agworld field ids are the same ids used for the fields/{id} docs.
-// ---------------------------------------------------------------------
-const N_LIQUID_LBS_PER_GAL = { 28: 10.65, 30: 10.85, 32: 11.06 };
-const MAX_ACTIVITY_PAGES = 80;
-
-function nMeasure(raw) {
-  if (raw == null || raw === '') return null;
-  if (typeof raw === 'number') return Number.isFinite(raw) ? { value: raw, unit: '', per: '' } : null;
-  if (typeof raw === 'object') {
-    const v = Number(raw.value != null ? raw.value : raw.amount);
-    if (!Number.isFinite(v)) return null;
-    const u = String(raw.unit || raw.units || '').toLowerCase();
-    return { value: v, unit: u.split('/')[0].trim(), per: (u.split('/')[1] || '').trim() };
-  }
-  const m = String(raw).match(/^\s*(-?[\d,]*\.?\d+)\s*([a-zA-Z_ .]*?)\s*(?:(?:\/|\bper\b)\s*([a-zA-Z_ .]+))?\s*$/);
-  if (!m) return null;
-  const value = parseFloat(m[1].replace(/,/g, ''));
-  if (!Number.isFinite(value)) return null;
-  return { value, unit: (m[2] || '').trim().toLowerCase(), per: (m[3] || '').trim().toLowerCase() };
-}
-
-function weightUnitToLbs(unit) {
-  const u = String(unit || '').toLowerCase().replace(/[.\s]/g, '');
-  if (['lb', 'lbs', 'pound', 'pounds'].includes(u)) return 1;
-  if (['oz', 'ounce', 'ounces'].includes(u)) return 1 / 16;
-  if (['kg', 'kilogram', 'kilograms'].includes(u)) return 2.20462;
-  if (['ton', 'tons', 'shortton'].includes(u)) return 2000;
-  if (['t', 'tonne', 'tonnes', 'mt'].includes(u)) return 2204.62;
-  if (u === 'cwt') return 100;
-  return null;
-}
-function volumeUnitToGal(unit) {
-  const u = String(unit || '').toLowerCase().replace(/[.\s]/g, '');
-  if (['gal', 'gals', 'gallon', 'gallons', 'usgal'].includes(u)) return 1;
-  if (['qt', 'quart', 'quarts'].includes(u)) return 0.25;
-  if (['pt', 'pint', 'pints'].includes(u)) return 0.125;
-  if (['floz', 'flozs'].includes(u)) return 1 / 128;
-  if (['l', 'lt', 'liter', 'liters', 'litre', 'litres'].includes(u)) return 0.264172;
-  if (['ml'].includes(u)) return 0.000264172;
-  return null;
-}
-function areaUnitToAcres(unit) {
-  const u = String(unit || '').toLowerCase().replace(/[.\s]/g, '');
-  if (!u || ['ac', 'acre', 'acres'].includes(u)) return 1;
-  if (['ha', 'hectare', 'hectares'].includes(u)) return 2.47105;
-  return null;
-}
-
-// % nitrogen from Agworld's product_substance, when it names nitrogen.
-function nPctFromSubstance(sub) {
-  let found = null;
-  const walk = (node) => {
-    if (found != null || node == null) return;
-    if (Array.isArray(node)) { node.forEach(walk); return; }
-    if (typeof node === 'object') {
-      const label = Object.values(node).find((v) => typeof v === 'string' && /^(n|nitrogen)$/i.test(v.trim()));
-      if (label !== undefined) {
-        for (const k of ['percent', 'percentage', 'concentration', 'content', 'amount', 'value']) {
-          const n = parseFloat(node[k]);
-          if (Number.isFinite(n) && n > 0 && n <= 100) { found = n; return; }
-        }
-      }
-      Object.values(node).forEach(walk);
-    }
-  };
-  walk(sub);
-  return found;
-}
-
-// % nitrogen read from a product's name. Returns null when it can't tell.
-function nPctFromName(name) {
-  const s = String(name || '').toUpperCase();
-  let m = s.match(/(\d{1,2}(?:\.\d+)?)\s*-\s*\d{1,2}(?:\.\d+)?\s*-\s*\d{1,2}(?:\.\d+)?/);
-  if (m) return parseFloat(m[1]);
-  m = s.match(/\b(?:UAN|N)[\s-]?(\d{2})\b/);
-  if (m) return parseFloat(m[1]);
-  if (/\bUREA\b/.test(s)) return 46;
-  if (/AMMONIUM SULF|\bAMS\b/.test(s)) return 21;
-  if (/AMMONIUM NITRATE|\bAN\b/.test(s)) return 34;
-  if (/ANHYDROUS|\bNH3\b/.test(s)) return 82;
-  m = s.match(/\bCAN[\s-]?(\d{2})\b/);
-  if (m) return parseFloat(m[1]);
-  if (/\bMAP\b/.test(s)) return 11;
-  if (/\bDAP\b/.test(s)) return 18;
-  if (/\bATS\b/.test(s)) return 12;
-  return null;
-}
-
-// Pounds of product per acre for one input, plus how it was worked out.
-function productLbsPerAcre(input, areaAc, pct, name) {
-  const tw = nMeasure(input.total_weight);
-  if (tw && areaAc > 0) {
-    const f = weightUnitToLbs(tw.unit);
-    if (f) return { lbs: (tw.value * f) / areaAc, method: 'total weight / area' };
-  }
-  const r = nMeasure(input.rate);
-  if (!r) return null;
-  const areaDiv = areaUnitToAcres(r.per);
-  if (areaDiv == null) return null;
-  const perAcreFactor = 1 / areaDiv; // "per ha" -> "per ac"
-  const w = weightUnitToLbs(r.unit);
-  if (w) return { lbs: r.value * w * perAcreFactor, method: 'rate (weight)' };
-  const g = volumeUnitToGal(r.unit);
-  if (g) {
-    const nm = String(name || '').toUpperCase();
-    let density = null;
-    let method = 'rate (gallons, assumed 10 lbs/gal)';
-    if (/10\s*-\s*34\s*-\s*0/.test(nm)) { density = 11.65; method = 'rate (gallons x 10-34-0 weight)'; }
-    else if (/\bATS\b|12\s*-\s*0\s*-\s*0\s*-\s*26/.test(nm)) { density = 11.1; method = 'rate (gallons x ATS weight)'; }
-    else if (pct >= 27) {
-      density = pct >= 31 ? N_LIQUID_LBS_PER_GAL[32] : pct >= 29 ? N_LIQUID_LBS_PER_GAL[30] : N_LIQUID_LBS_PER_GAL[28];
-      method = 'rate (gallons x UAN weight)';
-    }
-    if (density == null) density = 10.0;
-    return { lbs: r.value * g * density * perAcreFactor, method };
-  }
-  return null;
-}
-
-// One Agworld activity -> { date, perField:[{fieldId, seasonId, nLbsPerAc, inputs}], unresolved:[] }
-function nitrogenForActivity(a) {
-  const attrs = a.attributes || {};
-  const inputs = attrs.activity_inputs || attrs.inputs || [];
-  const fields = attrs.activity_fields || attrs.fields || [];
-  if (!Array.isArray(inputs) || !inputs.length || !Array.isArray(fields) || !fields.length) return null;
-  if (attrs.completed === false) return null;
-  const when = attrs.completed_at || attrs.started_at || attrs.due_at;
-  const date = when ? new Date(when) : null;
-  if (!date || Number.isNaN(date.getTime())) return null;
-  if (date.getUTCFullYear() < MIN_SEASON_YEAR) return null;
-
-  const totalFieldArea = fields.reduce((sum, f) => sum + (parseAreaToAcres(f.area) || 0), 0);
-  const unresolved = [];
-  const used = [];
-  let nLbsPerAc = 0;
-  inputs.forEach((input) => {
-    const type = String(input.input_type || '');
-    if (/seed|operation/i.test(type)) return;
-    const name = input.input_name || input.name || `product ${input.product_id}`;
-    const cats = [].concat(input.product_categories || []).map((c) => (typeof c === 'string' ? c : (c && c.name) || '')).join(' ');
-    const isFert = /fertili|nutrient|nitrogen/i.test(cats);
-    const pct = nPctFromSubstance(input.product_substance) || nPctFromName(name);
-    if (!pct) {
-      if (isFert) unresolved.push({ name, reason: 'N % unknown' });
-      return;
-    }
-    const areaAc = parseAreaToAcres(input.total_area) || totalFieldArea || parseAreaToAcres(attrs.area) || 0;
-    const prod = productLbsPerAcre(input, areaAc, pct, name);
-    if (!prod || !(prod.lbs > 0)) {
-      unresolved.push({ name, reason: 'could not work out lbs per acre from rate / total weight' });
-      return;
-    }
-    const n = (prod.lbs * pct) / 100;
-    nLbsPerAc += n;
-    used.push({ name, nPct: pct, productLbsPerAc: Math.round(prod.lbs * 10) / 10, nLbsPerAc: Math.round(n * 10) / 10, method: prod.method });
-  });
-  return {
-    date,
-    title: attrs.title || attrs.name || '',
-    nLbsPerAc: Math.round(nLbsPerAc * 10) / 10,
-    inputs: used,
-    unresolved,
-    fields: fields.map((f) => ({ fieldId: String(f.field_id), seasonId: f.season_id != null ? String(f.season_id) : null, farmId: f.farm_id != null ? String(f.farm_id) : null }))
-  };
-}
-
-async function fetchActivityPages(token, withUpdatedFilter) {
-  const out = [];
-  let truncated = false;
-  for (let page = 1; page <= MAX_ACTIVITY_PAGES; page++) {
-    const params = new URLSearchParams({ 'page[number]': String(page), 'page[size]': '100' });
-    if (withUpdatedFilter) params.set('updated_at', `${MIN_SEASON_YEAR}-01-01T00:00:00Z`);
-    const json = await agworldGet('/user_api/v1/activities', params, token);
-    out.push(...json.data);
-    if (!json.data.length || json.data.length < 100) return { activities: out, truncated: false };
-    if (page === MAX_ACTIVITY_PAGES) truncated = true;
-  }
-  return { activities: out, truncated };
-}
-
-async function syncNitrogen() {
-  const token = AGWORLD_TOKEN.value();
-  const db = admin.firestore();
-
-  let fetched;
-  let updatedFilterUsed = true;
-  try {
-    fetched = await fetchActivityPages(token, true);
-  } catch (err) {
-    // If Agworld rejects the updated_at filter, fall back to scanning
-    // everything (the year check above still drops old activities).
-    console.warn('activities updated_at filter rejected, retrying without it:', err.message);
-    updatedFilterUsed = false;
-    fetched = await fetchActivityPages(token, false);
-  }
-
-  const unresolvedCount = {};
-  const writes = [];
-  const seenIds = new Set();
-  let withFertilizer = 0;
-  let sample = null;
-  fetched.activities.forEach((a) => {
-    const attrs = a.attributes || {};
-    if (!sample && (attrs.activity_inputs || attrs.inputs)) {
-      sample = {
-        attributeKeys: Object.keys(attrs),
-        firstInputs: [].concat(attrs.activity_inputs || attrs.inputs).slice(0, 2),
-        firstFields: [].concat(attrs.activity_fields || attrs.fields || []).slice(0, 1)
-      };
-    }
-    const r = nitrogenForActivity(a);
-    if (!r) return;
-    r.unresolved.forEach((u) => {
-      const k = `${u.name} | ${u.reason}`;
-      unresolvedCount[k] = (unresolvedCount[k] || 0) + 1;
-    });
-    if (!(r.nLbsPerAc > 0)) return;
-    withFertilizer++;
-    r.fields.forEach((f) => {
-      if (!f.fieldId || (f.farmId && EXCLUDED_FARM_IDS.has(f.farmId))) return;
-      const id = `${a.id}__${f.fieldId}`;
-      seenIds.add(id);
-      writes.push([id, {
-        activityId: String(a.id),
-        fieldId: f.fieldId,
-        seasonId: f.seasonId,
-        date: admin.firestore.Timestamp.fromDate(r.date),
-        nLbsPerAc: r.nLbsPerAc,
-        title: r.title,
-        inputs: r.inputs,
-        syncedAt: admin.firestore.FieldValue.serverTimestamp()
-      }]);
-    });
-  });
-
-  for (let i = 0; i < writes.length; i += 400) {
-    const batch = db.batch();
-    writes.slice(i, i + 400).forEach(([id, data]) => batch.set(db.collection('nApplications').doc(id), data));
-    await batch.commit();
-  }
-
-  // Drop docs for activities that were edited/deleted in Agworld since the
-  // last sync - only when the whole list was scanned, never after a cut-off.
-  let staleRemoved = 0;
-  if (!fetched.truncated) {
-    const existing = await db.collection('nApplications').select().get();
-    const stale = existing.docs.filter((d) => !seenIds.has(d.id));
-    for (let i = 0; i < stale.length; i += 400) {
-      const batch = db.batch();
-      stale.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
-      await batch.commit();
-    }
-    staleRemoved = stale.length;
-  }
-
-  return {
-    activitiesScanned: fetched.activities.length,
-    activitiesWithNitrogen: withFertilizer,
-    docsWritten: writes.length,
-    staleRemoved,
-    truncated: fetched.truncated,
-    updatedFilterUsed,
-    unresolved: Object.entries(unresolvedCount)
-      .map(([k, count]) => ({ item: k, count }))
-      .sort((x, y) => y.count - x.count)
-      .slice(0, 30),
-    // Raw shape of the first activity that had inputs - only here so a
-    // mismatch with Agworld's real response is quick to diagnose.
-    sample
-  };
-}
-
-exports.syncNitrogenApplications = onCall(
-  { secrets: [AGWORLD_TOKEN], timeoutSeconds: 540, memory: '512MiB' },
-  async (request) => {
-    await requireAgronomyAccess(request.auth);
-    try {
-      return await syncNitrogen();
-    } catch (err) {
-      console.error('syncNitrogenApplications failed:', err);
-      throw new HttpsError('internal', err.message || 'Nitrogen sync failed.');
-    }
-  }
-);
-
-exports.syncNitrogenApplicationsNightly = onSchedule(
-  { schedule: 'every day 05:30', timeZone: 'America/Denver', secrets: [AGWORLD_TOKEN], timeoutSeconds: 540, memory: '512MiB' },
-  async () => {
-    const r = await syncNitrogen();
-    console.log(`N applied sync: ${r.activitiesScanned} activities, ${r.docsWritten} field records, ${r.staleRemoved} stale removed, ${r.unresolved.length} unresolved product types.`);
-  }
-);
 
 // ---------------------------------------------------------------------
 // Agri-Stor sync — PHASE 1 (READ-ONLY)
@@ -2759,6 +1329,9 @@ async function syncAgristorReadingsOnce() {
       plenumTempF: reading.plenumTempF,
       returnAirTempF: reading.returnAirTempF,
       returnVsPlenumF: reading.returnVsPlenumF,
+      // fan on/off at this reading — drives the app's "fans off > 10 of the
+      // last 24h" alert. Omitted when the bin doesn't report a fan value.
+      ...(reading.fanPct != null ? { fanOn: reading.fanPct > 0 } : {}),
       recordedAt: admin.firestore.FieldValue.serverTimestamp()
     });
     written++;
@@ -3137,6 +1710,14 @@ async function syncIviReadingsOnce() {
         returnVsSupplyF: reading.supplyTempF != null && reading.returnTempF != null
           ? Math.round((reading.returnTempF - reading.supplyTempF) * 10) / 10
           : null,
+        // fan on/off at this reading (Hz on Imperium; Fan boolean on
+        // Centurion) — drives the app's "fans off > 10 of 24h" alert.
+        ...((() => {
+          const fanOn = reading.fanHz != null ? reading.fanHz > 0
+            : (reading.fanPct != null ? reading.fanPct > 0
+              : (typeof reading.equipment?.Fan === 'boolean' ? reading.equipment.Fan : null));
+          return fanOn == null ? {} : { fanOn };
+        })()),
         recordedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
       written++;
@@ -3190,59 +1771,3 @@ exports.syncIviReadingsNow = onRequest(
     }
   }
 );
-
-// Pivot watcher (stuck-pivot alerts, lap-time audit, wet/dry hours) lives in
-// its own file so edits to this one can't erase it. See pivotWatcher.js.
-const pivotWatcher = require('./pivotWatcher');
-exports.checkStuckPivots = pivotWatcher.checkStuckPivots;
-exports.checkStuckPivotsNow = pivotWatcher.checkStuckPivotsNow;
-
-// Potato Storage -> Yield History link (measured cwt minus tare becomes a
-// potato yield). Lives in its own file for the same reason as pivotWatcher.
-// See storageYields.js.
-const storageYields = require('./storageYields');
-exports.syncStorageYieldsEvery15 = storageYields.syncStorageYieldsEvery15;
-exports.syncStorageYieldsNightly = storageYields.syncStorageYieldsNightly;
-exports.syncStorageYieldsNow = storageYields.syncStorageYieldsNow;
-
-// Satellite crop history for Contracts > Rotation (USDA NASS Cropland Data
-// Layer via CropScape). Lives in its own file — see satelliteRotation.js.
-const satelliteExports = satelliteRotation.makeExports(AGWORLD_TOKEN);
-exports.syncSatelliteRotationNow = satelliteExports.syncSatelliteRotationNow;
-exports.satelliteRotationWeekly = satelliteExports.satelliteRotationWeekly;
-
-// AgriMet weather archive for the ET column: saves each station's crop water
-// use file every morning (raw copy + parsed days and forecast). Lives in its
-// own file for the same reason as the ones above. See agrimet.js.
-const agrimet = require('./agrimet');
-exports.archiveAgrimetNightly = agrimet.archiveAgrimetNightly;
-exports.archiveAgrimetNow = agrimet.archiveAgrimetNow;
-
-// Field history links by location (old Agworld field outlines overlapped
-// with today's). Lives in its own file — see fieldLineage.js.
-const fieldLineageExports = require('./fieldLineage').makeExports(AGWORLD_TOKEN, MIN_SEASON_YEAR);
-exports.suggestFieldLineageByMap = fieldLineageExports.suggestFieldLineageByMap;
-
-// Sprinkler package reader: reads the system GPM and pivot name off a
-// package PDF when it's uploaded to a pivot profile. Lives in its own
-// file — see packageScan.js.
-const packageScan = require('./packageScan');
-exports.scanSprinklerPackage = packageScan.scanSprinklerPackage;
-
-// FieldNET (Lindsay) pivot reader: every 10 minutes reads the pivots
-// registered with statusSource 'fieldnet' and writes them into the same
-// pivots list the BaseStation3 sync uses. Lives in its own file for the same
-// reason as pivotWatcher. See fieldnetSync.js.
-const fieldnetSync = require('./fieldnetSync');
-exports.syncFieldnetPivots = fieldnetSync.syncFieldnetPivots;
-
-// Public farm map feed: a live KML link of the Agworld fields (crop colours,
-// acres) for Google Earth and other map programs. Lives in its own file —
-// see publicMapFeed.js.
-const publicMapFeed = require('./publicMapFeed');
-exports.publicFieldsKml = publicMapFeed.publicFieldsKml;
-
-// One-time Agworld discovery: what activity types (plans, work orders,
-// actuals) the API really returns, for the Operations plan sync. Lives in
-// its own file — see agworldCensus.js. Remove once that sync is built.
-exports.agworldActivityCensus = require('./agworldCensus').makeExports(AGWORLD_TOKEN, agworldGet).agworldActivityCensus;
