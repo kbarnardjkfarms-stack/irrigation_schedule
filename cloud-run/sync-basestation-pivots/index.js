@@ -298,6 +298,7 @@ http('syncBasestationPivots', async (req, res) => {
             AgSenseSupplementaryStates: device.AgSenseSupplementaryStates,
             PivotBasicStatus: device.PivotBasicStatus,
             PivotSupplementaryStates: device.PivotSupplementaryState || device.PivotSupplementaryStates,
+            MachineLength: device.MachineLength,
           };
         } else {
           data = await getPivotStatus(pivot.guid, auth);
@@ -307,6 +308,10 @@ http('syncBasestationPivots', async (req, res) => {
           throw new Error('Unrecognized status response. Keys: ' + Object.keys(data || {}).slice(0, 25).join(', '));
         }
         const status = data.PivotBasicStatus || data.AgSenseBasicStatus || {};
+        // Machine length (feet) as set in BaseStation3's Device Management.
+        // Read-only here: AIO never changes it, BaseStation stays the source.
+        const lengthRaw = Number(data.MachineLength);
+        const lengthFt = Number.isFinite(lengthRaw) && lengthRaw > 0 ? Math.round(lengthRaw * 10) / 10 : null;
 
         // The live pressure reading and the flags that say which source
         // is actually active for this panel don't live in PivotBasicStatus
@@ -410,7 +415,21 @@ http('syncBasestationPivots', async (req, res) => {
         if ((record.name ?? null) !== (pivot.name ?? null)) {
           console.log(`Name changed for RTU ${pivot.rtuId}: "${pivot.name}" -> "${record.name}"`);
         }
+        // Only overwrite the saved length when BaseStation actually sent one.
+        if (lengthFt != null) record.bsMachineLengthFt = lengthFt;
         await db.collection('pivots').doc(pivot.guid).set(record, {merge: true});
+
+        // The length also goes on the pivot's profile as machineLengthFt (feet),
+        // the same field the FieldNET sync fills, so the profile page can work
+        // out the pivot circle's acres. Written only when the number changes
+        // (or the profile never got it), not on every 10-minute run.
+        if (lengthFt != null && (pivot.bsMachineLengthFt !== lengthFt || pivot.bsLengthSaved !== true)) {
+          await db.collection('pivotProfiles').doc(pivot.guid).set({
+            machineLengthFt: lengthFt,
+            machineLengthSource: 'basestation',
+          }, {merge: true});
+          await db.collection('pivots').doc(pivot.guid).set({bsLengthSaved: true}, {merge: true});
+        }
         results.push({rtu: pivot.rtuId, ok: true});
       } catch (err) {
         console.error(`Failed for ${pivot.name}:`, err.message);
