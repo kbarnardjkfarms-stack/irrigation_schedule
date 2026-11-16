@@ -21,6 +21,9 @@
 //     "FIELD - 35E MINI"
 //   Valley V-Chart (Sprinkler Shop Valley/Paul): "Machine Flow 697 (GPM)",
 //     name under "Field Name"
+//   Zimmatic / Lindsay application chart (Butte Irrigation, often a phone
+//     photo): "Flowrate : 1321 gal/min", repeated under "Panel Inputs:
+//     1321 gal/min". No GPM wording at all, only gal/min.
 //
 // packageScan is keyed by storagePath, so the screen can tell whether the
 // scan belongs to the package currently on the profile (a scan of an older
@@ -33,6 +36,8 @@ const OCR_PAGES = [1, 2, 3, 4, 5]; // Vision reads at most 5 PDF pages per reque
 const MIN_GPM = 5;
 const MAX_GPM = 5000;
 const NUM = '(\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?)';
+// "gal/min" as OCR tends to give it (gal/min, gal / min, ga1/min, gal/rnin)
+const GAL_MIN = 'GA[L1I]\\s*[/|]\\s*(?:MIN|RNIN)\\b';
 
 // ---------------------------------------------------------------------------
 // Pure text helpers (no Firebase), exported for tests.
@@ -53,7 +58,9 @@ function findGpm(text) {
     // Valley V-Chart cover: "Machine Flow 697 (GPM)"
     { label: 'Machine flow', re: new RegExp('MACHINE\\s+FLOW\\s*[:=]?\\s*' + NUM + '\\s*\\(?\\s*GPM', 'gi') },
     // Wish Northwest cover, rounded target: "SYSTEM 109 GPM @ 50 PSI"
-    { label: 'System GPM (cover)', re: new RegExp('SYSTEM\\s+' + NUM + '\\s*GPM', 'gi') }
+    { label: 'System GPM (cover)', re: new RegExp('SYSTEM\\s+' + NUM + '\\s*GPM', 'gi') },
+    // Zimmatic / Lindsay chart: "Flowrate : 1321 gal/min"
+    { label: 'Flowrate (gal/min)', re: new RegExp('FLOW\\s*RATE\\s*[:=]?\\s*' + NUM + '\\s*' + GAL_MIN, 'gi') }
   ];
   for (const p of patterns) {
     let m;
@@ -61,6 +68,22 @@ function findGpm(text) {
       const n = toNumber(m[1]);
       if (n != null && n >= MIN_GPM && n <= MAX_GPM) return { gpm: n, label: p.label };
     }
+  }
+  // Last resort for layouts with no GPM label: numbers written in gal/min
+  // ("Flowrate" and "Panel Inputs" both say 1321 gal/min on a Zimmatic
+  // chart, and OCR can split a label from its number, so go by the unit).
+  // Only used when it is clear: one value, or one value that shows up more
+  // often than the rest. Otherwise it's left for a person to type.
+  const counts = new Map();
+  const unitRe = new RegExp(NUM + '\\s*' + GAL_MIN, 'gi');
+  let u;
+  while ((u = unitRe.exec(text)) !== null) {
+    const n = toNumber(u[1]);
+    if (n != null && n >= MIN_GPM && n <= MAX_GPM) counts.set(n, (counts.get(n) || 0) + 1);
+  }
+  if (counts.size) {
+    const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    if (ranked.length === 1 || ranked[0][1] > ranked[1][1]) return { gpm: ranked[0][0], label: 'Flow (gal/min)' };
   }
   return null;
 }
