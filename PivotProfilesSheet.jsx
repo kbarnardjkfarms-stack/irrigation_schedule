@@ -7,8 +7,8 @@ import { auth, db, storage } from './firebase.js'
 // profile settings editable in place. Saves go to the same pivotProfiles/{guid} document the single profile page
 // writes, in the same shapes, so the Firestore rules apply exactly as they do there. In particular a GPM can only be
 // set by: confirming the number read from the package, typing it while "No package printout" is ticked (no package on
-// file), or typing it from the package when the reader couldn't find one. A package PDF can be replaced or deleted here
-// (same steps as the profile page); a first upload, or a photo turned into a PDF, is done on the profile page.
+// file), or typing it from the package when the reader couldn't find one. A package PDF can be uploaded, replaced or deleted here
+// (same steps as the profile page); a photo turned into a PDF is done on the profile page.
 
 const INK = '#2b2b26'
 const MUTED = '#6b6a62'
@@ -235,7 +235,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
       </div>
       {!canEdit && <p style={{ ...small, color: WARN }}>You can look at these but not change them.</p>}
       <p style={{ ...small, margin: '0 0 8px', maxWidth: '90ch' }}>
-        Click a box and type. It saves when you leave the box or press Enter. You can replace or delete a package here; to add a first package, or to photograph a printout, open the pivot&rsquo;s own profile (click the pivot name). A GPM can only be typed when &ldquo;No printout&rdquo; is ticked, or when the package couldn&rsquo;t be read; otherwise confirm the number read from the package.
+        Click a box and type. It saves when you leave the box or press Enter. You can upload, replace or delete a package PDF here. To photograph a printout instead, open the pivot&rsquo;s own profile (click the pivot name). A GPM can only be typed when &ldquo;No printout&rdquo; is ticked, or when the package couldn&rsquo;t be read; otherwise confirm the number read from the package.
       </p>
 
       <div style={{ overflowX: 'auto', border: `0.5px solid ${LINE}`, borderRadius: 10, background: '#fff', maxHeight: 'calc(100vh - 230px)', overflowY: 'auto' }}>
@@ -282,7 +282,19 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                         </div>
                         {pkgError[r.guid] && <div style={{ fontSize: 11, color: BAD }}>{pkgError[r.guid]}</div>}
                       </>
-                    ) : <div><span style={{ color: MUTED }}>None</span>{pkgError[r.guid] && <div style={{ fontSize: 11, color: BAD }}>{pkgError[r.guid]}</div>}</div>}
+                    ) : (
+                      <div>
+                        <span style={{ color: MUTED }}>None</span>
+                        <div style={{ marginTop: 3 }}>
+                          <label style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #ccc', borderRadius: 5, background: lockEdit ? '#f4f2ec' : '#fff', cursor: lockEdit || busy[k('Package')] ? 'default' : 'pointer', color: lockEdit ? MUTED : INK }}>
+                            {busy[k('Package')] ? 'Uploading\u2026' : 'Upload PDF'}
+                            <input type="file" accept="application/pdf" aria-label={k('Upload package')} disabled={lockEdit || !!busy[k('Package')]} style={{ display: 'none' }}
+                              onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; replacePackage(r, f) }} />
+                          </label>
+                        </div>
+                        {pkgError[r.guid] && <div style={{ fontSize: 11, color: BAD }}>{pkgError[r.guid]}</div>}
+                      </div>
+                    )}
                   </td>
                   <td style={{ ...td, minWidth: 190 }}>
                     {r.gpmMode === 'confirmed' && (
@@ -291,7 +303,13 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                     {r.gpmMode === 'reading' && <span style={small}>{r.gpm != null ? `${r.gpm} in use. ` : ''}Reading the package&hellip;</span>}
                     {r.gpmMode === 'confirm' && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                        {r.gpm != null && <span style={small}>{r.gpm} in use</span>}
+                        {r.gpm != null && (() => {
+                          // Typed (or earlier) number vs what the package says: flag a big gap before confirming.
+                          const diff = r.gpm > 0 ? (r.scan.gpm - r.gpm) / r.gpm : 0
+                          const far = Math.abs(diff) > 0.1
+                          const text = r.scan.gpm === r.gpm ? `${r.gpm} in use, same as package` : `${r.gpm} in use, package says ${r.scan.gpm} (${Math.round(Math.abs(diff) * 100)}% ${diff > 0 ? 'higher' : 'lower'})`
+                          return <span data-testid="gpm-compare" style={{ ...small, color: far ? BAD : MUTED, fontWeight: far ? 600 : 400 }}>{text}</span>
+                        })()}
                         <button type="button" disabled={lockEdit || !!busy[k('GPM')]} onClick={() => confirmGpm(r)} style={{ fontSize: 12, padding: '4px 10px', background: INK, color: '#fff', border: 'none', borderRadius: 5 }}>{busy[k('GPM')] ? 'Confirming…' : `Confirm ${r.scan.gpm}`}</button>
                         <span style={{ width: 14, fontSize: 12, color: status[k('GPM')] && status[k('GPM')].error ? BAD : GOOD }} title={(status[k('GPM')] && status[k('GPM')].error) || ''}>{status[k('GPM')] && status[k('GPM')].error ? '!' : status[k('GPM')] && status[k('GPM')].saved ? '✓' : ''}</span>
                       </div>
