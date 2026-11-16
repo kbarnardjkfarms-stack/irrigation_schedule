@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { doc, setDoc } from 'firebase/firestore'
-import { auth, db } from './firebase.js'
+import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
+import { auth, db, storage } from './firebase.js'
 
 // "Pivot Profiles" spreadsheet view (Irrigation views dropdown): every pivot on one farm in a grid, with the
 // profile settings editable in place. Saves go to the same pivotProfiles/{guid} document the single profile page
 // writes, in the same shapes, so the Firestore rules apply exactly as they do there. In particular a GPM can only be
 // set by: confirming the number read from the package, typing it while "No package printout" is ticked (no package on
-// file), or typing it from the package when the reader couldn't find one. Package PDFs are uploaded on the profile page.
+// file), or typing it from the package when the reader couldn't find one. A package PDF can be replaced or deleted here
+// (same steps as the profile page); a first upload, or a photo turned into a PDF, is done on the profile page.
 
 const INK = '#2b2b26'
 const MUTED = '#6b6a62'
@@ -64,6 +66,7 @@ function NumberCell({ cellKey, value, disabled, min, max, integer, onSave, statu
 export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesByGuid, pivotGuidByFieldId, baseFieldsById, seasonDataByField, userRole, userProfile, selectedFarmId, onOpenProfile }) {
   const canEdit = EDIT_ROLES.includes(userRole)
   const isFarmManager = userRole === 'farm_manager'
+  const canDelete = ['admin', 'owner', 'farm_manager'].includes(userRole) // same as the profile page
   const availableFarms = useMemo(() => {
     if (!isFarmManager) return farms
     const mine = (userProfile && Array.isArray(userProfile.farmIds) ? userProfile.farmIds : []).map(String)
@@ -75,6 +78,9 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
   const [filter, setFilter] = useState('all') // all | noGpm | noPkg | confirm
   const [status, setStatusMap] = useState({})
   const [busy, setBusy] = useState({})
+  const [deleteTarget, setDeleteTarget] = useState(null) // { guid, name, pkg }
+  const [deleting, setDeleting] = useState(false)
+  const [pkgError, setPkgError] = useState({}) // guid -> message
   const timers = useRef({})
   const setStatus = (key, val) => {
     setStatusMap((s) => { const n = { ...s }; if (val) n[key] = val; else delete n[key]; return n })
@@ -159,6 +165,52 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
     gpmConfirmedBy: whoAmI(), gpmConfirmedAt: new Date().toISOString(), noPackagePrintout: false
   }))
 
+  // Replace: upload a new PDF as the pivot's package. The old one is filed in the package history, the GPM already
+  // in use stays until the new package's number is confirmed (same as the profile page).
+  async function replacePackage(r, file) {
+    if (!file) return
+    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')
+    if (!isPdf) { setPkgError((m) => ({ ...m, [r.guid]: 'AIO needs a PDF.' })); return }
+    setPkgError((m) => { const n = { ...m }; delete n[r.guid]; return n })
+    const key = `Package ${r.name}`
+    setBusy((b) => ({ ...b, [key]: true }))
+    try {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+      const path = `pivotProfiles/${r.guid}/${Date.now()}_${safeName}`
+      const fileRef = storageRef(storage, path)
+      await uploadBytes(fileRef, file)
+      const downloadUrl = await getDownloadURL(fileRef)
+      const newEntry = { fileName: file.name, uploadedAt: new Date().toISOString(), downloadUrl, storagePath: path }
+      const existingHistory = (r.profile && r.profile.sprinklerPackageHistory) || []
+      const history = r.profile && r.profile.sprinklerPackage
+        ? [{ ...r.profile.sprinklerPackage, replacedAt: new Date().toISOString() }, ...existingHistory]
+        : existingHistory
+      await save(r.guid, { sprinklerPackage: newEntry, sprinklerPackageHistory: history, noPackagePrintout: false })
+    } catch (e) {
+      setPkgError((m) => ({ ...m, [r.guid]: e.message || 'Upload failed.' }))
+    } finally {
+      setBusy((b) => { const n = { ...b }; delete n[key]; return n })
+    }
+  }
+
+  // Delete: removes the PDF itself, then its entry on the profile. The GPM already confirmed stays in use.
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    const { guid, pkg } = deleteTarget
+    setDeleting(true)
+    setPkgError((m) => { const n = { ...m }; delete n[guid]; return n })
+    try {
+      if (pkg.storagePath) {
+        try { await deleteObject(storageRef(storage, pkg.storagePath)) } catch (err) { if (!(err && err.code === 'storage/object-not-found')) throw err }
+      }
+      await save(guid, { sprinklerPackage: null })
+    } catch (e) {
+      setPkgError((m) => ({ ...m, [guid]: e.message || 'Could not delete the package.' }))
+    } finally {
+      setDeleting(false); setDeleteTarget(null)
+    }
+  }
+
   const chip = (id, label, n) => (
     <button key={id} type="button" onClick={() => setFilter(id)} aria-pressed={filter === id}
       style={{ padding: '5px 12px', borderRadius: 999, fontSize: 12.5, border: `1px solid ${filter === id ? INK : '#ccc'}`, background: filter === id ? INK : '#fff', color: filter === id ? '#fff' : INK }}>
@@ -183,7 +235,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
       </div>
       {!canEdit && <p style={{ ...small, color: WARN }}>You can look at these but not change them.</p>}
       <p style={{ ...small, margin: '0 0 8px', maxWidth: '90ch' }}>
-        Click a box and type. It saves when you leave the box or press Enter. Package PDFs are uploaded on each pivot&rsquo;s own profile (click the pivot name). A GPM can only be typed when &ldquo;No printout&rdquo; is ticked, or when the package couldn&rsquo;t be read; otherwise confirm the number read from the package.
+        Click a box and type. It saves when you leave the box or press Enter. You can replace or delete a package here; to add a first package, or to photograph a printout, open the pivot&rsquo;s own profile (click the pivot name). A GPM can only be typed when &ldquo;No printout&rdquo; is ticked, or when the package couldn&rsquo;t be read; otherwise confirm the number read from the package.
       </p>
 
       <div style={{ overflowX: 'auto', border: `0.5px solid ${LINE}`, borderRadius: 10, background: '#fff', maxHeight: 'calc(100vh - 230px)', overflowY: 'auto' }}>
@@ -217,8 +269,20 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                       <>
                         <a href={r.pkg.downloadUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.pkg.fileName}</a>
                         <span style={small}>{r.scan == null ? 'Reading…' : r.scan.status === 'read' ? `Reads ${r.scan.gpm} GPM` : r.scan.status === 'failed' ? "Couldn't read it" : 'No GPM found on it'}</span>
+                        <div style={{ display: 'flex', gap: 6, marginTop: 3 }}>
+                          <label style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #ccc', borderRadius: 5, background: lockEdit ? '#f4f2ec' : '#fff', cursor: lockEdit || busy[k('Package')] ? 'default' : 'pointer', color: lockEdit ? MUTED : INK }}>
+                            {busy[k('Package')] ? 'Uploading…' : 'Replace'}
+                            <input type="file" accept="application/pdf" aria-label={k('Replace package')} disabled={lockEdit || !!busy[k('Package')]} style={{ display: 'none' }}
+                              onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; replacePackage(r, f) }} />
+                          </label>
+                          {canDelete && (
+                            <button type="button" aria-label={k('Delete package')} disabled={!!busy[k('Package')]} onClick={() => setDeleteTarget({ guid: r.guid, name: r.name, pkg: r.pkg })}
+                              style={{ fontSize: 11, padding: '2px 8px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: BAD, borderRadius: 5 }}>Delete</button>
+                          )}
+                        </div>
+                        {pkgError[r.guid] && <div style={{ fontSize: 11, color: BAD }}>{pkgError[r.guid]}</div>}
                       </>
-                    ) : <span style={{ color: MUTED }}>None</span>}
+                    ) : <div><span style={{ color: MUTED }}>None</span>{pkgError[r.guid] && <div style={{ fontSize: 11, color: BAD }}>{pkgError[r.guid]}</div>}</div>}
                   </td>
                   <td style={{ ...td, minWidth: 190 }}>
                     {r.gpmMode === 'confirmed' && (
@@ -275,6 +339,22 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
           </tbody>
         </table>
       </div>
+
+      {deleteTarget && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div role="dialog" aria-label="Delete package" style={{ background: '#fff', borderRadius: 10, padding: 20, width: 320, maxWidth: '92vw', boxShadow: '0 4px 20px rgba(0,0,0,0.2)' }}>
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Delete this package?</div>
+            <div style={{ fontSize: 13, fontWeight: 600, wordBreak: 'break-all' }}>{deleteTarget.pkg.fileName}</div>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 10 }}>{deleteTarget.name}{deleteTarget.pkg.uploadedAt ? ` \u00b7 uploaded ${new Date(deleteTarget.pkg.uploadedAt).toLocaleDateString()}` : ''}</div>
+            <div style={{ fontSize: 13, color: '#555', lineHeight: 1.5, marginBottom: 8 }}>This deletes the PDF for good. You won&rsquo;t be able to get it back.</div>
+            <div style={{ fontSize: 12, color: '#555', lineHeight: 1.5, marginBottom: 16 }}>The GPM already confirmed stays in use until a new package is uploaded and confirmed.</div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => setDeleteTarget(null)} disabled={deleting} style={{ fontSize: 13 }}>Cancel</button>
+              <button type="button" onClick={confirmDelete} disabled={deleting} style={{ fontSize: 13, background: '#FBEAEA', border: '1px solid #E8B4B4', color: BAD }}>{deleting ? 'Deleting\u2026' : 'Delete package'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
