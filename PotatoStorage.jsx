@@ -6,7 +6,7 @@ import {
   Plus, ChevronRight, MapPin, Gauge, BarChart3, AlertTriangle, Check, Layers, Users, Sprout, Building2, FlaskConical, Trash2,
   Fan, Snowflake, Power, WifiOff, Wifi, Wind,
 } from "lucide-react";
-import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, query, where, getDocs, onSnapshot } from "firebase/firestore";
+import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, query, where, getDocs, onSnapshot, Timestamp } from "firebase/firestore";
 import { db } from "./firebase.js"; // AIO's existing Firebase project — same login, no second sign-in
 import { customerKey } from "./customerKey.js";
 /* =================================================================
@@ -2415,6 +2415,55 @@ function iviEquipActive(pct, boolValue) {
   if (boolValue != null) return boolValue === true;
   return false;
 }
+// Fan-off alert. The hourly syncs stamp each history point with fanOn
+// (true/false; left off when the monitor doesn't report a fan reading), so
+// this adds up, over the last 24 hours, how long the fans were off. Each
+// point covers the time until the next one (capped at 2h so a gap in the
+// sync — e.g. a panel offline — isn't counted as "off"). Only listens to
+// the last 24h of points, not the whole history.
+const FAN_OFF_ALERT_HOURS = 10;
+function useFanOffStatus(bay) {
+  const [points, setPoints] = useState(null);
+  const binName = bay?.agristorBinName, panelId = bay?.iviPanelId;
+  useEffect(() => {
+    let ref = null;
+    if (binName) ref = collection(db, "agristorReadings", agristorDocId(binName), "history");
+    else if (panelId) ref = collection(db, "iviReadings", panelId, "history");
+    if (!ref) { setPoints(null); return; }
+    const since = Timestamp.fromMillis(Date.now() - 24 * 3600 * 1000);
+    const unsub = onSnapshot(query(ref, where("recordedAt", ">=", since)), (snap) => {
+      setPoints(snap.docs.map((d) => d.data()));
+    }, (err) => { console.error("Fan history listen failed:", err); setPoints(null); });
+    return () => unsub();
+  }, [binName, panelId]);
+  return useMemo(() => {
+    if (!points) return null;
+    const pts = points
+      .filter((p) => typeof p.fanOn === "boolean" && p.recordedAt)
+      .map((p) => ({ t: typeof p.recordedAt.toMillis === "function" ? p.recordedAt.toMillis() : new Date(p.recordedAt).getTime(), on: p.fanOn }))
+      .filter((p) => Number.isFinite(p.t))
+      .sort((a, b) => a.t - b.t);
+    if (!pts.length) return { hasData: false, offHours: 0, alert: false };
+    const now = Date.now(), cap = 2 * 3600 * 1000, winStart = now - 24 * 3600 * 1000;
+    let offMs = 0;
+    pts.forEach((p, i) => {
+      const end = Math.min((pts[i + 1]?.t ?? now), p.t + cap);
+      const start = Math.max(p.t, winStart);
+      if (!p.on && end > start) offMs += end - start;
+    });
+    const offHours = Math.round((offMs / 3600000) * 10) / 10;
+    return { hasData: true, offHours, alert: offHours > FAN_OFF_ALERT_HOURS, fanOnNow: pts[pts.length - 1].on };
+  }, [points]);
+}
+function FanOffBanner({ fan }) {
+  if (!fan?.alert) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(224,135,135,0.12)", border: "1px solid #7a3b3b", borderRadius: 8, padding: "9px 14px", color: "#f0b4b4", fontSize: 13 }}>
+      <AlertTriangle size={15} color="#e08787" />
+      <span><b>Fans off {fan.offHours} of the last 24 hours</b> — more than {FAN_OFF_ALERT_HOURS}h. Check this bay.</span>
+    </div>
+  );
+}
 // Read-only card showing this bay's latest IVI/Centurion panel reading,
 // synced in by a separate scheduled Cloud Function (see syncIviReadings in
 // the functions project) — this component never talks to IVI itself, it
@@ -2857,6 +2906,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
   const [showAddZone, setShowAddZone] = useState(false);
   useEffect(() => { setShowAddZone(false); }, [bay.id]);
   const zone = bay.zones.find((z) => z.id === zoneId);
+  const fanStatus = useFanOffStatus(bay);
   const zoneData = data.zones[zoneId] || { pipeChecks: [], cwtRuns: [] };
   const zs = stats.zoneStats[zoneId];
   // Potatoes get pulled from (or filled back into) both ends of a run, so a
@@ -2933,6 +2983,7 @@ function BayDetail({ bay, data, stats, customers, varieties, readOnly, onAddPipe
   ].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {!bay.emptyDate && <FanOffBanner fan={fanStatus} />}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 22, color: "#eef1f6" }}>{bay.name}</h2>
@@ -3291,12 +3342,14 @@ function TempSummaryRow({ bay, building, location, onOpen }) {
     ts = ivi.panelLastUpdated; offline = ivi.status === "network_error";
   }
   const linked = !!(bay.agristorBinName || bay.iviPanelId);
+  const fan = useFanOffStatus(bay);
+  const fanAlert = !bay.emptyDate && fan?.alert;
   const status = delta != null && !offline ? deltaStatus(delta, daysSince(bay.fillDate, todayStr())) : null;
   const dim = offline || !linked;
   const cell = { ...tdStyle, color: dim ? "#5b6478" : "#eef1f6" };
   const products = Array.from(new Set(bay.zones.map((z) => z.variety).filter(Boolean)));
   return (
-    <tr onClick={() => onOpen(bay.id)} style={{ borderTop: "1px solid #232d40", cursor: "pointer" }}>
+    <tr onClick={() => onOpen(bay.id)} style={{ borderTop: "1px solid #232d40", cursor: "pointer", background: fanAlert ? "rgba(224,135,135,0.07)" : "transparent" }}>
       <td style={{ ...tdStyle, color: "#8790a3" }}>{location?.name || ""}</td>
       <td style={{ ...tdStyle, color: "#8790a3" }}>{building?.name || ""}</td>
       <td style={tdStyle}><b style={{ color: "#eef1f6" }}>{bay.name}</b></td>
@@ -3310,6 +3363,15 @@ function TempSummaryRow({ bay, building, location, onOpen }) {
         {!linked ? "no sensor linked" : offline ? `offline · last ${formatAgristorAge(ts)}` : (ag === undefined || ivi === undefined) ? "loading…" : source ? formatAgristorAge(ts) : "no reading yet"}
       </td>
       <td style={{ ...tdStyle, color: "#6f7890" }}>{source || ""}</td>
+      <td style={tdStyle}>
+        {fanAlert ? (
+          <span style={{ color: "#f0b4b4", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <AlertTriangle size={12} color="#e08787" /> off {fan.offHours}h / 24h
+          </span>
+        ) : fan?.hasData ? (
+          <span style={{ color: "#8790a3" }}>{fan.offHours}h off / 24h</span>
+        ) : <span style={{ color: "#5b6478" }}>—</span>}
+      </td>
     </tr>
   );
 }
@@ -3323,7 +3385,7 @@ function TempSummaryTab({ bays, buildingsById, locationsById, onOpen }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
         <div style={{ color: "#8790a3", fontSize: 12.5 }}>
-          Latest plenum, return and Δ T (return − plenum) for every bay at every site. IVI panels report supply air, shown here as plenum. Click a row to open the bay.
+          Latest plenum, return and Δ T (return − plenum) for every bay at every site. Rows turn red when fans have been off more than 10 of the last 24 hours. IVI panels report supply air, shown here as plenum. Click a row to open the bay.
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#c7cede", cursor: "pointer" }}>
           <input type="checkbox" checked={onlyLinked} onChange={(e) => setOnlyLinked(e.target.checked)} /> Only bays with a sensor
@@ -3342,11 +3404,12 @@ function TempSummaryTab({ bays, buildingsById, locationsById, onOpen }) {
               <th style={thStyle}>Δ T</th>
               <th style={thStyle}>Last reading</th>
               <th style={thStyle}>Source</th>
+              <th style={thStyle}>Fans (24h)</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((b) => <TempSummaryRow key={b.id} bay={b} building={buildingsById[b.buildingId]} location={locationsById[buildingsById[b.buildingId]?.locationId]} onOpen={onOpen} />)}
-            {rows.length === 0 && <tr><td colSpan={9} style={{ ...tdStyle, color: "#5b6478" }}>No bays to show.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={10} style={{ ...tdStyle, color: "#5b6478" }}>No bays to show.</td></tr>}
           </tbody>
         </table>
       </div>
