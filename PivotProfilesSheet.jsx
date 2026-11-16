@@ -19,9 +19,15 @@ const GOOD = '#2F6B2F'
 const WARN = '#854F0B'
 const BAD = '#A32D2D'
 
-const th = { textAlign: 'left', padding: '8px 8px', fontSize: 11.5, color: MUTED, fontWeight: 600, borderBottom: `1px solid ${LINE}`, background: '#f4f2ec', position: 'sticky', top: 0, zIndex: 3, whiteSpace: 'nowrap' }
-const td = { padding: '5px 8px', fontSize: 13, borderBottom: '0.5px solid #eee', verticalAlign: 'middle', background: '#fff' }
-const inputStyle = { width: 76, padding: '4px 6px', fontSize: 13, border: `1px solid #ccc`, borderRadius: 5, background: '#fff', textAlign: 'right' }
+// Fixed column widths (px) so every column has the same breathing room and nothing stretches with the window.
+// Groups: pivot info | package and flow | alerts and machine.
+const COLS = { pivot: 210, acres: 84, pkg: 200, gpm: 220, noPrint: 96, stuck: 110, corner: 104, cornerLen: 120, lap: 100 }
+const TABLE_W = Object.values(COLS).reduce((a, b) => a + b, 0)
+const GROUP_EDGE = `1px solid ${LINE}`
+const th = { textAlign: 'center', padding: '8px 12px', fontSize: 11.5, color: MUTED, fontWeight: 600, borderBottom: `1px solid ${LINE}`, background: '#f4f2ec', position: 'sticky', top: 30, zIndex: 3, lineHeight: 1.25 }
+const thGroup = { textAlign: 'left', padding: '7px 12px', fontSize: 10.5, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#8a8979', fontWeight: 600, background: '#ece9df', position: 'sticky', top: 0, zIndex: 3, height: 30, boxSizing: 'border-box' }
+const td = { padding: '8px 12px', height: 62, boxSizing: 'border-box', fontSize: 13, borderBottom: '0.5px solid #eee', verticalAlign: 'middle', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }
+const inputStyle = { width: 84, padding: '5px 6px', fontSize: 13, border: `1px solid #ccc`, borderRadius: 5, background: '#fff', textAlign: 'center' }
 const small = { fontSize: 11, color: MUTED }
 
 const EDIT_ROLES = ['admin', 'owner', 'farm_manager', 'irrigation_manager']
@@ -276,33 +282,42 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
         Click a box and type. It saves when you leave the box or press Enter. You can upload, replace or delete a package PDF here. To photograph a printout instead, open the pivot&rsquo;s own profile (click the pivot name). A GPM can only be typed when &ldquo;No printout&rdquo; is ticked, or when the package couldn&rsquo;t be read; otherwise confirm the number read from the package.
       </p>
 
-      <div style={{ overflowX: 'auto', border: `0.5px solid ${LINE}`, borderRadius: 10, background: '#fff', maxHeight: 'calc(100vh - 230px)', overflowY: 'auto' }}>
-        <table style={{ width: '100%', minWidth: 1020, borderCollapse: 'separate', borderSpacing: 0 }}>
+      <div style={{ width: 'fit-content', maxWidth: '100%', overflowX: 'auto', border: `0.5px solid ${LINE}`, borderRadius: 10, background: '#fff', maxHeight: 'calc(100vh - 230px)', overflowY: 'auto' }}>
+        <table style={{ width: TABLE_W, tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
+          <colgroup>
+            {Object.values(COLS).map((w, i) => <col key={i} style={{ width: w }} />)}
+          </colgroup>
           <thead>
             <tr>
-              <th style={{ ...th, left: 0, zIndex: 4, minWidth: 170 }}>Pivot</th>
-              <th style={{ ...th, textAlign: 'right' }}>Acres</th>
-              <th style={th}>Package</th>
-              <th style={th}>GPM</th>
+              <th colSpan={2} style={{ ...thGroup, left: 0, zIndex: 5 }}>Pivot</th>
+              <th colSpan={3} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>Package and flow</th>
+              <th colSpan={4} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>Alerts and corner machine</th>
+            </tr>
+            <tr>
+              <th style={{ ...th, textAlign: 'left', left: 0, zIndex: 4 }}>Pivot</th>
+              <th style={th}>Acres</th>
+              <th style={{ ...th, textAlign: 'left', borderLeft: GROUP_EDGE }}>Package</th>
+              <th style={{ ...th, textAlign: 'left' }}>GPM</th>
               <th style={th}>No printout</th>
-              <th style={{ ...th, textAlign: 'right' }}>Stuck alert (min)</th>
-              <th style={th}>Corner machine</th>
-              <th style={{ ...th, textAlign: 'right' }}>Corner length (ft)</th>
-              <th style={{ ...th, textAlign: 'right' }}>Min lap time (h)</th>
+              <th style={{ ...th, borderLeft: GROUP_EDGE }}>Stuck alert<br />(minutes)</th>
+              <th style={th}>Corner<br />machine</th>
+              <th style={th}>Corner length<br />(feet)</th>
+              <th style={th}>Min lap time<br />(hours)</th>
             </tr>
           </thead>
           <tbody>
-            {shown.map((r) => {
+            {shown.map((r, rowIdx) => {
+              const zebra = rowIdx % 2 === 1 ? '#fbfaf6' : '#fff'
               const k = (c) => `${c} ${r.name}`
               const lockEdit = !canEdit
               return (
                 <tr key={r.guid}>
-                  <td style={{ ...td, position: 'sticky', left: 0, zIndex: 2, minWidth: 170 }}>
+                  <td style={{ ...td, background: zebra, textAlign: 'left', position: 'sticky', left: 0, zIndex: 2 }}>
                     <button type="button" onClick={() => onOpenProfile(r.guid)} title="Open this pivot's full profile" style={{ border: 'none', background: 'none', padding: 0, textAlign: 'left', cursor: 'pointer', color: INK, fontWeight: 600, fontSize: 13 }}>{r.name}</button>
                     {r.baseName && <div style={small}>{r.baseName}</div>}
                   </td>
-                  <td style={{ ...td, textAlign: 'right' }}>{r.acres != null ? r.acres.toFixed(1) : '—'}</td>
-                  <td style={{ ...td, maxWidth: 220 }}>
+                  <td style={{ ...td, background: zebra }}>{r.acres != null ? r.acres.toFixed(1) : '—'}</td>
+                  <td style={{ ...td, background: zebra, textAlign: 'left', borderLeft: GROUP_EDGE, overflow: 'hidden' }}>
                     {r.pkg ? (
                       <>
                         <a href={r.pkg.downloadUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.pkg.fileName}</a>
@@ -334,7 +349,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                       </div>
                     )}
                   </td>
-                  <td style={{ ...td, minWidth: 190 }}>
+                  <td style={{ ...td, background: zebra, textAlign: 'left' }}>
                     {r.gpmMode === 'confirmed' && (
                       <div><b>{r.gpm}</b> <span style={{ fontSize: 11, color: GOOD }}>{r.profile.gpmSource === 'typedFromPackage' ? '✓ typed from package' : '✓ from package'}</span></div>
                     )}
@@ -366,31 +381,31 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                       </div>
                     )}
                   </td>
-                  <td style={{ ...td, textAlign: 'center' }}>
+                  <td style={{ ...td, background: zebra }}>
                     <input type="checkbox" aria-label={k('No printout')} checked={!!r.profile.noPackagePrintout && !r.pkg} disabled={lockEdit || !!r.pkg}
                       title={r.pkg ? 'A package is on file' : ''}
                       onChange={(e) => run(k('No printout'), () => save(r.guid, { noPackagePrintout: e.target.checked }))} />
                     {status[k('No printout')] && status[k('No printout')].error && <div style={{ fontSize: 11, color: BAD }}>{status[k('No printout')].error}</div>}
                   </td>
-                  <td style={{ ...td, textAlign: 'right' }}>
+                  <td style={{ ...td, background: zebra, borderLeft: GROUP_EDGE }}>
                     <NumberCell cellKey={k('Stuck alert')} colKey="threshold" value={r.threshold} integer min={45} max={120} disabled={lockEdit} status={status} setStatus={setStatus}
                       onSave={(n) => save(r.guid, { stuckAlertThresholdMinutes: n })} />
                   </td>
-                  <td style={{ ...td, textAlign: 'center' }}>
+                  <td style={{ ...td, background: zebra }}>
                     <input type="checkbox" aria-label={k('Corner machine')} checked={r.hasCorner} disabled={lockEdit}
                       onChange={(e) => run(k('Corner machine'), () => save(r.guid, { hasCornerMachine: e.target.checked }))} />
                   </td>
-                  <td style={{ ...td, textAlign: 'right' }}>
+                  <td style={{ ...td, background: zebra }}>
                     {r.hasCorner
                       ? <NumberCell cellKey={k('Corner length')} colKey="corner" value={r.cornerLen} min={1} disabled={lockEdit} status={status} setStatus={setStatus} onSave={(n) => save(r.guid, { cornerMachineLengthFt: n })} />
                       : <span style={{ color: '#bbb' }}>{'—'}</span>}
                   </td>
-                  <td style={{ ...td, textAlign: 'right', color: r.lapDrift ? BAD : MUTED }}>{r.lap != null ? `${Number(r.lap).toFixed(1)}${r.lapDrift ? ' ⚠' : ''}` : '—'}</td>
+                  <td style={{ ...td, background: zebra, color: r.lapDrift ? BAD : MUTED }}>{r.lap != null ? `${Number(r.lap).toFixed(1)}${r.lapDrift ? ' ⚠' : ''}` : '—'}</td>
                 </tr>
               )
             })}
             {shown.length === 0 && (
-              <tr><td colSpan={9} style={{ ...td, textAlign: 'center', color: MUTED, padding: 24 }}>{rows.length ? 'No pivots match this filter.' : 'No pivots are linked to fields on this farm yet.'}</td></tr>
+              <tr><td colSpan={9} style={{ ...td, height: 'auto', color: MUTED, padding: 24 }}>{rows.length ? 'No pivots match this filter.' : 'No pivots are linked to fields on this farm yet.'}</td></tr>
             )}
           </tbody>
         </table>
