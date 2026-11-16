@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { doc, setDoc } from 'firebase/firestore'
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 import { auth, db, storage } from './firebase.js'
+import GpmChangeDialog from './GpmChangeDialog.jsx'
+import { nextGpm } from './gpmHistory.js'
 
 // "Pivot Profiles" spreadsheet view (Irrigation views dropdown): every pivot on one farm in a grid, with the
 // profile settings editable in place. Saves go to the same pivotProfiles/{guid} document the single profile page
@@ -41,7 +43,11 @@ function NumberCell({ cellKey, value, disabled, min, max, integer, onSave, statu
       return
     }
     setStatus(cellKey, { saving: true })
-    try { await onSave(n); setDraft(null); setStatus(cellKey, { saved: true }) } catch (e) { setStatus(cellKey, { error: e.message || 'Could not save.' }) }
+    try {
+      const res = await onSave(n)
+      if (res === 'ask') { setStatus(cellKey, null); return } // waiting for the "mistake or real change?" question
+      setDraft(null); setStatus(cellKey, { saved: true })
+    } catch (e) { setStatus(cellKey, { error: e.message || 'Could not save.' }) }
   }
   const st = status[cellKey] || {}
   return (
@@ -80,6 +86,9 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
   const [busy, setBusy] = useState({})
   const [deleteTarget, setDeleteTarget] = useState(null) // { guid, name, pkg }
   const [deleting, setDeleting] = useState(false)
+  const [pending, setPending] = useState(null) // { r, n, source, extra, key }: a GPM change waiting for "mistake or real change?"
+  const [pendingBusy, setPendingBusy] = useState(false)
+  const [gpmEpoch, setGpmEpoch] = useState(0) // bumps to clear a typed number that was not saved
   const [pkgError, setPkgError] = useState({}) // guid -> message
   const timers = useRef({})
   const setStatus = (key, val) => {
@@ -155,15 +164,44 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
     setBusy((b) => ({ ...b, [key]: true })); setStatus(key, { saving: true })
     try { await fn(); setStatus(key, { saved: true }) } catch (e) { setStatus(key, { error: e.message || 'Could not save.' }) } finally { setBusy((b) => { const n = { ...b }; delete n[key]; return n }) }
   }
-  const saveGpm = (r, source, n) => save(r.guid, {
-    currentGpm: n, gpmSource: source,
+  // Every GPM change keeps a history so past seasons use the GPM the pivot had at the time. A first GPM, or the same
+  // number again, saves straight away; a different number than the one in use asks "fixing a mistake, or did the
+  // pivot change?" first.
+  const gpmDiffers = (r, n) => Number(r.profile.currentGpm) > 0 && Number(r.profile.currentGpm) !== n
+  const writeGpm = (r, n, source, extra, choice) => save(r.guid, {
+    ...extra,
+    ...nextGpm(r.profile, n, choice.mode, { by: whoAmI(), source, from: choice.from, now: new Date().toISOString() })
+  })
+  const typedExtra = (r, source) => ({
+    gpmSource: source,
     gpmConfirmedPath: source === 'typedFromPackage' && r.pkg ? r.pkg.storagePath : null,
     gpmConfirmedBy: whoAmI(), gpmConfirmedAt: new Date().toISOString()
   })
-  const confirmGpm = (r) => run(`GPM ${r.name}`, () => save(r.guid, {
-    currentGpm: r.scan.gpm, gpmSource: 'package', gpmConfirmedPath: r.pkg.storagePath,
+  const saveGpm = async (r, source, n) => {
+    if (gpmDiffers(r, n)) { setPending({ r, n, source, extra: typedExtra(r, source), key: `GPM ${r.name}` }); return 'ask' }
+    await writeGpm(r, n, source, typedExtra(r, source), { mode: 'new', from: null })
+  }
+  const confirmExtra = (r) => ({
+    gpmSource: 'package', gpmConfirmedPath: r.pkg.storagePath,
     gpmConfirmedBy: whoAmI(), gpmConfirmedAt: new Date().toISOString(), noPackagePrintout: false
-  }))
+  })
+  const confirmGpm = (r) => {
+    if (gpmDiffers(r, r.scan.gpm)) { setPending({ r, n: r.scan.gpm, source: 'package', extra: confirmExtra(r), key: `GPM ${r.name}` }); return }
+    return run(`GPM ${r.name}`, () => writeGpm(r, r.scan.gpm, 'package', confirmExtra(r), { mode: 'new', from: null }))
+  }
+  async function chooseGpmChange(choice) {
+    if (!pending) return
+    const { r, n, source, extra, key } = pending
+    setPendingBusy(true); setStatus(key, { saving: true })
+    try {
+      await writeGpm(r, n, source, extra, choice)
+      setStatus(key, { saved: true })
+    } catch (e) {
+      setStatus(key, { error: e.message || 'Could not save.' })
+    } finally {
+      setPendingBusy(false); setPending(null); setGpmEpoch((x) => x + 1)
+    }
+  }
 
   // Replace: upload a new PDF as the pivot's package. The old one is filed in the package history, the GPM already
   // in use stays until the new package's number is confirmed (same as the profile page).
@@ -316,7 +354,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                     )}
                     {(r.gpmMode === 'typeFromPackage' || r.gpmMode === 'manual') && (
                       <div>
-                        <NumberCell cellKey={k('GPM')} colKey="gpm" value={r.gpm} min={5} max={5000} disabled={lockEdit} status={status} setStatus={setStatus}
+                        <NumberCell key={`gpm-${r.guid}-${gpmEpoch}`} cellKey={k('GPM')} colKey="gpm" value={r.gpm} min={5} max={5000} disabled={lockEdit} status={status} setStatus={setStatus}
                           onSave={(n) => saveGpm(r, r.gpmMode === 'manual' ? 'manual' : 'typedFromPackage', n)} />
                         <div style={small}>{r.gpmMode === 'manual' ? 'entered by hand' : 'typed from the package'}</div>
                       </div>
@@ -357,6 +395,10 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
           </tbody>
         </table>
       </div>
+
+      {pending && (
+        <GpmChangeDialog profile={pending.r.profile} newGpm={pending.n} busy={pendingBusy} onCancel={() => { setPending(null); setGpmEpoch((x) => x + 1) }} onChoose={chooseGpmChange} />
+      )}
 
       {deleteTarget && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
