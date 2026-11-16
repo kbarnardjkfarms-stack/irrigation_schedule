@@ -210,6 +210,36 @@ function Section({ title, children }) {
   )
 }
 
+// One label / value line inside a read-only info card.
+function InfoRow({ label, children, muted }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '12px', padding: '8px 0', borderBottom: '1px solid #f0eee7', fontSize: '13px' }}>
+      <span style={{ color: '#666' }}>{label}</span>
+      <span style={{ fontWeight: muted ? 400 : 600, color: muted ? '#999' : '#2b2b26', textAlign: 'right' }}>{children}</span>
+    </div>
+  )
+}
+
+// "330°" or "88.5°"; null when the controller sent no usable angle.
+function degLabel(v) {
+  if (v == null || v === '' || isNaN(Number(v))) return null
+  return `${Math.round(Number(v) * 10) / 10}\u00b0`
+}
+
+// Firestore Timestamp, ISO string or Date -> Date (or null).
+function toDateMaybe(v) {
+  if (!v) return null
+  const d = typeof v.toDate === 'function' ? v.toDate() : new Date(v)
+  return isNaN(d.getTime()) ? null : d
+}
+
+function syncedLabel(d) {
+  if (!d) return null
+  const sameDay = d.toDateString() === new Date().toDateString()
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
+}
+
 export default function PivotProfile({ pivotGuid, onBack }) {
   const [pivot, setPivot] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -569,6 +599,15 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const headingName = fieldNames.length > 0 ? fieldNames.join(' + ') : (baseStationName || 'Pivot')
   const showBaseStationName = !!(baseStationName && fieldNames.length > 0 && !fieldNames.includes(baseStationName))
 
+  // Read-only controller info (comes from BaseStation / AgSense / FieldNET,
+  // never typed in AIO). Start = reverse stop angle, stop = forward stop angle,
+  // the same two angles the pivot icon sweeps between. Equal angles (usually
+  // 0 and 0) mean no stops are set, i.e. a full circle.
+  const ctlStart = pivot ? degLabel(pivot.reverseAngle) : null
+  const ctlStop = pivot ? degLabel(pivot.forwardAngle) : null
+  const ctlNoStops = !pivot || ctlStart == null || ctlStop == null || Number(pivot.reverseAngle) === Number(pivot.forwardAngle)
+  const ctlSynced = syncedLabel(toDateMaybe(pivot && (brand === 'FieldNET' ? (pivot.fieldnetCheckedAt || pivot.updatedAt) : pivot.updatedAt)))
+
   // System GPM. The package reader's result only counts if it was read from
   // the PDF that is on the profile right now.
   const scanRaw = profile && profile.packageScan
@@ -644,6 +683,24 @@ export default function PivotProfile({ pivotGuid, onBack }) {
           </div>
         </div>
       </div>
+
+      <Group title="From controller" />
+
+      <Section title="Controller info">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '-4px 0 6px' }}>
+          <span data-testid="ctl-source" style={{ fontSize: '10px', fontWeight: 600, padding: '2px 8px', borderRadius: '10px', background: '#eaf0f8', color: '#2d5a8e', border: '1px solid #cfdcee' }}>{brand}</span>
+          <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#888' }}>Read-only{ctlSynced ? ` \u00b7 synced ${ctlSynced}` : ''}</span>
+        </div>
+        <InfoRow label="Machine length" muted={pivotLengthFt == null || !(pivotLengthFt > 0)}>
+          {pivotLengthFt != null && pivotLengthFt > 0 ? `${Math.round(pivotLengthFt).toLocaleString()} ft` : 'Not loaded yet'}
+        </InfoRow>
+        <InfoRow label="Start angle" muted={ctlNoStops}>{ctlNoStops ? 'Not set' : ctlStart}</InfoRow>
+        <InfoRow label="Stop angle" muted={ctlNoStops}>{ctlNoStops ? 'Not set' : ctlStop}</InfoRow>
+        {pivot && pivot.rtuId != null && pivot.rtuId !== '' && <InfoRow label="Panel ID (RTU)">{String(pivot.rtuId)}</InfoRow>}
+        <div style={{ fontSize: '10px', color: '#888', marginTop: '10px', background: '#f4f2ec', borderRadius: '8px', padding: '8px 10px', lineHeight: 1.45 }}>
+          This comes straight from {brand}. To change it, edit the pivot in {brand}. AIO can't change these numbers.
+        </div>
+      </Section>
 
       <Group title="Setup" />
 
