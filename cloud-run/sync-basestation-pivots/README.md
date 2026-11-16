@@ -1,6 +1,6 @@
 # sync-basestation-pivots
 
-Reads BaseStation3 (Valley) and AgSense 365 pivot status every 10 minutes and writes it to the `pivots` collection in Firestore (status, direction, position, pressure, wet/dry, and the status label / red-fault fields shown under each pivot icon in AIO).
+Reads BaseStation3 (Valley) and AgSense 365 pivot status every 10 minutes and writes it to the `pivots` collection in Firestore (status, direction, position, pressure, wet/dry, the status label / red-fault fields shown under each pivot icon in AIO, and the pivot's machine length).
 
 - Runs as a Cloud Run service `sync-basestation-pivots` in `us-central1`, project `irrigation-schedule-f8b69`. Cloud Scheduler job `sync-basestation-pivots-schedule` calls it every 10 minutes.
 - Login comes from the service's environment variables `BASESTATION3_USERNAME` and `BASESTATION3_PASSWORD`. They are NOT in this repo and must never be committed.
@@ -15,4 +15,4 @@ To change it: edit `index.js` here, then in the Google Cloud console open Cloud 
 
 Check that they match: the newest zip in `gs://run-sources-irrigation-schedule-f8b69-us-central1/services/sync-basestation-pivots/` is what is deployed.
 
-Copy last checked against the deployed version: Nov 10, 2026 (index.js sha256 starts 2b879a4f63cd1d7d).
+Copy last checked against the deployed version: Nov 16, 2026 (index.js sha256 starts 5c6b60065a216250). Nov 16 change: also saves BaseStation's MachineLength (feet) as pivots.bsMachineLengthFt and pivotProfiles.machineLengthFt, read-only in AIO.
