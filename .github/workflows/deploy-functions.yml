@@ -1,7 +1,14 @@
 name: Deploy Cloud Functions
 
-# Runs automatically whenever something in functions/ changes on main —
-# no manual Cloud Console steps needed after this.
+# Runs automatically whenever something in functions/ changes on main.
+#
+# Safety: before deploying, the "Safety check" step compares functions/index.js with the
+# version that was on main just before this push. If pieces went missing (a function, a
+# file hookup, or the file got a lot smaller, which is what an old copy pasted over the
+# new one looks like) it stops and nothing is deployed. To remove something on purpose,
+# put [allow-removal] in the commit message.
+# The deploy also no longer uses --force, so it will not delete running functions that
+# are missing from the code; it stops with an error instead.
 on:
   push:
     branches: [main]
@@ -15,11 +22,52 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: Safety check (stop if functions/index.js lost pieces)
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          node - <<'NODE'
+          // Safety check run before the functions deploy. Compares functions/index.js with the version
+          // that was on main before this push and stops the deploy if pieces went missing.
+          const { execSync } = require('child_process');
+          const fs = require('fs');
+          const before = process.env.BEFORE_SHA || '';
+          const file = process.env.INDEX_FILE || 'functions/index.js';
+          const sh = (c) => execSync(c, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 });
+          if (!before || /^0+$/.test(before)) { console.log('No earlier version to compare with; skipping the check.'); process.exit(0); }
+          let msg = '';
+          try { msg = sh('git log -1 --format=%B'); } catch (e) {}
+          if (process.env.COMMIT_MSG) msg = process.env.COMMIT_MSG;
+          if (msg.includes('[allow-removal]')) { console.log('Commit message has [allow-removal]; skipping the check.'); process.exit(0); }
+          let oldSrc;
+          try { oldSrc = sh(`git show ${before}:${file}`); } catch (e) { console.log('Earlier version of ' + file + ' not found; skipping the check.'); process.exit(0); }
+          const newSrc = fs.readFileSync(file, 'utf8');
+          const requires = (s) => new Set([...s.matchAll(/require\(\s*['"](\.\/[^'"]+)['"]\s*\)/g)].map((m) => m[1]));
+          const exportsOf = (s) => new Set([...s.matchAll(/^exports\.(\w+)/gm)].map((m) => m[1]));
+          const missing = (a, b) => [...a].filter((x) => !b.has(x));
+          const lostReq = missing(requires(oldSrc), requires(newSrc));
+          const lostExp = missing(exportsOf(oldSrc), exportsOf(newSrc));
+          const ratio = newSrc.length / oldSrc.length;
+          const problems = [];
+          if (lostReq.length) problems.push('These file hookups are gone: ' + lostReq.join(', '));
+          if (lostExp.length) problems.push('These functions are gone: ' + lostExp.join(', '));
+          if (ratio < 0.7) problems.push(`The file shrank to ${Math.round(ratio * 100)}% of its earlier size`);
+          if (problems.length) {
+            console.error('::error::STOPPED: functions/index.js looks older or smaller than the version already on main. Nothing was deployed.');
+            problems.forEach((p) => console.error(' - ' + p));
+            console.error('If you really meant to remove these, put [allow-removal] in the commit message and commit again.');
+            process.exit(1);
+          }
+          console.log(`Check passed: ${exportsOf(newSrc).size} functions, ${requires(newSrc).size} file hookups, nothing lost.`);
+          NODE
 
       - name: Write service account key to file
         run: echo '${{ secrets.GCP_SA_KEY }}' > "$HOME/gcp-key.json"
@@ -32,4 +80,4 @@ jobs:
         working-directory: functions
         env:
           GOOGLE_APPLICATION_CREDENTIALS: /home/runner/gcp-key.json
-        run: npx firebase-tools deploy --only functions,firestore:rules --project irrigation-schedule-f8b69 --non-interactive --force
+        run: npx firebase-tools deploy --only functions,firestore:rules --project irrigation-schedule-f8b69 --non-interactive
