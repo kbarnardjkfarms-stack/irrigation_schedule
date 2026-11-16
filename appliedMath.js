@@ -10,6 +10,8 @@
 // (pi x length^2, scaled by the wiper arc) when its length is known, because
 // the water falls on the whole circle, farmed or not. No length: AgWorld acres.
 
+import { gpmForWeek } from './gpmHistory.js'
+
 export const GALLONS_PER_ACRE_INCH = 27154
 
 // The Monday of the week the weekly log started counting (Nov 9, 2026).
@@ -35,7 +37,8 @@ export function computeApplied({ pivotGuid, pivot, profile, field, wetLog, weekI
   if (!pivotGuid) return blank('no-pivot')
   if (weekId < WET_LOG_START_WEEK) return blank('not-tracked')
   if (weekId > currentWeekId) return blank('future')
-  const gpm = profile && Number(profile.currentGpm) > 0 ? Number(profile.currentGpm) : null
+  // The GPM the pivot had that week (a pivot's GPM can change when its package does).
+  const gpm = gpmForWeek(profile, weekId)
   if (!gpm) return blank('no-gpm')
 
   const hasCorner = !!(profile && profile.hasCornerMachine)
