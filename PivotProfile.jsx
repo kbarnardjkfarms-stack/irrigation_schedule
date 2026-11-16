@@ -3,6 +3,8 @@ import { collection, doc, getDoc, getDocs, onSnapshot, query, setDoc, where } fr
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 import { db, storage, auth } from './firebase.js'
 import PivotIcon from './PivotIcon.jsx'
+import GpmChangeDialog from './GpmChangeDialog.jsx'
+import { nextGpm, describeHistory } from './gpmHistory.js'
 
 // ---------------------------------------------------------------------------
 // Photo of a printout -> PDF. The phone's own camera takes the picture (the
@@ -219,6 +221,8 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const photos = usePhotoPages(savePackage, setUploadError)
   const [gpmSaved, setGpmSaved] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const [pendingGpm, setPendingGpm] = useState(null) // { newGpm, source, extra } waiting for "mistake or real change?"
+  const [pendingBusy, setPendingBusy] = useState(false)
   const [fieldNames, setFieldNames] = useState([])
   const [role, setRole] = useState(null)
   const [showHistory, setShowHistory] = useState(false)
@@ -369,22 +373,52 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     const pk = profile && profile.sprinklerPackage
     const sc = profile && profile.packageScan
     if (!pk || !sc || sc.storagePath !== pk.storagePath || sc.status !== 'read' || sc.gpm == null) return
-    setConfirming(true)
     setError(null)
+    await requestGpm(sc.gpm, 'package', {
+      gpmSource: 'package',
+      gpmConfirmedPath: pk.storagePath,
+      gpmConfirmedBy: whoAmI(),
+      gpmConfirmedAt: new Date().toISOString(),
+      noPackagePrintout: false
+    })
+  }
+
+  // Every GPM change goes through here so the history stays right. A first GPM, or the same number again, saves
+  // straight away; a different number than the one in use first asks "fixing a mistake, or did the pivot change?"
+  // (past seasons keep the GPM the pivot had at the time).
+  async function requestGpm(newGpm, source, extra) {
+    const old = Number(profile && profile.currentGpm)
+    if (old > 0 && old !== newGpm) { setPendingGpm({ newGpm, source, extra }); return }
+    await writeGpm(newGpm, source, extra, { mode: 'new', from: null })
+  }
+
+  async function writeGpm(newGpm, source, extra, choice) {
+    const flag = source === 'package' ? setConfirming : null
+    if (flag) flag(true)
     try {
       await setDoc(doc(db, 'pivotProfiles', pivotGuid), {
-        currentGpm: sc.gpm,
-        gpmSource: 'package',
-        gpmConfirmedPath: pk.storagePath,
-        gpmConfirmedBy: whoAmI(),
-        gpmConfirmedAt: new Date().toISOString(),
-        noPackagePrintout: false
+        ...extra,
+        ...nextGpm(profile, newGpm, choice.mode, { by: whoAmI(), source, from: choice.from, now: new Date().toISOString() })
       }, { merge: true })
+      if (source !== 'package') {
+        setGpmSaved(true)
+        setTimeout(() => setGpmSaved(false), 1500)
+      }
+      return true
     } catch (err) {
-      setError(err.message || 'Could not confirm the GPM.')
+      setError(err.message || (source === 'package' ? 'Could not confirm the GPM.' : 'Could not save the GPM.'))
+      return false
     } finally {
-      setConfirming(false)
+      if (flag) flag(false)
     }
+  }
+
+  async function handleChooseGpmChange(choice) {
+    if (!pendingGpm) return
+    setPendingBusy(true)
+    await writeGpm(pendingGpm.newGpm, pendingGpm.source, pendingGpm.extra, choice)
+    setPendingBusy(false)
+    setPendingGpm(null)
   }
 
   // Deletes a package for good: the PDF file itself, then its entry on the
@@ -434,19 +468,12 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     if (!gpmInput || isNaN(n) || n < 5 || n > 5000) { setError('Enter a valid GPM (between 5 and 5000).'); return }
     setError(null)
     const pk = profile && profile.sprinklerPackage
-    try {
-      await setDoc(doc(db, 'pivotProfiles', pivotGuid), {
-        currentGpm: n,
-        gpmSource: source,
-        gpmConfirmedPath: source === 'typedFromPackage' && pk ? pk.storagePath : null,
-        gpmConfirmedBy: whoAmI(),
-        gpmConfirmedAt: new Date().toISOString()
-      }, { merge: true })
-      setGpmSaved(true)
-      setTimeout(() => setGpmSaved(false), 1500)
-    } catch (err) {
-      setError(err.message || 'Could not save the GPM.')
-    }
+    await requestGpm(n, source, {
+      gpmSource: source,
+      gpmConfirmedPath: source === 'typedFromPackage' && pk ? pk.storagePath : null,
+      gpmConfirmedBy: whoAmI(),
+      gpmConfirmedAt: new Date().toISOString()
+    })
   }
 
   async function handleSaveThreshold() {
@@ -766,6 +793,12 @@ export default function PivotProfile({ pivotGuid, onBack }) {
             Upload the sprinkler package PDF above and confirm the GPM AIO reads from it. If there's no printout, tick &ldquo;No package printout available&rdquo; to type the GPM in by hand.
           </div>
         )}
+        {describeHistory(profile).length > 0 && (
+          <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '0.5px solid #e4e1d8' }}>
+            <div style={{ fontSize: '11px', color: '#888', marginBottom: '4px' }}>GPM history (past seasons use the GPM the pivot had at the time)</div>
+            {describeHistory(profile).map((line) => <div key={line} style={{ fontSize: '12px', color: '#2b2b26' }}>{line}</div>)}
+          </div>
+        )}
       </Section>
 
       <Section title="Corner machine">
@@ -938,6 +971,10 @@ export default function PivotProfile({ pivotGuid, onBack }) {
       </Section>
 
       {error && <p style={{ color: '#A32D2D', fontSize: '13px', marginTop: '16px' }}>{error}</p>}
+
+      {pendingGpm && (
+        <GpmChangeDialog profile={profile} newGpm={pendingGpm.newGpm} busy={pendingBusy} onCancel={() => setPendingGpm(null)} onChoose={handleChooseGpmChange} />
+      )}
 
       {deleteTarget && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
