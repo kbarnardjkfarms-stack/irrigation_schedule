@@ -23,6 +23,7 @@ import { collection, collectionGroup, getDocs, query, where } from 'firebase/fir
 import { db } from './firebase.js'
 import { addDaysIso, curveKeyForCrop, CURVES, kcOnDate, normalizeIsoDate, stationsForField, weeklyEt } from './etMath.js'
 import { computeApplied, GALLONS_PER_ACRE_INCH } from './appliedMath.js'
+import { gpmForWeek } from './gpmHistory.js'
 
 // Same crop-name folding the schedule screen uses.
 const CROP_ALIASES = { LUCERNE: 'ALFALFA', MAIZE: 'CORN' }
@@ -262,7 +263,9 @@ export function buildLiveReport(inp) {
       let schedIn = null
       if (events) {
         const hrs = hoursOn(events)
-        schedIn = hrs <= 0 ? 0 : (gpm && acres ? (gpm * hrs * 60) / (GALLONS_PER_ACRE_INCH * acres) : null)
+        // The GPM the pivot had that week, so a later package change doesn't rewrite old seasons.
+        const gpmW = profile ? gpmForWeek(profile, w) : null
+        schedIn = hrs <= 0 ? 0 : (gpmW && acres ? (gpmW * hrs * 60) / (GALLONS_PER_ACRE_INCH * acres) : null)
       }
 
       let appIn = null
