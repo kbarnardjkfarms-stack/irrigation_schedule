@@ -57,3 +57,18 @@ Add the crew under Spray → **Crew** first, so operators can be picked on jobs.
 
 Not yet in 2a (coming next): the drone flight log on Done, emails on Done, Calendar, Map, Acres,
 Season log, Records, Costs, crew links.
+
+## Step 2a fixes: Spray admin, farm managers, weather on past-due jobs
+
+- **Spray admin** (`Users.jsx`, `firestore.rules`, `App.jsx`, `functions/sprayActions.js`, `functions/spraySync.js`):
+  a checkbox on a login. ONLY logins with it checked can change the spray schedule (assign operators, Done,
+  move, remove, crew list, Sync AgWorld). AIO Admin, Owner and Farm manager logins can view it, nothing more.
+  The person running the spray operation is the Spray admin; please don't check it for anyone else without
+  asking them.
+- **Farm managers see their own jobs first** (`Spray.jsx`, `sprayMath.js`, `styles.css`): a "Your farms"
+  section at the top (their name on the job, or a farm on their AIO login), then the rest of the schedule.
+- **Farm manager + Call button** (`functions/spraySync.js`): the manager comes from the first line of the
+  AgWorld comment, as before; if there isn't one, it's the AIO Farm manager whose farms include the job's
+  farm (Users screen). Their phone number from Users rides along on the job, so everyone gets the Call
+  button. This replaces the Google app's Managers tab. Fills in on the next hourly sync.
+- **Weather on past-due jobs** (`Spray.jsx`): they show today's weather, since that's when they'd get done.

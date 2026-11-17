@@ -13,6 +13,16 @@ export function fmtDay(ymd, opts) {
   return new Date(ymd + 'T12:00:00Z').toLocaleDateString('en-US', Object.assign({ timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }, opts || {}))
 }
 export const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '')
+// Farm / field names the way the Farm Map matches them: "Hawaii 07" = "HAWAII7".
+export const mapKey = (v) => String(v || '').replace(/\b0+(\d)/g, '$1').toUpperCase().replace(/[^A-Z0-9]/g, '')
+
+/** Is this job one of mine? My name on the job (AgWorld comment or AIO farm), or one of my farms. */
+export function isMine(j, myName, myFarmKeys) {
+  if (myName && normName(j.manager) && normName(j.manager) === normName(myName)) return true
+  if (!myFarmKeys || !myFarmKeys.size) return false
+  const farms = String(j.farm || '').split(',').map((x) => mapKey(x)).filter(Boolean)
+  return farms.some((f) => myFarmKeys.has(f))
+}
 
 /** sprayJobs + sprayJobState -> what the screens show. Removed jobs are kept, flagged hidden. */
 export function mergeJobs(jobs, states) {

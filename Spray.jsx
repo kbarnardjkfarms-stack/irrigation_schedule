@@ -4,7 +4,7 @@ import { httpsCallable } from 'firebase/functions'
 import { db, functions } from './firebase.js'
 import {
   mergeJobs, lanes, dayLabel, inRange, todayYmd, addDays, fmtDay, kindOf, KIND_LABEL, cropEmoji,
-  weatherUrl, summarizeWeather, windLevel, phoneBook, normName
+  weatherUrl, summarizeWeather, windLevel, phoneBook, normName, mapKey, isMine
 } from './sprayMath.js'
 
 // Spray schedule module (drone crew + Ag Rows) — jobs come from AgWorld through
@@ -20,13 +20,15 @@ const syncNow = httpsCallable(functions, 'syncSprayJobsNow', { timeout: 1800000 
 
 const RANGES = [['today', 'Today'], ['week', '7 days'], ['all', 'All upcoming']]
 
-export default function Spray({ userRole }) {
-  const isAdmin = userRole === 'admin' || userRole === 'owner'
+export default function Spray({ userRole, sprayAdmin, userProfile }) {
+  // Only Spray admins (Users screen checkbox) change anything; everyone else views.
+  const isAdmin = !!sprayAdmin
   const [view, setView] = useState('schedule')
   const [jobsDoc, setJobsDoc] = useState(null)
   const [states, setStates] = useState({})
   const [ops, setOps] = useState([])
   const [users, setUsers] = useState([])
+  const [farms, setFarms] = useState({})
   const [error, setError] = useState(null)
   const [toast, setToast] = useState(null)
 
@@ -38,6 +40,9 @@ export default function Spray({ userRole }) {
   }, (e) => setError(e.message)), [])
   useEffect(() => onSnapshot(collection(db, 'sprayOperators'), (snap) => {
     const a = []; snap.forEach((d) => a.push(Object.assign({ id: d.id }, d.data()))); setOps(a.sort((x, y) => String(x.name).localeCompare(String(y.name))))
+  }, () => {}), [])
+  useEffect(() => onSnapshot(collection(db, 'farms'), (snap) => {
+    const m = {}; snap.forEach((d) => { m[d.id] = d.data() }); setFarms(m)
   }, () => {}), [])
   // Manager phone numbers for the Call button come from AIO's user list (Admins can read it).
   useEffect(() => onSnapshot(collection(db, 'users'), (snap) => {
@@ -60,6 +65,11 @@ export default function Spray({ userRole }) {
 
   const jobs = useMemo(() => mergeJobs(jobsDoc || {}, states), [jobsDoc, states])
   const phones = useMemo(() => phoneBook(users), [users])
+  // A farm manager sees their own jobs first: their name on the job, or their farms on their AIO login.
+  const myName = (userProfile && userProfile.name) || ''
+  const myFarmKeys = useMemo(() => new Set(((userProfile && userProfile.farmIds) || [])
+    .map((id) => farms[String(id)] && farms[String(id)].name).filter(Boolean).map(mapKey)), [userProfile, farms])
+  const mineFirst = userRole === 'farm_manager' || myFarmKeys.size > 0
 
   if (error) return <div className="spray"><div className="spray-error">Couldn't load the spray schedule: {error}</div></div>
   if (!jobsDoc) return <div className="spray"><div className="spray-empty">Loading the spray schedule…</div></div>
@@ -70,7 +80,8 @@ export default function Spray({ userRole }) {
         <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
         {isAdmin && <button className={view === 'crew' ? 'active' : ''} onClick={() => setView('crew')}>Crew</button>}
       </div>
-      {view === 'schedule' && <Schedule jobs={jobs} ops={ops} phones={phones} isAdmin={isAdmin} run={run} say={say} />}
+      {view === 'schedule' && <Schedule jobs={jobs} ops={ops} phones={phones} isAdmin={isAdmin} run={run} say={say}
+        mine={mineFirst ? (j) => isMine(j, myName, myFarmKeys) : null} />}
       {view === 'crew' && isAdmin && <Crew ops={ops} run={run} say={say} />}
       {toast && (
         <div className="spray-toast">
@@ -85,7 +96,7 @@ export default function Spray({ userRole }) {
 // ---------------------------------------------------------------------------
 // Schedule
 // ---------------------------------------------------------------------------
-function Schedule({ jobs, ops, phones, isAdmin, run, say }) {
+function Schedule({ jobs, ops, phones, isAdmin, run, say, mine }) {
   const today = todayYmd()
   const [crew, setCrew] = useState('all')
   const [manager, setManager] = useState('')
@@ -102,7 +113,8 @@ function Schedule({ jobs, ops, phones, isAdmin, run, say }) {
   const openJobs = live.filter((j) => !j.done && inRange(j, range, today))
   const doneJobs = live.filter((j) => j.done).sort((a, b) => (String(b.done.completed_date) > String(a.done.completed_date) ? 1 : -1))
   const hidden = jobs.filter((j) => j.hidden)
-  const L = lanes(openJobs)
+  const myJobs = mine ? openJobs.filter(mine).sort((a, b) => (a.planned_date < b.planned_date ? -1 : a.planned_date > b.planned_date ? 1 : 0)) : []
+  const L = lanes(mine ? openJobs.filter((j) => !mine(j)) : openJobs)
   const counts = {
     today: openJobs.filter((j) => j.planned_date <= today).length,
     acres: Math.round(openJobs.reduce((a, j) => a + (Number(j.acres) || 0), 0))
@@ -159,7 +171,25 @@ function Schedule({ jobs, ops, phones, isAdmin, run, say }) {
         <span><b>{counts.acres.toLocaleString()}</b> ac</span>
       </div>
 
-      {!L.length && <div className="spray-empty">Nothing scheduled {range === 'today' ? 'today' : range === 'week' ? 'in the next 7 days' : ''}.</div>}
+      {mine && (
+        <div className="spray-lane spray-mine">
+          <div className="spray-lane-head">
+            <span>Your farms</span>
+            <span className="spray-muted">{myJobs.length} job{myJobs.length === 1 ? '' : 's'} · {Math.round(myJobs.reduce((a, j) => a + (Number(j.acres) || 0), 0)).toLocaleString()} ac</span>
+          </div>
+          {!myJobs.length && <div className="spray-empty">Nothing on your farms {range === 'today' ? 'today' : range === 'week' ? 'in the next 7 days' : 'coming up'}.</div>}
+          {myJobs.map((j, i) => (
+            <div key={j.job_key}>
+              {(i === 0 || dayLabel(myJobs[i - 1].planned_date, today) !== dayLabel(j.planned_date, today)) &&
+                <div className={'spray-day' + (j.planned_date < today ? ' late' : '')}>{dayLabel(j.planned_date, today)}</div>}
+              <JobCard j={j} today={today} wx={wx[j.job_key]} phones={phones} ops={ops} isAdmin={isAdmin}
+                open={!!open[j.job_key]} onToggle={() => toggle(j.job_key)} actions={actions} />
+            </div>
+          ))}
+          {L.length > 0 && <div className="spray-rest">Rest of the schedule</div>}
+        </div>
+      )}
+      {!L.length && !mine && <div className="spray-empty">Nothing scheduled {range === 'today' ? 'today' : range === 'week' ? 'in the next 7 days' : ''}.</div>}
       {L.map((lane) => (
         <div className="spray-lane" key={lane.operator || '_none'}>
           <div className="spray-lane-head">
@@ -208,7 +238,7 @@ function Schedule({ jobs, ops, phones, isAdmin, run, say }) {
 
 function JobCard({ j, today, wx, phones, ops, isAdmin, open, onToggle, actions }) {
   const kind = kindOf(j)
-  const phone = phones[normName(j.manager)]
+  const phone = j.manager_phone || phones[normName(j.manager)]
   const [busy, setBusy] = useState(false)
   const guard = (fn) => async (e) => {
     if (e) e.stopPropagation()
@@ -312,9 +342,11 @@ function useWeather(jobs) {
   const [data, setData] = useState({})
   const cache = useRef({})
   const today = todayYmd()
-  const want = jobs.filter((j) => !j.done && !j.hidden && j.lat != null && j.lng != null && j.planned_date >= today && j.planned_date <= addDays(today, 15))
+  // Past-due jobs show today's weather (that's when they'd get done); the rest show their own day.
+  const dayFor = (j) => (j.planned_date < today ? today : j.planned_date)
+  const want = jobs.filter((j) => !j.done && !j.hidden && j.lat != null && j.lng != null && dayFor(j) <= addDays(today, 15))
   const keyOf = (j) => Number(j.lat).toFixed(2) + ',' + Number(j.lng).toFixed(2)
-  const sig = want.map((j) => j.job_key + '@' + keyOf(j) + '@' + j.planned_date).join('|')
+  const sig = want.map((j) => j.job_key + '@' + keyOf(j) + '@' + dayFor(j)).join('|')
   useEffect(() => {
     let alive = true
     const load = async () => {
@@ -331,7 +363,7 @@ function useWeather(jobs) {
       }))
       if (!alive) return
       const out = {}
-      want.forEach((j) => { const c = cache.current[keyOf(j)]; if (c) out[j.job_key] = summarizeWeather(c.data, j.planned_date, todayYmd()) })
+      want.forEach((j) => { const c = cache.current[keyOf(j)]; if (c) out[j.job_key] = summarizeWeather(c.data, dayFor(j), todayYmd()) })
       setData(out)
     }
     load()

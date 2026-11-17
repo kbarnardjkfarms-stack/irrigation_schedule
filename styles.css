@@ -1287,6 +1287,8 @@ body.spray-dark { background: #0d100e; }
 .spray-form label.check { flex-direction: row; align-items: center; gap: 6px; }
 .spray-toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--sp-tx); color: var(--sp-bg); padding: 9px 14px; border-radius: 8px; font-size: 13px; z-index: 50; display: flex; gap: 12px; align-items: center; max-width: calc(100vw - 32px); }
 .spray .spray-toast button { background: none; border: none; color: var(--sp-bg); font-weight: 700; text-decoration: underline; font-size: 13px; padding: 0; }
+.spray-mine .spray-lane-head { color: var(--sp-accent); border-bottom-color: rgba(127,211,154,.35); }
+.spray-rest { margin: 22px 2px 4px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--sp-tx2); }
 @media (max-width: 600px) {
   .spray { padding: 10px 10px 80px; }
   .spray-field { font-size: 20px; }

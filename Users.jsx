@@ -45,7 +45,7 @@ function modulesToSave(role, modules) {
   return allChecked ? null : modules
 }
 
-const EMPTY_FORM = { name: '', email: '', phone: '', receiveTextAlerts: false, role: 'irrigator', farmIds: [], canEditSchedule: false, modules: ALL_MODULE_IDS, customers: [] }
+const EMPTY_FORM = { name: '', email: '', phone: '', receiveTextAlerts: false, role: 'irrigator', farmIds: [], canEditSchedule: false, sprayAdmin: false, modules: ALL_MODULE_IDS, customers: [] }
 
 function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabel, onCancel, onSubmit }) {
   const [form, setForm] = useState(initial)
@@ -220,6 +220,12 @@ function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabe
           </p>
         </>
       )}
+      {form.role !== CUSTOMER_ROLE && form.role !== PLANTING_ROLE && (FULL_ACCESS_ROLES.includes(form.role) || form.modules.includes('spray')) && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', margin: '0 0 12px' }}>
+              <input type="checkbox" checked={!!form.sprayAdmin} onChange={(e) => setForm((f) => ({ ...f, sprayAdmin: e.target.checked }))} style={{ margin: 0 }} />
+              Spray schedule admin <span style={{ fontSize: '11px', color: '#888' }}>(assign operators, Done, move and remove jobs, crew list). Nobody else can, Admin and Owner included; they can view.</span>
+            </label>
+          )}
       {error && <p style={{ color: '#A32D2D', fontSize: '13px', margin: '0 0 10px' }}>{error}</p>}
       <div style={{ display: 'flex', gap: '8px' }}>
         <button type="submit" className="save" disabled={busy} style={{ flex: 1 }}>{busy ? 'Saving\u2026' : submitLabel}</button>
@@ -310,7 +316,9 @@ export default function Users() {
     if (form.role === CUSTOMER_ROLE && result.data && result.data.uid) {
       await updateDoc(doc(db, 'users', result.data.uid), { customers: form.customers, customerKeys: form.customers.map(customerKey) })
     } else if (newModules && result.data && result.data.uid) {
-      await updateDoc(doc(db, 'users', result.data.uid), { modules: newModules })
+      await updateDoc(doc(db, 'users', result.data.uid), form.sprayAdmin ? { modules: newModules, sprayAdmin: true } : { modules: newModules })
+    } else if (form.sprayAdmin && result.data && result.data.uid && form.role !== PLANTING_ROLE) {
+      await updateDoc(doc(db, 'users', result.data.uid), { sprayAdmin: true })
     }
     let emailSent = true
     try {
@@ -341,6 +349,7 @@ export default function Users() {
     }
     const savedModules = form.role === CUSTOMER_ROLE ? null : modulesToSave(form.role, form.modules)
     update.modules = savedModules ? savedModules : deleteField()
+    update.sprayAdmin = form.sprayAdmin && form.role !== CUSTOMER_ROLE && form.role !== PLANTING_ROLE ? true : deleteField()
     if (form.role === CUSTOMER_ROLE) {
       update.customers = form.customers
       update.customerKeys = form.customers.map(customerKey)
@@ -521,6 +530,7 @@ export default function Users() {
                         role: user.role || 'irrigator',
                         farmIds: user.farmIds || [],
                         canEditSchedule: !!user.canEditSchedule,
+                        sprayAdmin: !!user.sprayAdmin,
                         modules: Array.isArray(user.modules) ? user.modules : ALL_MODULE_IDS,
                         customers: user.customers || []
                       }}

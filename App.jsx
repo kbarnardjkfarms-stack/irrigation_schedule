@@ -733,7 +733,9 @@ export default function App() {
 
   // Spray schedule (drone crew + Ag Rows). Mirrors firestore.rules' canViewSpray():
   // Admin, Owner and Farm manager with the 'spray' module. Crews use their own links.
-  const canSeeSpray = (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager') && hasModule('spray')
+  // Only logins with Spray admin checked run it; Admin, Owner and Farm manager can view.
+  const sprayAdmin = !!(userProfile && userProfile.sprayAdmin) && userRole !== 'customer' && userRole !== 'planting_staff'
+  const canSeeSpray = (sprayAdmin || userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager') && hasModule('spray')
 
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
@@ -1535,7 +1537,7 @@ export default function App() {
       {page === 'harvest' && canSeeHarvest && <Harvest userRole={userRole} />}
       {page === 'seed' && canSeeSeed && <Seed userRole={userRole} />}
       {page === 'map' && canSeeMap && <FarmMap userRole={userRole} />}
-      {page === 'spray' && canSeeSpray && <Spray userRole={userRole} />}
+      {page === 'spray' && canSeeSpray && <Spray userRole={userRole} sprayAdmin={sprayAdmin} userProfile={userProfile} />}
       {page === 'irrigation' && hasModule('irrigation') && (
         <>
           {view === 'live-data' && <LiveData />}
