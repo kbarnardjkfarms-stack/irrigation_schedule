@@ -3264,3 +3264,4 @@ const spraySyncExports = require('./spraySync').makeExports(AGWORLD_TOKEN);
 exports.syncSprayJobs = spraySyncExports.syncSprayJobs;
 exports.syncSprayJobsFull = spraySyncExports.syncSprayJobsFull;
 exports.syncSprayJobsNow = spraySyncExports.syncSprayJobsNow;
+exports.syncSprayJobsFullNow = spraySyncExports.syncSprayJobsFullNow;

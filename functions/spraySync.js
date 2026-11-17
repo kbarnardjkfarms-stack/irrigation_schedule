@@ -29,9 +29,10 @@
 //   syncSprayJobs        every hour: everything AgWorld changed since the last run
 //   syncSprayJobsFull    every night 02:07: every job edited in the last ~13 months
 //   syncSprayJobsNow     callable (Admin/Owner): run either one from the app
+//   syncSprayJobsFullNow open the URL in a browser to run the full check now
 
 const { onSchedule } = require('firebase-functions/v2/scheduler');
-const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onCall, onRequest, HttpsError } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
 
 const TZ = 'America/Denver';
@@ -783,7 +784,30 @@ function makeExports(AGWORLD_TOKEN) {
       return runSync(mode, AGWORLD_TOKEN.value());
     }
   );
-  return { syncSprayJobs, syncSprayJobsFull, syncSprayJobsNow };
+  // Open this function's URL in a browser to run the full check right away (same idea as
+  // syncAgworldFieldsNow). Add ?mode=hourly for the quick one. It only reads AgWorld and writes
+  // the spray collections, and won't start while another spray sync is running.
+  const syncSprayJobsFullNow = onRequest(
+    { secrets: [AGWORLD_TOKEN], timeoutSeconds: 1800, memory: '1GiB' },
+    async (req, res) => {
+      const mode = req.query && req.query.mode === 'hourly' ? 'hourly' : 'full';
+      try {
+        const s = await runSync(mode, AGWORLD_TOKEN.value());
+        if (s.skipped && typeof s.skipped === 'string') { res.status(200).send('A spray sync is already running. Try again in a few minutes.'); return; }
+        const skipped = Object.keys(s.skipped).map((k) => '  ' + s.skipped[k] + '  ' + k).join('\n');
+        res.status(200).type('text/plain').send(
+          'Spray sync (' + mode + ') done.\n' +
+          'Checked ' + s.fetched + ' AgWorld activities. On the schedule: ' + s.kept + ' jobs (' + s.added + ' new, ' + s.removed + ' gone).\n' +
+          'Season log rows from AgWorld: ' + s.logged + ' (+' + s.loggedNoRec + ' with no rec/work order). Moved to new AgWorld ids: ' + s.migrated + '. Removed jobs back: ' + s.released + '.\n' +
+          (skipped ? 'Left out:\n' + skipped : '')
+        );
+      } catch (err) {
+        console.error(err);
+        res.status(500).type('text/plain').send('Spray sync failed: ' + err.message);
+      }
+    }
+  );
+  return { syncSprayJobs, syncSprayJobsFull, syncSprayJobsNow, syncSprayJobsFullNow };
 }
 
 module.exports = {
