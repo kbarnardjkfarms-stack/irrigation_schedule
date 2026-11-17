@@ -472,6 +472,10 @@ service cloud.firestore {
       allow read: if signedIn() && canViewSpray();
       allow write: if false;
     }
+    match /sprayOperators/{opId} {
+      allow read: if signedIn() && canViewSpray();
+      allow write: if false;
+    }
     match /sprayMeta/{docId} {
       allow read: if signedIn() && isAdminOrOwner();
       allow write: if false;

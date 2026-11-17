@@ -27,6 +27,7 @@ import Yields from './Yields.jsx'
 import Harvest from './Harvest.jsx'
 import Seed from './Seed.jsx'
 import FarmMap from './FarmMap.jsx'
+import Spray from './Spray.jsx'
 
 
 import AioLogo from './AioLogo.jsx'
@@ -692,6 +693,7 @@ export default function App() {
     const needs = page === 'potato-storage' ? 'potato-storage'
       : page === 'agronomy' ? 'agronomy'
       : (page === 'irrigation' || page === 'pivot-profile') ? 'irrigation'
+      : page === 'spray' ? 'spray'
       : null
     if (needs && !hasModule(needs)) setPage('home')
   }, [page, userRole, userProfile]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -728,6 +730,10 @@ export default function App() {
   // Mirrors firestore.rules' farmFields read: any staff login with the 'map'
   // module. Editing (import, boundaries, links) is Admin and Owner.
   const canSeeMap = !!userRole && userRole !== 'customer' && hasModule('map')
+
+  // Spray schedule (drone crew + Ag Rows). Mirrors firestore.rules' canViewSpray():
+  // Admin, Owner and Farm manager with the 'spray' module. Crews use their own links.
+  const canSeeSpray = (userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager') && hasModule('spray')
 
   useEffect(() => {
     const on = () => setOnline(true), off = () => setOnline(false)
@@ -1498,6 +1504,25 @@ export default function App() {
               <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Farm Map</div>
             </div>
           )}
+          {canSeeSpray && (
+            <div
+              onClick={() => setPage('spray')}
+              style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            >
+              <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#E3EFE4', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="58" height="58" viewBox="0 0 48 48">
+                  <rect x="8" y="26" width="32" height="5" rx="2" fill="#3c5a3f" />
+                  <path d="M12 31v6M24 31v6M36 31v6" stroke="#3c5a3f" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M10 39l-2 4M14 39l2 4M22 39l-2 4M26 39l2 4M34 39l-2 4M38 39l2 4" stroke="#2E9B4F" strokeWidth="1.6" strokeLinecap="round" />
+                  <rect x="18" y="12" width="12" height="14" rx="3" fill="#fff" stroke="#3c5a3f" strokeWidth="1.8" />
+                  <path d="M21 12V8h6v4" fill="none" stroke="#3c5a3f" strokeWidth="1.8" />
+                  <circle cx="38" cy="12" r="4" fill="#E0B100" />
+                  <path d="M33 12h-3M38 7V5M38 19v-2M43 12h2" stroke="#E0B100" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </div>
+              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Spray</div>
+            </div>
+          )}
         </div>
       )}
       {page === 'potato-storage' && hasModule('potato-storage') && <PotatoStorage />}
@@ -1510,6 +1535,7 @@ export default function App() {
       {page === 'harvest' && canSeeHarvest && <Harvest userRole={userRole} />}
       {page === 'seed' && canSeeSeed && <Seed userRole={userRole} />}
       {page === 'map' && canSeeMap && <FarmMap userRole={userRole} />}
+      {page === 'spray' && canSeeSpray && <Spray userRole={userRole} />}
       {page === 'irrigation' && hasModule('irrigation') && (
         <>
           {view === 'live-data' && <LiveData />}
