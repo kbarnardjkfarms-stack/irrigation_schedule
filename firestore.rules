@@ -354,6 +354,11 @@ service cloud.firestore {
       allow read: if signedIn() && canViewContracts() && hasModule('contracts');
       allow write: if signedIn() && isAdminOrOwner();
     }
+    // Contracts: varieties added by hand to the contract / field pick lists.
+    match /contractSettings/{docId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow write: if signedIn() && isAdminOrOwner();
+    }
     // USDA satellite crop history per Agworld field (Contracts > Rotation),
     // written only by the satelliteRotation Cloud Functions (Admin key).
     // fieldBoundaries (field outlines from the Agworld sync) are written only
