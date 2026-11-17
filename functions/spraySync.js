@@ -610,36 +610,15 @@ async function loadPins(db) {
 }
 
 // ---------------------------------------------------------------------------
-// Farm managers from AIO's Users (replaces the Google app's Managers tab)
+// Farm managers from the spray Google Sheet's Managers tab (functions/sprayContacts.js).
+// AIO's Users list isn't used, so outside AIO logins never become a job's manager.
 // ---------------------------------------------------------------------------
 const personKey = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+const { loadPeopleFromContacts: loadPeople } = require('./sprayContacts');
+const alerts = require('./sprayAlerts');
 
-/** { byFarm: {farmKey: [names]}, phoneByName: {personKey: phone} } from users + farms. */
-async function loadPeople(db) {
-  const [uSnap, fSnap] = await Promise.all([
-    db.collection('users').get().catch(() => ({ forEach: () => {} })),
-    db.collection('farms').get().catch(() => ({ forEach: () => {} }))
-  ]);
-  const farmName = {};
-  fSnap.forEach((d) => { const f = d.data() || {}; if (f.name) farmName[d.id] = f.name; });
-  const byFarm = {}, phoneByName = {};
-  uSnap.forEach((d) => {
-    const u = d.data() || {};
-    if (!u.name || u.disabled === true) return;
-    if (u.phone) phoneByName[personKey(u.name)] = String(u.phone);
-    if (u.role === 'farm_manager' && Array.isArray(u.farmIds)) {
-      u.farmIds.forEach((id) => {
-        const n = farmName[String(id)];
-        if (n) (byFarm[mapKey(n)] = byFarm[mapKey(n)] || []).push(String(u.name));
-      });
-    }
-  });
-  Object.keys(byFarm).forEach((k) => { byFarm[k] = uniq(byFarm[k]).sort(); });
-  return { byFarm, phoneByName };
-}
-
-/** The job's farm manager: the AgWorld comment first, otherwise AIO's farm manager for that farm.
- *  Adds manager_phone (from AIO Users) so everyone gets the Call button. */
+/** The job's farm manager: the AgWorld comment first, otherwise the Managers tab row whose farms
+ *  include the job's farm. Adds manager_phone (Managers tab) so everyone gets the Call button. */
 function withManager(r, people) {
   const fromAg = r.manager_agworld !== undefined ? String(r.manager_agworld || '') : String(r.manager || '');
   let m = fromAg;
@@ -649,7 +628,7 @@ function withManager(r, people) {
   }
   return Object.assign({}, r, {
     manager_agworld: fromAg, manager: m || '',
-    manager_from: fromAg ? 'agworld' : (m ? 'aio' : ''),
+    manager_from: fromAg ? 'agworld' : (m ? 'sheet' : ''),
     manager_phone: m ? (people.phoneByName[personKey(m)] || '') : ''
   });
 }
@@ -761,6 +740,7 @@ async function runSync(mode, token, deps = {}) {
     });
 
     // Season log rows from AgWorld
+    const newlyDone = [];   // jobs that were on the schedule and just got closed in AgWorld: phone alert
     Object.keys(next).forEach((k) => {
       const r = next[k];
       if (r.agworld_status !== 'completed' || r.needs_review) return;
@@ -768,6 +748,11 @@ async function runSync(mode, token, deps = {}) {
       const op = (st.assign && st.assign.operator) || '';
       const row = doneFromAgworld(st.done, r, AGWORLD_TAG, op, '');
       if (!row) return;
+      // Only a job already on the schedule, not done in the app already, finished in the last 2 days
+      // (so the first full check never alerts for the whole season).
+      const wasScheduled = existing[k] || Object.keys(moves).some((f) => moves[f] === k && existing[f]) ||
+        String(r.closes_job || '').split(',').some((x) => x && existing[x.trim()]);
+      if (!st.done && wasScheduled && String(row.completed_date || '') >= shiftYmd(today(), -2)) newlyDone.push({ k, r, row });
       state[k] = Object.assign({}, st, { done: Object.assign({}, row, { entered_at: new Date(now).toISOString() }) });
       ops.push({ ref: db.collection(STATE).doc(k), data: { done: state[k].done }, merge: true });
       stats.logged++;
@@ -806,6 +791,8 @@ async function runSync(mode, token, deps = {}) {
     removedKeys.forEach((k) => ops.push({ ref: db.collection(JOBS).doc(k), data: null }));
 
     await commitOps(db, ops);
+    for (const n of newlyDone) await alerts.queueDoneAlert(db, n.k, n.r, n.row, 'agworld');
+    stats.alerted = newlyDone.length;
 
     const metaOut = { running: 0, lastOk: now, typeFilters: filterMap || null };
     if (isFull) metaOut.lastFull = now;

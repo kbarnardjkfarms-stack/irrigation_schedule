@@ -3267,3 +3267,11 @@ exports.syncSprayJobsNow = spraySyncExports.syncSprayJobsNow;
 exports.syncSprayJobsFullNow = spraySyncExports.syncSprayJobsFullNow;
 // Spray schedule — assign / done / move / remove / crew list from the app. See sprayActions.js.
 exports.sprayAct = require('./sprayActions').makeExports().sprayAct;
+// Spray schedule: farm managers + operators from the spray Google Sheet (functions/sprayContacts.js)
+const sprayContactsExports = require('./sprayContacts').makeExports();
+exports.syncSprayContacts = sprayContactsExports.syncSprayContacts;
+exports.syncSprayContactsNow = sprayContactsExports.syncSprayContactsNow;
+// Spray schedule: "field is done" alerts on phones (functions/sprayAlerts.js)
+const sprayAlertsExports = require('./sprayAlerts').makeExports();
+exports.sprayAlerter = sprayAlertsExports.sprayAlerter;
+exports.sprayPushSetup = sprayAlertsExports.sprayPushSetup;

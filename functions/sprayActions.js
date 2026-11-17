@@ -3,7 +3,7 @@
 // =============================================================================
 // Every change to the spray schedule goes through here so the role checks live
 // on the server: assign an operator, mark done / undo, move a job's date, remove
-// a job from the schedule / restore it, and the crew list. The browser only reads
+// a job from the schedule / restore it. The crew list comes from the Google Sheet. The browser only reads
 // (firestore.rules allow no writes to the spray collections).
 //
 // Who can do what (AIO logins; crew links come in a later step and reuse act()):
@@ -12,13 +12,12 @@
 //
 // Firestore:
 //   sprayJobState/{jobKey}  assign {operator, rig}, done {...}, move {date}, hidden {...}
-//   sprayOperators/{id}     name, crew ('drone' | 'ground'), rig, phone, active
+//   sprayOperators/{id}     name, crew ('drone' | 'ground'), rig, phone, active (from the Google Sheet)
 
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
 const { _internal: S } = require('./spraySync');
-
-const OPS = 'sprayOperators';
+const alerts = require('./sprayAlerts');
 
 /** What a role may do in the Spray module. */
 function permsFor(role, sprayAdmin) {
@@ -59,24 +58,9 @@ function quickDoneRow(job, me, operator) {
 async function act(db, me, data) {
   const action = clean(data && data.action, 20);
 
-  // ---- crew list (Admin) ----
+  // ---- crew list: kept on the spray Google Sheet's Operators tab now (functions/sprayContacts.js) ----
   if (action === 'saveOperator' || action === 'deleteOperator') {
-    if (!me.admin) throw new HttpsError('permission-denied', 'Only an Admin can change the crew list.');
-    if (action === 'deleteOperator') {
-      const id = clean(data.id, 60);
-      if (!id) throw new HttpsError('invalid-argument', 'Which operator?');
-      await db.collection(OPS).doc(id).delete();
-      return { ok: true };
-    }
-    const name = clean(data.name, 60);
-    const crew = data.crew === 'drone' ? 'drone' : 'ground';
-    if (!name) throw new HttpsError('invalid-argument', 'Enter a name.');
-    const ref = data.id ? db.collection(OPS).doc(clean(data.id, 60)) : db.collection(OPS).doc();
-    await ref.set({
-      name, crew, rig: clean(data.rig, 60), phone: clean(data.phone, 30), active: data.active !== false,
-      aliases: clean(data.aliases, 200), updated_by: me.name, updated_at: nowIso()
-    }, { merge: true });
-    return { ok: true, id: ref.id };
+    throw new HttpsError('failed-precondition', 'Operators come from the Operators tab of the spray Google Sheet. Change them there, then Refresh in Spray > Crew.');
   }
 
   // ---- one job ----
@@ -103,8 +87,11 @@ async function act(db, me, data) {
       if (me.complete.indexOf(job.source) < 0) throw new HttpsError('permission-denied', 'You can\'t mark ' + (job.source === 'drone' ? 'drone' : 'Ag Rows') + ' jobs done.');
       if (state.done) return { ok: true, already: true };
       const operator = (state.assign && state.assign.operator) || '';
-      await stateRef.set({ done: quickDoneRow(job, me, operator) }, { merge: true });
-      return { ok: true };
+      const row = quickDoneRow(job, me, operator);
+      await stateRef.set({ done: row }, { merge: true });
+      // Phone alert (farm manager, the "all" people, + "spreads" people on spreads), after a short wait so Undo can take it back
+      const a = await alerts.queueDoneAlert(db, jobKey, job, row, 'app');
+      return { ok: true, alerted: a.people };
     }
     case 'undo': {
       if (me.complete.indexOf(job.source) < 0) throw new HttpsError('permission-denied', 'You can\'t change that.');
@@ -113,6 +100,7 @@ async function act(db, me, data) {
         throw new HttpsError('failed-precondition', 'This one was closed in AgWorld. To reopen it, change it in AgWorld.');
       }
       await stateRef.set({ done: admin.firestore.FieldValue.delete() }, { merge: true });
+      await alerts.cancelDoneAlert(db, jobKey);
       return { ok: true };
     }
     case 'move': {
