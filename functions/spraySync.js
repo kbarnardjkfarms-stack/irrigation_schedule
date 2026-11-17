@@ -371,6 +371,7 @@ function evaluateActivity(activity, pins, window) {
       activity_type: String(a.activity_type || ''),
       farm: farms.join(', ') || String(a.farm_name || ''),
       manager: managerFromActivity(a),
+      manager_agworld: managerFromActivity(a),
       field: fieldLabel,
       fields,
       crop: cleanCrop(primaryCrop(a.activity_fields || [])),
@@ -609,6 +610,51 @@ async function loadPins(db) {
 }
 
 // ---------------------------------------------------------------------------
+// Farm managers from AIO's Users (replaces the Google app's Managers tab)
+// ---------------------------------------------------------------------------
+const personKey = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
+
+/** { byFarm: {farmKey: [names]}, phoneByName: {personKey: phone} } from users + farms. */
+async function loadPeople(db) {
+  const [uSnap, fSnap] = await Promise.all([
+    db.collection('users').get().catch(() => ({ forEach: () => {} })),
+    db.collection('farms').get().catch(() => ({ forEach: () => {} }))
+  ]);
+  const farmName = {};
+  fSnap.forEach((d) => { const f = d.data() || {}; if (f.name) farmName[d.id] = f.name; });
+  const byFarm = {}, phoneByName = {};
+  uSnap.forEach((d) => {
+    const u = d.data() || {};
+    if (!u.name || u.disabled === true) return;
+    if (u.phone) phoneByName[personKey(u.name)] = String(u.phone);
+    if (u.role === 'farm_manager' && Array.isArray(u.farmIds)) {
+      u.farmIds.forEach((id) => {
+        const n = farmName[String(id)];
+        if (n) (byFarm[mapKey(n)] = byFarm[mapKey(n)] || []).push(String(u.name));
+      });
+    }
+  });
+  Object.keys(byFarm).forEach((k) => { byFarm[k] = uniq(byFarm[k]).sort(); });
+  return { byFarm, phoneByName };
+}
+
+/** The job's farm manager: the AgWorld comment first, otherwise AIO's farm manager for that farm.
+ *  Adds manager_phone (from AIO Users) so everyone gets the Call button. */
+function withManager(r, people) {
+  const fromAg = r.manager_agworld !== undefined ? String(r.manager_agworld || '') : String(r.manager || '');
+  let m = fromAg;
+  if (!m) {
+    const farms = String(r.farm || '').split(',').map((x) => x.trim()).filter(Boolean);
+    for (const f of farms) { const l = people.byFarm[mapKey(f)]; if (l && l.length) { m = l[0]; break; } }
+  }
+  return Object.assign({}, r, {
+    manager_agworld: fromAg, manager: m || '',
+    manager_from: fromAg ? 'agworld' : (m ? 'aio' : ''),
+    manager_phone: m ? (people.phoneByName[personKey(m)] || '') : ''
+  });
+}
+
+// ---------------------------------------------------------------------------
 // The sync
 // ---------------------------------------------------------------------------
 const STATE = 'sprayJobState', JOBS = 'sprayJobs';
@@ -643,7 +689,7 @@ async function runSync(mode, token, deps = {}) {
   await metaRef.set({ running: now }, { merge: true });
 
   try {
-    const pins = await loadPins(db);
+    const [pins, people] = await Promise.all([loadPins(db), loadPeople(db)]);
     const window = dueWindow();
     const isFull = mode === 'full';
     const sinceMs = isFull ? now - SYNC.FULL_UPDATED_BACK_DAYS * 86400000
@@ -690,6 +736,8 @@ async function runSync(mode, token, deps = {}) {
 
     const collapsed = collapseStages(next);
     next = collapsed.rows;
+    Object.keys(next).forEach((k) => { next[k] = withManager(next[k], people); });
+    collapsed.orphans = collapsed.orphans.map((r) => withManager(r, people));
     if (collapsed.orphans.length) stats.skipped['actual with no rec or work order (season log only)'] = collapsed.orphans.length;
     const wrongKind = Object.keys(outOfScope).filter((k) => /not labeled|chemigation|boom sprayer|cancel/.test(String(outOfScope[k])));
 
@@ -795,8 +843,9 @@ function makeExports(AGWORLD_TOKEN) {
     { secrets: [AGWORLD_TOKEN], timeoutSeconds: 1800, memory: '1GiB' },
     async (request) => {
       if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+      // Spray admins only (Users screen checkbox); AIO Admin/Owner by itself isn't enough.
       const me = (await admin.firestore().collection('users').doc(request.auth.uid).get()).data() || {};
-      if (me.role !== 'admin' && me.role !== 'owner') throw new HttpsError('permission-denied', 'Admin or Owner only.');
+      if (me.sprayAdmin !== true) throw new HttpsError('permission-denied', 'Spray admins only.');
       const mode = request.data && request.data.mode === 'full' ? 'full' : 'hourly';
       return runSync(mode, AGWORLD_TOKEN.value());
     }
@@ -832,6 +881,6 @@ module.exports = {
   // for tests and for the other Spray functions
   _internal: {
     SYNC, TZ, AGWORLD_TAG, NO_REC_TAG, QUICK_DONE_TAG, runSync, evaluateActivity, classifyJob, collapseStages,
-    matchMoves, gallonsFromActivity, appliedConditions, dueYmd, hiddenStillValid, ringCenter, today, shiftYmd
+    matchMoves, withManager, gallonsFromActivity, appliedConditions, dueYmd, hiddenStillValid, ringCenter, today, shiftYmd
   }
 };

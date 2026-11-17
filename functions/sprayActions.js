@@ -7,8 +7,8 @@
 // (firestore.rules allow no writes to the spray collections).
 //
 // Who can do what (AIO logins; crew links come in a later step and reuse act()):
-//   Admin, Owner   everything, both crews
-//   Farm manager   view only
+//   Logins with sprayAdmin: true (Users screen checkbox)   everything, both crews
+//   Admin, Owner, Farm manager                            view only
 //
 // Firestore:
 //   sprayJobState/{jobKey}  assign {operator, rig}, done {...}, move {date}, hidden {...}
@@ -21,11 +21,11 @@ const { _internal: S } = require('./spraySync');
 const OPS = 'sprayOperators';
 
 /** What a role may do in the Spray module. */
-function permsFor(role) {
-  if (role === 'admin' || role === 'owner') {
-    return { see: ['drone', 'ground'], assign: ['drone', 'ground'], complete: ['drone', 'ground'], admin: true };
-  }
-  if (role === 'farm_manager') return { see: ['drone', 'ground'], assign: [], complete: [], admin: false };
+function permsFor(role, sprayAdmin) {
+  if (role === 'customer' || role === 'planting_staff') return null;
+  // Only logins with Spray admin checked run the schedule. AIO Admin/Owner and Farm managers can look.
+  if (sprayAdmin === true) return { see: ['drone', 'ground'], assign: ['drone', 'ground'], complete: ['drone', 'ground'], admin: true };
+  if (role === 'admin' || role === 'owner' || role === 'farm_manager') return { see: ['drone', 'ground'], assign: [], complete: [], admin: false };
   return null;
 }
 
@@ -36,7 +36,7 @@ async function meFromAuth(db, auth) {
   const mods = Array.isArray(p.modules) ? p.modules : null;
   const isAO = p.role === 'admin' || p.role === 'owner';
   if (!isAO && mods && mods.indexOf('spray') < 0) throw new HttpsError('permission-denied', 'The Spray module isn\'t turned on for your login.');
-  const perms = permsFor(p.role);
+  const perms = permsFor(p.role, p.sprayAdmin);
   if (!perms) throw new HttpsError('permission-denied', 'Your role can\'t use the Spray module.');
   return Object.assign({ name: p.name || auth.token.email || 'AIO user', email: p.email || auth.token.email || '', role: p.role }, perms);
 }
