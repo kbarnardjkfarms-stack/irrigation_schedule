@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { collection, collectionGroup, doc, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
 import { canonCrop } from './yieldMath.js'
-import { computeSeed, fmtAge, fmtCwt, fmtWhen, lotLabel } from './seedMath.js'
+import { computeNeeds, computeSeed, fmtAge, fmtCwt, fmtWhen, lotLabel, varietyKey } from './seedMath.js'
 import SeedPortals from './SeedPortals.jsx'
 import { SeedContracts, SeedLots, SeedReport, SeedSettings, SeedTickets } from './SeedManage.jsx'
 
@@ -16,18 +16,24 @@ import { SeedContracts, SeedLots, SeedReport, SeedSettings, SeedTickets } from '
 //   seedPhotos/{ticketId} the ticket photo, compressed JPEG data
 //   seedTrucks/{TRUCKKEY} truck number + light (empty) weight, entered once
 //   seedLotClose/{id}    a lot closed out at the cutter, with its shrink
-//   seedSettings/{seasonId} cutting-zone capacity, truck-age warnings
+//   seedSettings/{seasonId} cutting-zone capacity, truck-age warnings,
+//                        needShrinkPct (allowance added to seed needs)
+//   seedNeeds/{seasonId}__{VARIETY} seed needed for a variety: acres × rate, or cwt
 // Plant tickets carry the Agworld field id so the planting schedule module
 // can read seed planted per field.
 
 export default function Seed({ userRole }) {
   const canManage = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager'
+  // Admin / Owner also get the full edit set: ticket dates, fields and lots,
+  // photos, delete for good, lot renames, deleting contracts with pickups.
+  const isAdmin = userRole === 'admin' || userRole === 'owner'
   const [view, setView] = useState(canManage ? 'overview' : 'portals')
   const [seasons, setSeasons] = useState([])
   const [seasonId, setSeasonId] = useState(null)
   const [contracts, setContracts] = useState([])
   const [tickets, setTickets] = useState([])
   const [closes, setCloses] = useState([])
+  const [needs, setNeeds] = useState([])
   const [trucks, setTrucks] = useState({})
   const [settingsDoc, setSettingsDoc] = useState(null)
   const [baseFields, setBaseFields] = useState({})
@@ -84,6 +90,7 @@ export default function Seed({ userRole }) {
         setTickets(out); setPending(pending); setError(null)
       }, onErr),
       onSnapshot(query(collection(db, 'seedLotClose'), where('seasonId', '==', sid)), list(setCloses), onErr),
+      onSnapshot(query(collection(db, 'seedNeeds'), where('seasonId', '==', sid)), list(setNeeds), () => setNeeds([])),
       onSnapshot(doc(db, 'seedSettings', sid), (d) => setSettingsDoc(d.exists() ? d.data() : null), onErr),
       onSnapshot(query(collectionGroup(db, 'seasons'), where('seasonId', '==', seasonId)), (snap) => {
         const next = {}
@@ -102,8 +109,10 @@ export default function Seed({ userRole }) {
     return { id, name: b.name || id, farmName: b.farmName || null, crop: canonCrop(sd.cropName) || '', variety: sd.varietyName || null, acres: Number(sd.acres) || 0 }
   }).filter((f) => f.name).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })), [seasonData, baseFields])
 
+  const needsCalc = useMemo(() => computeNeeds({ needs, contractRows: seed.contractRows, fieldList, shrinkPct: settings.needShrinkPct }), [needs, seed.contractRows, fieldList, settings.needShrinkPct])
+
   const season = seasons.find((s) => String(s.id) === String(seasonId))
-  const ctx = { seasonId: String(seasonId), seasonName: season && season.name, contracts, tickets, closes, trucks, settings, seed, fieldList, canManage, now, userRole }
+  const ctx = { seasonId: String(seasonId), seasonName: season && season.name, contracts, tickets, closes, trucks, settings, seed, fieldList, canManage, isAdmin, now, userRole, needs, needsCalc }
   const tabs = canManage
     ? [['overview', 'Overview'], ['portals', 'Ticket portals'], ['contracts', 'Contracts'], ['tickets', 'Tickets'], ['lots', 'Lots & shrink'], ['report', 'Planted by field'], ['settings', 'Settings']]
     : [['portals', 'Ticket portals'], ['inventory', 'Inventory']]
@@ -235,6 +244,7 @@ export function LoadedTrucks({ ctx, onPick, pickedId }) {
 
 function SeedOverview({ ctx }) {
   const { seed } = ctx
+  const needBy = Object.fromEntries(ctx.needsCalc.rows.map((r) => [r.key, r]))
   const bySupplier = {}
   seed.contractRows.forEach((c) => { (bySupplier[c.supplier] = bySupplier[c.supplier] || []).push(c) })
   return (
@@ -243,13 +253,15 @@ function SeedOverview({ ctx }) {
         <div className="yields-card">
           <div className="yields-card-title">Picked up by variety</div>
           <table className="contracts-table contracts-table-auto" style={{ marginTop: 8 }}>
-            <thead><tr><th>Variety</th><th className="num">Contracted</th><th className="num">≈ Acres</th><th className="num">Picked up</th><th style={{ width: '28%' }} /><th className="num">Planted</th></tr></thead>
+            <thead><tr><th>Variety</th><th className="num">Need</th><th className="num">Contracted</th><th className="num">≈ Acres</th><th className="num">Picked up</th><th style={{ width: '24%' }} /><th className="num">Planted</th></tr></thead>
             <tbody>
               {seed.byVariety.map((v) => {
                 const pct = v.contracted > 0 ? v.picked / v.contracted : null
                 return (
                   <tr key={v.variety}>
-                    <td><strong>{v.variety}</strong></td><td className="num">{fmtCwt(v.contracted)}</td>
+                    <td><strong>{v.variety}</strong></td>
+                    <td className="num">{needBy[varietyKey(v.variety)] && needBy[varietyKey(v.variety)].needCwt != null ? <>{fmtCwt(needBy[varietyKey(v.variety)].needCwt)}{needBy[varietyKey(v.variety)].status === 'short' && <div className="seed-short">{fmtCwt(-needBy[varietyKey(v.variety)].diff)} short</div>}</> : <span className="contracts-sub">—</span>}</td>
+                    <td className="num">{fmtCwt(v.contracted)}</td>
                     <td className="num" title={v.acresKnown ? '' : 'Some contracts for this variety have no seeding rate'}>{v.acres > 0 ? `${fmtCwt(v.acres)}${v.acresKnown ? '' : '+'}` : '—'}</td>
                     <td className="num">{fmtCwt(v.picked)}</td>
                     <td>{pct != null && <div className="seed-bar"><div style={{ width: `${Math.min(100, pct * 100)}%` }} className={pct > 1.02 ? 'over' : ''} /><span>{Math.round(pct * 100)}%</span></div>}</td>
@@ -257,9 +269,9 @@ function SeedOverview({ ctx }) {
                   </tr>
                 )
               })}
-              {!seed.byVariety.length && <tr><td colSpan={6} className="contracts-sub">Add your seed contracts on the Contracts tab.</td></tr>}
+              {!seed.byVariety.length && <tr><td colSpan={7} className="contracts-sub">Add your seed contracts on the Contracts tab.</td></tr>}
             </tbody>
-            {seed.byVariety.length > 0 && <tfoot><tr><td><strong>Total</strong></td><td className="num"><strong>{fmtCwt(seed.totals.contracted)}</strong></td><td className="num"><strong>{seed.totals.acres > 0 ? fmtCwt(seed.totals.acres) : '—'}</strong></td><td className="num"><strong>{fmtCwt(seed.totals.picked)}</strong></td><td /><td className="num"><strong>{fmtCwt(seed.totals.planted)}</strong></td></tr></tfoot>}
+            {seed.byVariety.length > 0 && <tfoot><tr><td><strong>Total</strong></td><td className="num"><strong>{ctx.needsCalc.totals.needCount ? fmtCwt(ctx.needsCalc.totals.need) : '—'}</strong></td><td className="num"><strong>{fmtCwt(seed.totals.contracted)}</strong></td><td className="num"><strong>{seed.totals.acres > 0 ? fmtCwt(seed.totals.acres) : '—'}</strong></td><td className="num"><strong>{fmtCwt(seed.totals.picked)}</strong></td><td /><td className="num"><strong>{fmtCwt(seed.totals.planted)}</strong></td></tr></tfoot>}
           </table>
         </div>
         <CuttingZone ctx={ctx} />

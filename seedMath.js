@@ -170,6 +170,74 @@ export function computeSeed({ contracts = [], tickets = [], closes = [], now = D
   }
 }
 
+// ---------------------------------------------------------------------------
+// Seed needs vs contracted (Contracts tab). One row per variety.
+//   needs:  seedNeeds docs { variety, acres, rate, cwt, note } — cwt, when
+//           given, is the need outright; otherwise acres × rate.
+//   shrinkPct: extra seed allowed for cutting shrink / cull, added on top of
+//           acres × rate (not on a typed-in cwt).
+//   fieldList: the season's Agworld fields — potato acres by variety shown as
+//           a suggestion for the acres.
+// ---------------------------------------------------------------------------
+export const varietyKey = (v) => String(v || '').trim().toUpperCase().replace(/\s+/g, ' ')
+
+export function computeNeeds({ needs = [], contractRows = [], fieldList = [], shrinkPct = 0 }) {
+  const rows = {}
+  const row = (variety) => {
+    const k = varietyKey(variety)
+    if (!k) return null
+    return (rows[k] = rows[k] || { key: k, variety: String(variety).trim(), contracted: 0, picked: 0, rateCwt: 0, rateAcres: 0, contracts: 0, agAcres: 0, agFields: 0, need: null })
+  }
+  contractRows.forEach((c) => {
+    const r = row(c.variety)
+    if (!r) return
+    const cwt = Number(c.contractedCwt) || 0
+    r.contracted += cwt; r.picked += c.picked || 0; r.contracts++
+    if (c.rate && cwt > 0) { r.rateCwt += cwt; r.rateAcres += cwt / c.rate }
+  })
+  needs.forEach((n) => { const r = row(n.variety); if (r) r.need = n })
+  // Agworld potato fields: exact variety match first, then a name that
+  // contains the other ("Russet Burbank" / "Burbank"); the rest get rows of
+  // their own so nothing planted in Agworld goes unseen.
+  const potatoes = fieldList.filter((f) => /POTATO/.test(String(f.crop || '').toUpperCase()) && Number(f.acres) > 0)
+  potatoes.forEach((f) => {
+    const fk = varietyKey(f.variety)
+    let r = fk ? rows[fk] : null
+    if (!r && fk) r = Object.values(rows).find((x) => x.key.includes(fk) || fk.includes(x.key)) || null
+    if (!r) r = row(f.variety || 'Variety not set in Agworld')
+    r.agAcres += Number(f.acres); r.agFields++
+  })
+  const allow = 1 + (Number(shrinkPct) > 0 ? Number(shrinkPct) / 100 : 0)
+  const out = Object.values(rows).map((r) => {
+    const n = r.need || {}
+    const contractRate = r.rateAcres > 0 ? r.rateCwt / r.rateAcres : null
+    const rate = Number(n.rate) > 0 ? Number(n.rate) : contractRate
+    const acres = Number(n.acres) > 0 ? Number(n.acres) : null
+    const typed = Number(n.cwt) > 0 ? Number(n.cwt) : null
+    const needCwt = typed != null ? typed : acres != null && rate ? acres * rate * allow : null
+    const diff = needCwt != null ? r.contracted - needCwt : null
+    const perAc = rate ? rate * allow : null
+    const status = needCwt == null ? (r.contracted > 0 ? 'no-need' : 'empty')
+      : Math.abs(diff) <= Math.max(1, needCwt * 0.02) ? 'covered' : diff < 0 ? 'short' : 'over'
+    return {
+      ...r, contractRate, rate, rateFromContracts: !(Number(n.rate) > 0) && contractRate != null, acres, typedCwt: typed,
+      needCwt, diff, diffAcres: diff != null && perAc ? diff / perAc : null,
+      contractedAcres: perAc ? r.contracted / perAc : null, status, note: n.note || null, needId: n.id || null
+    }
+  }).sort((a, b) => a.variety.localeCompare(b.variety))
+  const sum = (f) => out.reduce((s, r) => s + (r[f] || 0), 0)
+  const withNeed = out.filter((r) => r.needCwt != null)
+  return {
+    rows: out,
+    totals: {
+      need: sum('needCwt'), contracted: sum('contracted'), agAcres: sum('agAcres'), acres: sum('acres'),
+      short: withNeed.filter((r) => r.status === 'short').reduce((s, r) => s - r.diff, 0),
+      over: withNeed.filter((r) => r.status === 'over').reduce((s, r) => s + r.diff, 0),
+      contractedWithNeed: withNeed.reduce((s, r) => s + r.contracted, 0), needCount: withNeed.length
+    }
+  }
+}
+
 // cwt planted per Agworld field id — for the future planting schedule module.
 export function plantedByField(tickets) {
   const out = {}
