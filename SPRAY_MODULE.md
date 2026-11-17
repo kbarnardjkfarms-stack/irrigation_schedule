@@ -125,3 +125,20 @@ in the last 2 days, so the first full sync never alerts for the whole season.
 | `functions/index.js` | Two lines: `sprayAlerter`, `sprayPushSetup`. |
 | `sprayPush.js`, `push-sw.js`, `vite.config.js` | The phone side: permission + push code, and showing the alert. `push-sw.js` is loaded into AIO's service worker (`importScripts`), copied into the build like the icons. |
 | `Spray.jsx`, `styles.css` | The alerts bar under the header (Turn on / Send a test / Turn off). The Done toast says how many people get the alert. |
+
+## Crew links (no sign-in): Ag Rows operators and drone pilots
+
+Spray → Crew → **Make link** next to someone on the sheet's Operators tab, then **Send link** (opens the phone's
+share sheet, or copies it). The link opens `/crew/<code>`: their jobs first ("Yours"), then all of their crew's jobs,
+with weather, PDF, Directions, Call and **Done** (+ Undo). Ag Rows links see every Ag Rows job; drone links see drone
+jobs only. No assigning, moving or removing. **New link** replaces the old one; **Turn off** stops it right away.
+Done from a link sends the same field-done phone alert.
+
+| File | What |
+|---|---|
+| `functions/sprayCrewLinks.js` | `sprayCrew` (the link page: load / Done / Undo, no sign-in; the code is the key), `sprayLinkAdmin` (Spray admins: list / make / turn off). Codes live in `sprayLinks` (no Firestore rule, server only). |
+| `functions/index.js` | Two lines: `sprayCrew`, `sprayLinkAdmin`. |
+| `main.jsx` | `/crew/<code>` renders the crew page instead of the app (like `/watch/<farm>`). |
+| `Spray.jsx` | `SprayCrew` page; Make / Send / New / Turn off link buttons in the Crew tab; Done on cards for crew links. |
+
+When every crew member has an AIO link, the Google app can be switched off; its old links stop working with it.
