@@ -3257,3 +3257,10 @@ exports.publicFieldsKml = publicMapFeed.publicFieldsKml;
 // actuals) the API really returns, for the Operations plan sync. Lives in
 // its own file — see agworldCensus.js. Remove once that sync is built.
 exports.agworldActivityCensus = require('./agworldCensus').makeExports(AGWORLD_TOKEN, agworldGet).agworldActivityCensus;
+
+// Spray schedule (drone crew + Ag Rows) — AgWorld spray/spread sync, its own
+// file: see spraySync.js. Hourly + nightly full check, and a callable for the app.
+const spraySyncExports = require('./spraySync').makeExports(AGWORLD_TOKEN);
+exports.syncSprayJobs = spraySyncExports.syncSprayJobs;
+exports.syncSprayJobsFull = spraySyncExports.syncSprayJobsFull;
+exports.syncSprayJobsNow = spraySyncExports.syncSprayJobsNow;
