@@ -92,6 +92,8 @@ const uniq = (a) => a.filter((x, i) => a.indexOf(x) === i);
 const round1 = (n) => Math.round(n * 10) / 10;
 const extractNum = (v) => { const m = String(v == null ? '' : v).match(/([\d.]+)/); return m ? m[1] : ''; };
 const normalizeFieldKey = (v) => String(v || '').toLowerCase().replace(/[\s\-_.]+/g, '').trim();
+// Same name matching as the Farm Map module (mapMath.js mapKey): "Hawaii 07" = "HAWAII7".
+const mapKey = (v) => String(v || '').replace(/\b0+(\d)/g, '$1').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const pinUrl = (p) => 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(p.lat + ',' + p.lng);
 
 function cleanName(txt) {
@@ -326,7 +328,10 @@ function evaluateActivity(activity, pins, window) {
 
   const fields = (a.activity_fields || []).map((f) => {
     const name = String((f && f.field_name) || '').trim();
-    const pin = (f && f.field_id != null && pins.byId[String(f.field_id)]) || pins.byName[normalizeFieldKey(name)] || null;
+    // 1) AgWorld's own outline for that field id, 2) the AIO Farm Map outline with that name,
+    // 3) an AgWorld outline whose field has that name
+    const pin = (f && f.field_id != null && pins.byId[String(f.field_id)]) || (pins.byMap && pins.byMap[mapKey(name)]) ||
+      pins.byName[normalizeFieldKey(name)] || null;
     return {
       name: name || 'Unknown field',
       field_id: f && f.field_id != null ? String(f.field_id) : '',
@@ -576,8 +581,20 @@ function ringCenter(ring) {
 }
 
 async function loadPins(db) {
-  const byId = {}, byName = {};
-  const [bSnap, fSnap] = await Promise.all([db.collection('fieldBoundaries').get(), db.collection('fields').get()]);
+  const byId = {}, byName = {}, byMap = {};
+  const [bSnap, fSnap, mSnap] = await Promise.all([db.collection('fieldBoundaries').get(), db.collection('fields').get(),
+    db.collection('farmFields').get().catch(() => ({ forEach: () => {} }))]);
+  // AIO Farm Map outlines: rings [{ c: [lng, lat, lng, lat, ...], hole }]
+  mSnap.forEach((d) => {
+    const f = d.data() || {};
+    if (!f.name || (f.kind && f.kind !== 'field')) return;
+    const ring = (f.rings || []).find((r) => r && !r.hole && Array.isArray(r.c));
+    if (!ring) return;
+    const pts = [];
+    for (let i = 0; i + 1 < ring.c.length; i += 2) pts.push([ring.c[i], ring.c[i + 1]]);
+    const c = ringCenter(pts);
+    if (c && !byMap[mapKey(f.name)]) byMap[mapKey(f.name)] = c;
+  });
   bSnap.forEach((d) => {
     let ring = null;
     try { ring = JSON.parse(d.data().boundary || 'null'); } catch (e) { ring = null; }
@@ -588,7 +605,7 @@ async function loadPins(db) {
     const f = d.data() || {};
     if (f.name && byId[d.id]) byName[normalizeFieldKey(f.name)] = byId[d.id];
   });
-  return { byId, byName };
+  return { byId, byName, byMap };
 }
 
 // ---------------------------------------------------------------------------

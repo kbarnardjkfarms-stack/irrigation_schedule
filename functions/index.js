@@ -3265,3 +3265,5 @@ exports.syncSprayJobs = spraySyncExports.syncSprayJobs;
 exports.syncSprayJobsFull = spraySyncExports.syncSprayJobsFull;
 exports.syncSprayJobsNow = spraySyncExports.syncSprayJobsNow;
 exports.syncSprayJobsFullNow = spraySyncExports.syncSprayJobsFullNow;
+// Spray schedule — assign / done / move / remove / crew list from the app. See sprayActions.js.
+exports.sprayAct = require('./sprayActions').makeExports().sprayAct;
