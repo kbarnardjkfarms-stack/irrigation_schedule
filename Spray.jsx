@@ -7,6 +7,7 @@ import {
   weatherUrl, summarizeWeather, windLevel, mapKey, isMine, normName
 } from './sprayMath.js'
 import jkLogo from './jk-farms-logo.png'
+import { FileText, Navigation, Phone, Check, Undo2 } from 'lucide-react'
 import { pushState, turnOn, turnOff, refresh as refreshPush, sendTest } from './sprayPush.js'
 
 // Spray schedule module (drone crew + Ag Rows) — jobs come from AgWorld through
@@ -78,8 +79,8 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
       <div className="spray-brand">
         <div className="spray-logo"><img src={jkLogo} alt="JK Farms" /></div>
         <h1>Spray Schedule</h1>
+        <Alerts say={say} />
       </div>
-      <Alerts say={say} />
       <div className="spray-tabs">
         <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
         {isAdmin && <button className={view === 'crew' ? 'active' : ''} onClick={() => setView('crew')}>Crew</button>}
@@ -266,11 +267,11 @@ function JobCard({ j, today, wx, ops, isAdmin, canDone, open, onToggle, actions 
         {wx && <Weather w={wx} />}
       </div>
       <div className="spray-actions">
-        {j.agworld_link && <a className="spray-btn" href={j.agworld_link} target="_blank" rel="noreferrer">PDF</a>}
-        {j.pin_url && <a className="spray-btn" href={j.pin_url} target="_blank" rel="noreferrer">Directions</a>}
-        {phone && <a className="spray-btn" href={'tel:' + phone.replace(/[^\d+]/g, '')}>Call {String(j.manager).split(' ')[0]}</a>}
-        {mayDone && !j.done && <button className="spray-btn save" disabled={busy} onClick={guard(() => actions.done(j))}>Done</button>}
-        {mayDone && j.done && j.done.entered_by === 'App (waiting on AgWorld)' && <button className="spray-btn" disabled={busy} onClick={guard(() => actions.undo(j))}>Undo</button>}
+        {j.agworld_link && <a className="spray-btn" href={j.agworld_link} target="_blank" rel="noreferrer"><FileText size={18} />PDF</a>}
+        {j.pin_url && <a className="spray-btn" href={j.pin_url} target="_blank" rel="noreferrer"><Navigation size={18} />Directions</a>}
+        {phone && <a className="spray-btn" href={'tel:' + phone.replace(/[^\d+]/g, '')}><Phone size={18} />{String(j.manager).split(' ')[0]}</a>}
+        {mayDone && !j.done && <button className="spray-btn save" disabled={busy} onClick={guard(() => actions.done(j))}><Check size={18} strokeWidth={3} />Done</button>}
+        {mayDone && j.done && j.done.entered_by === 'App (waiting on AgWorld)' && <button className="spray-btn" disabled={busy} onClick={guard(() => actions.undo(j))}><Undo2 size={18} />Undo</button>}
       </div>
       {open && <Details j={j} ops={ops} isAdmin={isAdmin} actions={actions} busy={busy} guard={guard} />}
     </div>
@@ -482,6 +483,7 @@ function Alerts({ say }) {
   const [st, setSt] = useState(null)
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
+  const [openBell, setOpenBell] = useState(false)   // alerts on: just a bell in the header until tapped
   useEffect(() => { pushState().then(setSt).catch(() => setSt('unsupported')); refreshPush().catch(() => {}) }, [])
   if (!st || st === 'unsupported') return null
   const on = async () => {
@@ -489,19 +491,22 @@ function Alerts({ say }) {
     try {
       const r = await turnOn()
       if (r.ok) {
-        setSt('on')
+        setSt('on'); setOpenBell(!!(r.onSheet === false))
         setNote(r.onSheet === false ? 'Alerts are on, but your name or email isn\'t on the spray sheet\'s Managers tab yet, so Done alerts won\'t come.' : '')
         say('Alerts on for this phone')
       } else setSt(r.error === 'blocked' ? 'blocked' : 'off')
     } catch (e) { setNote(e.message || String(e)) }
     setBusy(false)
   }
-  const off = async () => { setBusy(true); await turnOff(); setSt('off'); setNote(''); setBusy(false); say('Alerts off for this phone') }
+  const off = async () => { setBusy(true); await turnOff(); setSt('off'); setNote(''); setOpenBell(false); setBusy(false); say('Alerts off for this phone') }
   const test = async () => {
     setBusy(true)
     try { const r = await sendTest(); say(r.tested ? 'Test alert sent. It should pop up in a few seconds.' : 'No phone with alerts on for your login.') }
     catch (e) { say(e.message || String(e)) }
     setBusy(false)
+  }
+  if (st === 'on' && !openBell) {
+    return <button className="spray-bell" title="Field-done alerts are on" aria-label="Field-done alerts are on" onClick={() => setOpenBell(true)}>🔔</button>
   }
   return (
     <div className="spray-alerts">
@@ -510,6 +515,7 @@ function Alerts({ say }) {
         <span className="spray-row" style={{ margin: 0 }}>
           <button disabled={busy} onClick={test}>Send a test</button>
           <button disabled={busy} onClick={off}>Turn off</button>
+          <button disabled={busy} onClick={() => { setOpenBell(false); setNote('') }}>Close</button>
         </span>
       </>}
       {st === 'off' && <>

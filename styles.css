@@ -1238,13 +1238,15 @@ body.spray-dark { background: #0c0f11; }
 .spray button:disabled { opacity: .55; }
 .spray select, .spray input { background: var(--sp-card); color: var(--sp-tx); border: 1px solid var(--sp-line); border-radius: 6px; font-size: 13px; padding: 6px 8px; color-scheme: dark; }
 .spray a { color: var(--sp-accent); }
-.spray-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.spray-brand { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
 .spray-logo { width: 50px; height: 44px; border-radius: 10px; background: #fff; display: flex; align-items: center; justify-content: center; flex: none; padding: 3px; box-sizing: border-box; box-shadow: 0 0 0 1px var(--sp-line); }
 .spray-logo img { max-width: 100%; max-height: 100%; display: block; }
 .spray-brand h1 { margin: 0; font-family: var(--sp-cond); font-weight: 700; font-size: 24px; letter-spacing: 1px; text-transform: uppercase; color: var(--sp-tx); }
 .spray-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .spray-alerts { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; background: var(--sp-blueBg); border: 1px solid var(--sp-line); border-radius: 10px; padding: 9px 12px; margin-bottom: 12px; font-size: 13.5px; color: var(--sp-tx); }
 .spray-alerts button { font-size: 13px; padding: 6px 11px; border-radius: 7px; }
+.spray-brand .spray-alerts { flex-basis: 100%; margin-bottom: 0; }
+.spray .spray-bell { margin-left: auto; width: 40px; height: 40px; border-radius: 50%; padding: 0; font-size: 18px; line-height: 1; background: var(--sp-card); border: 1px solid var(--sp-line); }
 .spray-tabs button { font-size: 14px; padding: 8px 14px; }
 .spray-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .spray-seg { display: inline-flex; border: 1px solid var(--sp-line); border-radius: 8px; overflow: hidden; }
@@ -1281,6 +1283,12 @@ body.spray-dark { background: #0c0f11; }
 .spray-wx .wx.l1, .spray-wx .wx.l1 b { background: var(--sp-amberBg); color: var(--sp-amber); border-color: transparent; }
 .spray-wx .wx.l2, .spray-wx .wx.l2 b { background: var(--sp-redBg); color: var(--sp-red); border-color: transparent; }
 .spray-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 13px 11px; }
+/* Card buttons: equal tiles, icon over a short label (like the old app on phones) */
+.spray .spray-actions .spray-btn { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; padding: 8px 4px; border-radius: 10px; background: var(--sp-card2); border-color: var(--sp-line); font-size: 12px; font-weight: 600; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.spray .spray-actions .spray-btn svg { flex: none; color: var(--sp-tx2); }
+.spray .spray-actions .spray-btn.save { background: var(--sp-green); border-color: var(--sp-green); color: var(--sp-bg); font-weight: 700; }
+.spray .spray-actions .spray-btn.save svg { color: var(--sp-bg); }
+.spray .spray-actions .spray-btn:active { transform: scale(.97); }
 .spray-btn { font-size: 13px; padding: 8px 13px; border-radius: 7px; text-decoration: none; display: inline-block; }
 .spray .spray-actions a.spray-btn { color: var(--sp-tx); }
 .spray-details { border-top: 1px solid var(--sp-line); padding: 10px 13px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 8px; background: var(--sp-card2); }
