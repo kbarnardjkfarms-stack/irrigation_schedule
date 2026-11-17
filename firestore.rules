@@ -344,10 +344,24 @@ service cloud.firestore {
       allow read: if signedIn() && canViewContracts() && hasModule('contracts');
       allow write: if signedIn() && isAdminOrOwner();
     }
+    // Contracts > Storage plan: plans that fit storage-contract fields into
+    // Potato Storage bays, and which Farm Map cellar each storage building is.
+    match /storagePlans/{planId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow write: if signedIn() && isAdminOrOwner();
+    }
+    match /storageSites/{buildingId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow write: if signedIn() && isAdminOrOwner();
+    }
     // USDA satellite crop history per Agworld field (Contracts > Rotation),
     // written only by the satelliteRotation Cloud Functions (Admin key).
-    // fieldBoundaries (field outlines from the Agworld sync) has no rule on
-    // purpose: only the Cloud Functions read it, so the default deny applies.
+    // fieldBoundaries (field outlines from the Agworld sync) are written only
+    // by the Cloud Functions; Contracts > Storage plan reads them to measure
+    // field-to-cellar distance (the same outlines the public map feed shows).
+    match /fieldBoundaries/{fieldId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+    }
     // Field history links (Contracts > Rotation, Yields > Field history):
     // which old field names a current field takes history from. Same
     // audience as Contracts/Yields to read; Admin/Owner edit. The map-based
@@ -477,8 +491,9 @@ service cloud.firestore {
     // read; nobody writes from the browser. The AgWorld sync and the Spray
     // functions (assign, done, move, remove, flight log) write with the admin
     // SDK after their own checks, and crew links go through those functions too.
+    // A login with sprayAdmin: true (Users screen checkbox) runs the Spray module whatever its role.
     function canViewSpray() {
-      return isStaff() && hasModule('spray') && (isAdminOrOwner() || myRole() == 'farm_manager');
+      return isStaff() && hasModule('spray') && (isAdminOrOwner() || myRole() == 'farm_manager' || myData().get('sprayAdmin', false) == true);
     }
     match /sprayJobs/{jobKey} {
       allow read: if signedIn() && canViewSpray();
