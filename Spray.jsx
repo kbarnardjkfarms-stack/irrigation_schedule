@@ -23,6 +23,7 @@ const syncNow = httpsCallable(functions, 'syncSprayJobsNow', { timeout: 1800000 
 const contactsNow = httpsCallable(functions, 'syncSprayContactsNow', { timeout: 130000 })
 const crewCall = httpsCallable(functions, 'sprayCrew', { timeout: 60000 })
 const linkAdmin = httpsCallable(functions, 'sprayLinkAdmin', { timeout: 60000 })
+const alertLogCall = httpsCallable(functions, 'sprayAlertLog', { timeout: 130000 })
 
 const RANGES = [['today', 'Today'], ['week', '7 days'], ['all', 'All upcoming']]
 
@@ -84,10 +85,12 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
       <div className="spray-tabs">
         <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
         {isAdmin && <button className={view === 'crew' ? 'active' : ''} onClick={() => setView('crew')}>Crew</button>}
+        {isAdmin && <button className={view === 'alerts' ? 'active' : ''} onClick={() => setView('alerts')}>Alerts</button>}
       </div>
       {view === 'schedule' && <Schedule jobs={jobs} ops={ops} isAdmin={isAdmin} run={run} say={say}
         mine={mineFirst ? (j) => isMine(j, myName, myFarmKeys) : null} />}
       {view === 'crew' && isAdmin && <Crew ops={ops} say={say} />}
+      {view === 'alerts' && isAdmin && <AlertLog say={say} />}
       {toast && (
         <div className="spray-toast">
           {toast.msg}
@@ -622,6 +625,55 @@ export function SprayCrew({ code }) {
         <div className="spray-toast">
           <span>{toast.msg}</span>
           {toast.undo && <button onClick={() => { const u = toast.undo; setToast(null); u() }}>Undo</button>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Alerts tab (Spray admins): did the field-done alerts go out, and if not, why
+// ---------------------------------------------------------------------------
+const ALERT_STATUS = {
+  sent: 'Sent', queued: 'Waiting (Undo window / next send)', no_phones: 'No phone: nobody on it has alerts turned on, or their AIO email isn\'t on the sheet',
+  no_one: 'Nobody to send to (no farm manager, no "all" on the sheet)', stale: 'Too old, skipped', error: 'Failed'
+}
+function AlertLog({ say }) {
+  const [log, setLog] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const load = async (sendNow) => {
+    setBusy(true)
+    try {
+      const r = (await alertLogCall(sendNow ? { sendNow: true } : {})).data
+      setLog(r)
+      if (sendNow) say(r.sent ? 'Sent ' + r.sent.sent + ', no phone ' + r.sent.noPhone + ', errors ' + r.sent.errors : 'Nothing waiting')
+    } catch (e) { say(e.message || String(e)) }
+    setBusy(false)
+  }
+  useEffect(() => { load(false) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const ago = (t) => { if (!t) return 'never'; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : new Date(t).toLocaleString() }
+  return (
+    <div className="spray-box">
+      <div className="spray-row" style={{ justifyContent: 'space-between' }}>
+        <b>Recent field-done alerts</b>
+        <span className="spray-row" style={{ margin: 0 }}>
+          <button disabled={busy} onClick={() => load(false)}>Refresh</button>
+          {log && <button className="save" disabled={busy} onClick={() => load(true)}>Send now</button>}
+        </span>
+      </div>
+      {log && (
+        <div style={{ marginTop: 8 }}>
+          <div className="spray-muted">Sender last ran {ago(log.lastRun)} (it runs every 2 minutes).
+            Phones with alerts on: {log.phones.length ? log.phones.map((p) => p.who + (p.count > 1 ? ' ×' + p.count : '')).join(', ') : 'none'}</div>
+          {log.alerts.length ? log.alerts.map((a) => (
+            <div key={a.jobKey} className="spray-hidden" style={{ marginTop: 6 }}>
+              <div>
+                <b>{a.title}</b> <span className="spray-muted">· {a.how === 'agworld' ? 'closed in AgWorld' : 'Done in AIO'} · {ago(a.createdAt)}</span>
+                <div className="spray-muted">For: {a.people.join(', ') || 'nobody'} · phones that match now: {a.phonesNow}</div>
+                <div className={a.status === 'sent' ? '' : 'spray-unassigned'}>{ALERT_STATUS[a.status] || a.status}{a.status === 'sent' ? ' to ' + a.phones + ' phone' + (a.phones === 1 ? '' : 's') : ''}{a.lastError ? ': ' + a.lastError : ''}</div>
+              </div>
+            </div>
+          )) : <div className="spray-empty">No alerts yet.</div>}
         </div>
       )}
     </div>
