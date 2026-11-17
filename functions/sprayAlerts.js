@@ -155,15 +155,44 @@ async function pushSetup(db, messaging, auth, data) {
   return out;
 }
 
+/** For the Crew tab: when the sender last ran, and the latest alerts with their status. */
+async function alertLog(db) {
+  const meta = (await db.collection('sprayMeta').doc('alerts').get()).data() || {};
+  const tokens = await readAll(db, TOKENS);
+  const list = [];
+  (await db.collection(ALERTS).get()).forEach((d) => {
+    const a = d.data() || {};
+    list.push({ jobKey: d.id, title: a.title || '', how: a.how || '', status: a.status || '', createdAt: a.createdAt || 0, sentAt: a.sentAt || null,
+      phones: a.phones || 0, lastError: a.lastError || '', people: (a.people || []).map((p) => p.name),
+      phonesNow: tokensFor(a.people || [], tokens).length });
+  });
+  list.sort((x, y) => y.createdAt - x.createdAt);
+  const owners = {};
+  Object.values(tokens).forEach((t) => { const k = (t.email || t.name || '?'); owners[k] = (owners[k] || 0) + 1; });
+  return { lastRun: meta.lastRun || null, lastStats: meta.lastStats || null, alerts: list.slice(0, 15),
+    phones: Object.keys(owners).map((k) => ({ who: k, count: owners[k] })) };
+}
+
 function makeExports() {
   const { onSchedule } = require('firebase-functions/v2/scheduler');
   const { onCall } = require('firebase-functions/v2/https');
   const sprayAlerter = onSchedule({ schedule: 'every 2 minutes', timeZone: 'America/Denver', timeoutSeconds: 120 }, async () => { await sendQueued(); });
   const sprayPushSetup = onCall({ timeoutSeconds: 60 }, async (request) => pushSetup(admin.firestore(), admin.messaging(), request.auth, request.data || {}));
-  return { sprayAlerter, sprayPushSetup };
+  // Spray admins: recent alerts + "Send now" (runs the sender right away instead of waiting for its timer).
+  const sprayAlertLog = onCall({ timeoutSeconds: 120 }, async (request) => {
+    const { HttpsError } = require('firebase-functions/v2/https');
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+    const db = admin.firestore();
+    const me = (await db.collection('users').doc(request.auth.uid).get()).data() || {};
+    if (me.sprayAdmin !== true) throw new HttpsError('permission-denied', 'Spray admins only.');
+    let sent = null;
+    if (request.data && request.data.sendNow) sent = await sendQueued({ db, now: Date.now() + SEND_DELAY_SEC * 1000 });
+    return Object.assign({ sent }, await alertLog(db));
+  });
+  return { sprayAlerter, sprayPushSetup, sprayAlertLog };
 }
 
 module.exports = {
   makeExports, queueDoneAlert, cancelDoneAlert,
-  _internal: { buildAlert, queueDoneAlert, cancelDoneAlert, tokensFor, sendQueued, pushSetup, SEND_DELAY_SEC, STALE_HOURS }
+  _internal: { buildAlert, queueDoneAlert, cancelDoneAlert, tokensFor, sendQueued, pushSetup, alertLog, SEND_DELAY_SEC, STALE_HOURS }
 };

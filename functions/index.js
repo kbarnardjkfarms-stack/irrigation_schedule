@@ -3275,6 +3275,7 @@ exports.syncSprayContactsNow = sprayContactsExports.syncSprayContactsNow;
 const sprayAlertsExports = require('./sprayAlerts').makeExports();
 exports.sprayAlerter = sprayAlertsExports.sprayAlerter;
 exports.sprayPushSetup = sprayAlertsExports.sprayPushSetup;
+exports.sprayAlertLog = sprayAlertsExports.sprayAlertLog;
 // Spray schedule: no-login crew links for Ag Rows operators and drone pilots (functions/sprayCrewLinks.js)
 const sprayCrewExports = require('./sprayCrewLinks').makeExports();
 exports.sprayCrew = sprayCrewExports.sprayCrew;
