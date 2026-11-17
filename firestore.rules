@@ -417,6 +417,15 @@ service cloud.firestore {
       allow read: if canSeed();
       allow write: if canSeedManage();
     }
+    // Seed sales (seed we sell to customers) and the loads shipped on them.
+    match /seedSales/{id} {
+      allow read: if canSeed();
+      allow write: if canSeedManage();
+    }
+    match /seedShipments/{id} {
+      allow read: if canSeed();
+      allow write: if canSeedManage();
+    }
     match /seedTrucks/{id} {
       allow read, create, update: if canSeed();
       allow delete: if canSeedManage();
@@ -468,9 +477,8 @@ service cloud.firestore {
     // read; nobody writes from the browser. The AgWorld sync and the Spray
     // functions (assign, done, move, remove, flight log) write with the admin
     // SDK after their own checks, and crew links go through those functions too.
-    // A login with sprayAdmin: true (Users screen checkbox) runs the Spray module whatever its role.
     function canViewSpray() {
-      return isStaff() && hasModule('spray') && (isAdminOrOwner() || myRole() == 'farm_manager' || myData().get('sprayAdmin', false) == true);
+      return isStaff() && hasModule('spray') && (isAdminOrOwner() || myRole() == 'farm_manager');
     }
     match /sprayJobs/{jobKey} {
       allow read: if signedIn() && canViewSpray();
