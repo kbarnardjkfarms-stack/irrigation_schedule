@@ -238,6 +238,40 @@ export function computeNeeds({ needs = [], contractRows = [], fieldList = [], sh
   }
 }
 
+// ---------------------------------------------------------------------------
+// Seed sales (Seed sales tab): seed we sell to customers.
+//   sales:     seedSales docs { customer, variety, contractedCwt, pricePerCwt, … }
+//   shipments: seedShipments docs { saleId, at, cwt, truckNo, ticketNo, lot, … }
+// ---------------------------------------------------------------------------
+export function computeSales({ sales = [], shipments = [] }) {
+  const live = shipments.filter((s) => !s.deleted)
+  const bySale = {}
+  live.forEach((s) => { (bySale[s.saleId] = bySale[s.saleId] || []).push(s) })
+  const rows = sales.map((c) => {
+    const ships = (bySale[c.id] || []).sort((a, b) => (b.at || 0) - (a.at || 0))
+    const shipped = round2(ships.reduce((t, s) => t + (Number(s.cwt) || 0), 0))
+    const target = Number(c.contractedCwt) || 0
+    const price = Number(c.pricePerCwt) > 0 ? Number(c.pricePerCwt) : null
+    return {
+      ...c, shipments: ships, loads: ships.length, shipped, remaining: round2(target - shipped),
+      pct: target > 0 ? shipped / target : null, lastAt: ships.length ? ships[0].at : null,
+      value: price != null ? target * price : null, shippedValue: price != null ? shipped * price : null
+    }
+  }).sort((a, b) => String(a.customer).localeCompare(String(b.customer)) || String(a.variety).localeCompare(String(b.variety)))
+  const byCustomer = {}
+  rows.forEach((r) => {
+    const k = String(r.customer || '').trim()
+    const c = (byCustomer[k] = byCustomer[k] || { customer: k, contracted: 0, shipped: 0, loads: 0, sales: 0 })
+    c.contracted += Number(r.contractedCwt) || 0; c.shipped += r.shipped; c.loads += r.loads; c.sales++
+  })
+  const sum = (f) => round2(rows.reduce((t, r) => t + (Number(r[f]) || 0), 0))
+  return {
+    rows, customers: Object.values(byCustomer).sort((a, b) => a.customer.localeCompare(b.customer)),
+    orphans: live.filter((s) => !sales.some((c) => c.id === s.saleId)),
+    totals: { contracted: sum('contractedCwt'), shipped: sum('shipped'), remaining: round2(sum('contractedCwt') - sum('shipped')), loads: live.length, value: sum('value'), shippedValue: sum('shippedValue') }
+  }
+}
+
 // cwt planted per Agworld field id — for the future planting schedule module.
 export function plantedByField(tickets) {
   const out = {}

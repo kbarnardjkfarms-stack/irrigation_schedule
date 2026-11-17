@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { collection, collectionGroup, doc, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
 import { canonCrop } from './yieldMath.js'
-import { computeNeeds, computeSeed, fmtAge, fmtCwt, fmtWhen, lotLabel, varietyKey } from './seedMath.js'
+import { computeNeeds, computeSales, computeSeed, fmtAge, fmtCwt, fmtWhen, lotLabel, varietyKey } from './seedMath.js'
 import SeedPortals from './SeedPortals.jsx'
+import SeedSales from './SeedSales.jsx'
 import { SeedContracts, SeedLots, SeedReport, SeedSettings, SeedTickets } from './SeedManage.jsx'
 
 // Potato Seed module — contracted seed, pickups from each grower, the cutter,
@@ -19,6 +20,8 @@ import { SeedContracts, SeedLots, SeedReport, SeedSettings, SeedTickets } from '
 //   seedSettings/{seasonId} cutting-zone capacity, truck-age warnings,
 //                        needShrinkPct (allowance added to seed needs)
 //   seedNeeds/{seasonId}__{VARIETY} seed needed for a variety: acres × rate, or cwt
+//   seedSales/{id}       seed we sell: customer, variety, contractedCwt (SeedSales.jsx)
+//   seedShipments/{id}   a load shipped against a sale
 // Plant tickets carry the Agworld field id so the planting schedule module
 // can read seed planted per field.
 
@@ -34,6 +37,8 @@ export default function Seed({ userRole }) {
   const [tickets, setTickets] = useState([])
   const [closes, setCloses] = useState([])
   const [needs, setNeeds] = useState([])
+  const [sales, setSales] = useState([])
+  const [shipments, setShipments] = useState([])
   const [trucks, setTrucks] = useState({})
   const [settingsDoc, setSettingsDoc] = useState(null)
   const [baseFields, setBaseFields] = useState({})
@@ -91,6 +96,8 @@ export default function Seed({ userRole }) {
       }, onErr),
       onSnapshot(query(collection(db, 'seedLotClose'), where('seasonId', '==', sid)), list(setCloses), onErr),
       onSnapshot(query(collection(db, 'seedNeeds'), where('seasonId', '==', sid)), list(setNeeds), () => setNeeds([])),
+      onSnapshot(query(collection(db, 'seedSales'), where('seasonId', '==', sid)), list(setSales), () => setSales([])),
+      onSnapshot(query(collection(db, 'seedShipments'), where('seasonId', '==', sid)), list(setShipments), () => setShipments([])),
       onSnapshot(doc(db, 'seedSettings', sid), (d) => setSettingsDoc(d.exists() ? d.data() : null), onErr),
       onSnapshot(query(collectionGroup(db, 'seasons'), where('seasonId', '==', seasonId)), (snap) => {
         const next = {}
@@ -111,10 +118,12 @@ export default function Seed({ userRole }) {
 
   const needsCalc = useMemo(() => computeNeeds({ needs, contractRows: seed.contractRows, fieldList, shrinkPct: settings.needShrinkPct }), [needs, seed.contractRows, fieldList, settings.needShrinkPct])
 
+  const salesCalc = useMemo(() => computeSales({ sales, shipments }), [sales, shipments])
+
   const season = seasons.find((s) => String(s.id) === String(seasonId))
-  const ctx = { seasonId: String(seasonId), seasonName: season && season.name, contracts, tickets, closes, trucks, settings, seed, fieldList, canManage, isAdmin, now, userRole, needs, needsCalc }
+  const ctx = { seasonId: String(seasonId), seasonName: season && season.name, contracts, tickets, closes, trucks, settings, seed, fieldList, canManage, isAdmin, now, userRole, needs, needsCalc, sales, shipments, salesCalc }
   const tabs = canManage
-    ? [['overview', 'Overview'], ['portals', 'Ticket portals'], ['contracts', 'Contracts'], ['tickets', 'Tickets'], ['lots', 'Lots & shrink'], ['report', 'Planted by field'], ['settings', 'Settings']]
+    ? [['overview', 'Overview'], ['portals', 'Ticket portals'], ['contracts', 'Contracts'], ['sales', 'Seed sales'], ['tickets', 'Tickets'], ['lots', 'Lots & shrink'], ['report', 'Planted by field'], ['settings', 'Settings']]
     : [['portals', 'Ticket portals'], ['inventory', 'Inventory']]
 
   return (
@@ -151,6 +160,7 @@ export default function Seed({ userRole }) {
       {view === 'portals' && <SeedPortals ctx={ctx} />}
       {view === 'inventory' && <><CuttingZone ctx={ctx} /><LoadedTrucks ctx={ctx} /></>}
       {view === 'contracts' && <SeedContracts ctx={ctx} />}
+      {view === 'sales' && <SeedSales ctx={ctx} />}
       {view === 'tickets' && <SeedTickets ctx={ctx} />}
       {view === 'lots' && <SeedLots ctx={ctx} />}
       {view === 'report' && <SeedReport ctx={ctx} />}
