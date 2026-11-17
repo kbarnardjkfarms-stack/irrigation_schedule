@@ -1394,3 +1394,19 @@ body.spray-dark { background: #0c0f11; }
 .csp-legend .csp-dashed { background: #ccc; border: 2px dashed #555; width: 9px; height: 9px; }
 .csp-src-weak { color: #A35A00; }
 @media (max-width: 820px) { .csp-board { grid-template-columns: minmax(0, 1fr); } .csp-fields { position: static; max-height: 340px; } .csp-map { height: 420px; } }
+/* Refrigerated contracts / bays */
+.contracts-delivery.cold { background: #E1F1FB; color: #0B5C8C; }
+.contracts-check { display: flex; flex-direction: column; gap: 2px; justify-content: center; }
+.contracts-check span { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.contracts-check small { color: #888; font-weight: 400; }
+.csp-cold-tag { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; background: #E1F1FB; color: #0B5C8C; border-radius: 4px; padding: 1px 5px; margin: 0 5px 0 0; vertical-align: 1px; }
+.csp-bay-head strong .csp-cold-tag { margin: 0 0 0 6px; }
+.seed-need-sum .csp-cold { background: #E1F1FB; } .seed-need-sum .csp-cold.short { background: #FBE9E7; }
+.seed-need-sum .csp-cold strong small { font-size: 13px; color: #557; font-weight: 600; }
+.csp-cold-pick { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.csp-cold-pick label { display: flex; align-items: center; gap: 3px; font-size: 12.5px; white-space: nowrap; }
+/* Contracts: variety pick lists */
+.contracts-variety-add { display: inline-flex; gap: 4px; align-items: center; }
+.contracts-variety-add input { font: inherit; font-size: 13px; padding: 4px 7px; border: 0.5px solid #ddd8cc; border-radius: 6px; width: 140px; }
+.contracts-variety-select { margin-top: 4px; font-size: 12.5px; }
+.contracts-variety-select.warn { border-color: #E0A050; background: #FFF8EC; }

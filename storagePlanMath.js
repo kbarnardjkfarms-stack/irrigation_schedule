@@ -11,6 +11,9 @@
 //   milesBetween     straight-line distance
 //   bayLock          what a bay already holds in the plan (one variety, one
 //                    customer per bay)
+//   refrigerated     a contract marked refrigerated only goes in refrigerated
+//                    bays (a bay is refrigerated when Potato Storage says so,
+//                    or when it's ticked on Storage plan > Storage sites)
 //   canPlace / autoFill  the brainstorm board's rules and its greedy fill
 
 export const DEFAULT_YIELD = 450 // cwt/ac when a storage contract has no expected yield
@@ -89,7 +92,7 @@ export function matchCellarPoint(building, location, points) {
   return same.find((p) => b.nums && nameSig(p.name).nums === b.nums) || null
 }
 // Every building with bays becomes a site. positions: storageSites docs
-// { [buildingId]: { pointId } | { lat, lng } } set by hand in the plan.
+// { [buildingId]: { pointId } | { lat, lng }, coldBays: [bayId] } set in the plan.
 export function storageSites({ locations = [], buildings = [], bays = [], points = [], positions = {} }) {
   const locById = Object.fromEntries(locations.map((l) => [l.id, l]))
   const pointById = Object.fromEntries((points || []).map((p) => [p.id, p]))
@@ -107,7 +110,7 @@ export function storageSites({ locations = [], buildings = [], bays = [], points
     if (!pos && loc && Number.isFinite(Number(loc.lat)) && Number.isFinite(Number(loc.lng))) { pos = { lat: Number(loc.lat), lng: Number(loc.lng) }; source = 'storage-module' }
     return {
       id: b.id, name: b.name, locationId: b.locationId, locationName: loc ? loc.name : '', pos, source, pointName,
-      bays: myBays.map((x) => ({ id: x.id, name: x.name, siteId: b.id, capacity: bayCapacity(x), now: [...new Set((x.zones || []).map((z) => `${z.variety || '?'} · ${z.customer || '?'}`))] }))
+      bays: myBays.map((x) => ({ id: x.id, name: x.name, siteId: b.id, capacity: bayCapacity(x), refrigerated: x.refrigerated === true || !!(set && (set.coldBays || []).includes(x.id)), now: [...new Set((x.zones || []).map((z) => `${z.variety || '?'} · ${z.customer || '?'}`))] }))
     }
   }).filter((s) => s.bays.length)
   return sites.sort((a, b) => a.locationName.localeCompare(b.locationName) || a.name.localeCompare(b.name, undefined, { numeric: true }))
@@ -129,7 +132,7 @@ export function storageFields({ fields, contracts, allocByField, centroids, site
     const variety = f.variety || (c.varieties && c.varieties.length === 1 ? c.varieties[0] : null)
     return {
       id: f.id, name: f.name, farmName: f.farmName, acres: f.acres, variety, family: varietyFamily(variety), customer: c.buyer || c.name,
-      customerKey: customerKey(c.buyer || c.name), contractId: c.id, contractName: c.name, yieldPerAc, cwt: f.acres * yieldPerAc, pos, near, nearLocs
+      customerKey: customerKey(c.buyer || c.name), contractId: c.id, contractName: c.name, refrigerated: !!c.refrigerated, yieldPerAc, cwt: f.acres * yieldPerAc, pos, near, nearLocs
     }
   }).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
 }
@@ -159,13 +162,17 @@ export function planState({ plan, sites, fields }) {
   })
   const fieldsOut = fields.map((f) => ({ ...f, placed: placedBy[f.id] || 0, left: Math.max(0, f.cwt - (placedBy[f.id] || 0)), overPlaced: (placedBy[f.id] || 0) > f.cwt + 1, bays: assign.filter((a) => a.fieldId === f.id && bays[a.bayId]).map((a) => bays[a.bayId].name) }))
   const open = Object.values(bays).filter((b) => !b.excluded)
+  const cold = open.filter((b) => b.refrigerated)
   return {
     bays, fields: fieldsOut, stray,
     totals: {
       need: fields.reduce((s, f) => s + f.cwt, 0), capacity: open.reduce((s, b) => s + b.capacity, 0),
       placed: assign.reduce((s, a) => s + (bays[a.bayId] && fieldById[a.fieldId] ? Number(a.cwt) || 0 : 0), 0),
       left: fieldsOut.reduce((s, f) => s + f.left, 0), free: open.reduce((s, b) => s + b.free, 0),
-      baysUsed: open.filter((b) => b.items.length).length, baysOpen: open.length
+      baysUsed: open.filter((b) => b.items.length).length, baysOpen: open.length,
+      coldNeed: fields.filter((f) => f.refrigerated).reduce((s, f) => s + f.cwt, 0),
+      coldCapacity: cold.reduce((s, b) => s + b.capacity, 0), coldBays: cold.length,
+      coldLeft: fieldsOut.filter((f) => f.refrigerated).reduce((s, f) => s + f.left, 0)
     }
   }
 }
@@ -177,6 +184,7 @@ export function cannotPlace(f, b) {
   if (!f.family) return `${f.name} has no variety in Agworld — set one before placing it.`
   if (b.lock && b.lock.family !== f.family) return `${b.name} holds ${b.lock.variety} — one variety per bay.`
   if (b.lock && b.lock.customerKey !== f.customerKey) return `${b.name} is ${b.lock.customer}'s — one customer per bay.`
+  if (f.refrigerated && !b.refrigerated) return `${b.name} isn’t refrigerated — ${f.name} is on a refrigerated contract.`
   if (b.free <= 0.5) return `${b.name} is full.`
   return null
 }
@@ -192,13 +200,15 @@ export function placeField(assign, f, b, maxCwt) {
   return [...assign, { fieldId: f.id, bayId: b.id, cwt }]
 }
 
-// Greedy brainstorm: biggest fields first, each into the nearest bays that
-// fit its variety and customer — topping up bays it already shares before
-// opening a new one at the same site. Keeps whatever is already placed.
+// Greedy brainstorm: refrigerated-contract fields first (they have the fewest
+// bays to go in), then biggest first, each into the nearest bays that fit its
+// variety and customer — topping up bays it already shares before opening a
+// new one at the same site, and keeping refrigerated bays for refrigerated
+// fields when an ordinary bay is just as close. Keeps whatever is placed.
 export function autoFill({ plan, sites, fields }) {
   let assign = [...((plan && plan.assign) || [])]
   let st = planState({ plan: { ...plan, assign }, sites, fields })
-  const order = [...st.fields].filter((f) => f.left > 0.5 && f.family).sort((a, b) => b.left - a.left)
+  const order = [...st.fields].filter((f) => f.left > 0.5 && f.family).sort((a, b) => (b.refrigerated - a.refrigerated) || (b.left - a.left))
   const skipped = []
   order.forEach((f0) => {
     for (let guard = 0; guard < 50; guard++) {
@@ -209,6 +219,7 @@ export function autoFill({ plan, sites, fields }) {
       const cands = Object.values(st.bays).filter((b) => !cannotPlace(f, b)).sort((a, b) => {
         const da = dist[a.site.id] ?? 1e9, db = dist[b.site.id] ?? 1e9
         if (Math.abs(da - db) > 0.25) return da - db
+        if (!f.refrigerated && a.refrigerated !== b.refrigerated) return a.refrigerated ? 1 : -1 // save cold bays
         const sa = a.lock ? 0 : 1, sb = b.lock ? 0 : 1 // top up a started bay first
         if (sa !== sb) return sa - sb
         return String(a.name).localeCompare(String(b.name), undefined, { numeric: true })

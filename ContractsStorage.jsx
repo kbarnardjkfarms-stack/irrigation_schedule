@@ -20,7 +20,8 @@ import {
 // module's own docs), farmPoints (Farm Map cellars), fieldBoundaries
 // (Agworld field outlines), farmFields (Farm Map outlines, as a fallback).
 // Writes: storagePlans/{id} { seasonId, name, assign: [{ fieldId, bayId, cwt }],
-// excluded: [bayId], defaultYield }, storageSites/{buildingId} { pointId }.
+// excluded: [bayId], defaultYield }, storageSites/{buildingId} { pointId, coldBays: [bayId] }.
+// Refrigerated contracts only go in refrigerated bays.
 
 const LOC_KEY = 'storage-locations-v3'
 const BLD_KEY = 'storage-buildings-v3'
@@ -170,6 +171,10 @@ export default function ContractsStorage({ seasonId, seasonName, seasonFields, c
         <div><span>Storage available</span><strong>{fmt(T.capacity)}</strong><small>cwt in {T.baysOpen} bays{T.capacity < capAll - 1 ? ` (${fmt(capAll)} with set-aside bays)` : ''}</small></div>
         <div className={T.need > T.capacity ? 'short' : 'ok'}><span>{T.need > T.capacity ? 'Short of space' : 'Room to spare'}</span><strong>{fmt(Math.abs(T.capacity - T.need))}</strong><small>cwt, before the bay rules</small></div>
         <div><span>This plan</span><strong>{fmt(T.placed)}</strong><small>cwt placed in {T.baysUsed} bay{T.baysUsed === 1 ? '' : 's'} · {fmt(T.left)} left to place</small></div>
+        {(T.coldNeed > 0 || T.coldBays > 0) && (
+          <div className={`csp-cold${T.coldNeed > T.coldCapacity ? ' short' : ''}`}><span>Refrigerated</span><strong>{fmt(T.coldNeed)} <small>/ {fmt(T.coldCapacity)}</small></strong>
+            <small>cwt needed / in {T.coldBays} refrigerated bay{T.coldBays === 1 ? '' : 's'}{T.coldLeft > 0.5 ? ` · ${fmt(T.coldLeft)} not placed` : ''}{!T.coldBays ? ' — mark them on Storage sites' : ''}</small></div>
+        )}
       </div>
 
       <div className="yields-card">
@@ -223,7 +228,7 @@ export default function ContractsStorage({ seasonId, seasonName, seasonFields, c
                       <i style={{ background: familyColor(f.family) }} />
                       <div className="csp-field-main">
                         <strong>{f.name}</strong>
-                        <small>{f.variety || 'no variety'} · {f.customer} · {fmt(f.acres)} ac</small>
+                        <small>{f.refrigerated && <b className="csp-cold-tag">Refrigerated</b>}{f.variety || 'no variety'} · {f.customer} · {fmt(f.acres)} ac</small>
                         <small>{f.near[0] ? `Nearest ${f.near[0].name} · ${mi(f.near[0].miles)}` : 'No outline — distance unknown'}</small>
                       </div>
                       <div className="csp-field-num">{f.left > 0.5 ? <><b>{fmtK(f.left)}</b><small>{f.placed > 0 ? 'left' : 'cwt'}</small></> : <span className="seed-need-chip seed-need-ok">Placed</span>}</div>
@@ -231,7 +236,7 @@ export default function ContractsStorage({ seasonId, seasonName, seasonFields, c
                   ))}
                 </div>
                 <div className="csp-sites">
-                  {selF && <div className="csp-hint">Placing <b>{selF.name}</b> ({selF.variety} · {selF.customer}, {fmt(selF.left)} cwt{selF.placed > 0 ? ' still to place' : ''}). {canEdit ? 'Tap or drop on a bay — greyed bays don’t fit.' : ''} <button className="csp-x" style={{ float: 'right' }} onClick={() => setSel(null)}>×</button></div>}
+                  {selF && <div className="csp-hint">Placing <b>{selF.name}</b> ({selF.variety} · {selF.customer}{selF.refrigerated ? ' · refrigerated' : ''}, {fmt(selF.left)} cwt{selF.placed > 0 ? ' still to place' : ''}). {canEdit ? 'Tap or drop on a bay — greyed bays don’t fit.' : ''} <button className="csp-x" style={{ float: 'right' }} onClick={() => setSel(null)}>×</button></div>}
                   {selAny && !selF && <div className="csp-hint">{selAny.name} is placed in full: {selAny.bays.join(', ')}. Use × in a bay to take it out and move it.</div>}
                   {[...yards].sort((a, b) => (selF ? (yardMiles(a, selF) ?? 1e9) - (yardMiles(b, selF) ?? 1e9) : 0)).map((y) => (
                     <div key={y.name} className="csp-site">
@@ -246,7 +251,7 @@ export default function ContractsStorage({ seasonId, seasonName, seasonFields, c
                               onClick={() => selF && place(selF, b)} onDragOver={(e) => { if (canEdit) e.preventDefault() }}
                               onDrop={(e) => { e.preventDefault(); const f = st.fields.find((x) => x.id === e.dataTransfer.getData('text/plain')); if (f) place(f, b) }}>
                               <div className="csp-bay-head">
-                                <strong>{b.name}</strong>
+                                <strong>{b.name}{b.refrigerated && <b className="csp-cold-tag" title="Refrigerated bay">Cold</b>}</strong>
                                 <span>{fmt(b.used)} / {fmt(b.capacity)}</span>
                               </div>
                               <div className="csp-gauge"><div style={{ width: `${Math.min(100, pct * 100)}%`, background: b.lock ? familyColor(b.lock.family) : '#9E9E9E' }} /></div>
@@ -292,7 +297,7 @@ function NearestTable({ st, onPick }) {
           {st.fields.map((f) => (
             <tr key={f.id}>
               <td><button className="link-btn" onClick={() => onPick(f.id)}>{f.name}</button></td><td>{f.farmName || ''}</td>
-              <td><i className="csp-dot" style={{ background: familyColor(f.family) }} />{f.variety || <span className="contracts-sub">not set</span>}</td><td>{f.customer}</td>
+              <td><i className="csp-dot" style={{ background: familyColor(f.family) }} />{f.variety || <span className="contracts-sub">not set</span>}</td><td>{f.customer}{f.refrigerated && <b className="csp-cold-tag" style={{ marginLeft: 5 }}>Refrigerated</b>}</td>
               <td className="num">{fmt(f.acres)}</td><td className="num">{fmt(f.cwt)}<div className="contracts-sub" style={{ marginTop: 0 }}>@ {fmt(f.yieldPerAc)}/ac</div></td>
               <td>{f.near[0] ? <><strong>{f.near[0].name}</strong> · {mi(f.near[0].miles)}</> : <span className="contracts-sub">no outline</span>}</td>
               <td className="contracts-sub">{f.nearLocs[1] ? `${f.nearLocs[1].location} · ${mi(f.nearLocs[1].miles)}` : ''}</td>
@@ -313,7 +318,7 @@ function SitesTable({ sites, st, points, positions, canEdit, run }) {
     <>
       <div className="table-scroll" style={{ marginTop: 8 }}>
         <table className="contracts-table contracts-table-auto">
-          <thead><tr><th>Location</th><th>Building</th><th className="num">Bays</th><th className="num">Capacity (cwt)</th><th className="num">In this plan</th><th>Position from</th>{canEdit && <th>Farm Map cellar</th>}</tr></thead>
+          <thead><tr><th>Location</th><th>Building</th><th className="num">Bays</th><th className="num">Capacity (cwt)</th><th className="num">In this plan</th><th>Refrigerated bays</th><th>Position from</th>{canEdit && <th>Farm Map cellar</th>}</tr></thead>
           <tbody>
             {sites.map((s) => {
               const used = s.bays.reduce((t, b) => t + st.bays[b.id].used, 0)
@@ -322,9 +327,18 @@ function SitesTable({ sites, st, points, positions, canEdit, run }) {
                 <tr key={s.id}>
                   <td>{s.locationName}</td><td><strong>{s.name}</strong></td><td className="num">{s.bays.length}</td><td className="num">{fmt(cap)}</td>
                   <td className="num">{used > 0 ? fmt(used) : ''}</td>
+                  <td className="csp-cold-pick">{s.bays.map((b) => (
+                    <label key={b.id} title={canEdit ? 'Tick if this bay is refrigerated' : ''}>
+                      <input type="checkbox" checked={!!b.refrigerated} disabled={!canEdit} onChange={(e) => {
+                        const cur = new Set((positions[s.id] && positions[s.id].coldBays) || [])
+                        if (e.target.checked) cur.add(b.id); else cur.delete(b.id)
+                        run(setDoc(doc(db, 'storageSites', s.id), { coldBays: [...cur], updatedBy: who(), updatedAt: Date.now() }, { merge: true }), `${b.name} ${e.target.checked ? 'marked refrigerated' : 'not refrigerated'}.`)
+                      }} />{b.name.replace(/^.*?(#?\d+)$/, '$1')}
+                    </label>
+                  ))}</td>
                   <td className={s.source === 'storage-module' || !s.source ? 'csp-src-weak' : ''}>{SOURCE_LABEL[s.source]}{s.pointName ? ` — ${s.pointName}` : ''}</td>
                   {canEdit && <td>
-                    <select value={(positions[s.id] && positions[s.id].pointId) || ''} onChange={(e) => run(e.target.value ? setDoc(doc(db, 'storageSites', s.id), { pointId: e.target.value, updatedBy: who(), updatedAt: Date.now() }) : deleteDoc(doc(db, 'storageSites', s.id)), 'Position saved.')}>
+                    <select value={(positions[s.id] && positions[s.id].pointId) || ''} onChange={(e) => run(setDoc(doc(db, 'storageSites', s.id), { pointId: e.target.value || null, updatedBy: who(), updatedAt: Date.now() }, { merge: true }), 'Position saved.')}>
                       <option value="">{s.source === 'farm-map-auto' ? 'Matched by name' : 'Pick a cellar…'}</option>
                       {cellars.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
@@ -333,7 +347,7 @@ function SitesTable({ sites, st, points, positions, canEdit, run }) {
               )
             })}
           </tbody>
-          {sites.length > 0 && <tfoot><tr><td colSpan={3}><strong>Total</strong></td><td className="num"><strong>{fmt(sites.reduce((t, s) => t + s.bays.reduce((a, b) => a + b.capacity, 0), 0))}</strong></td><td className="num"><strong>{fmt(st.totals.placed)}</strong></td><td colSpan={canEdit ? 2 : 1} /></tr></tfoot>}
+          {sites.length > 0 && <tfoot><tr><td colSpan={3}><strong>Total</strong></td><td className="num"><strong>{fmt(sites.reduce((t, s) => t + s.bays.reduce((a, b) => a + b.capacity, 0), 0))}</strong></td><td className="num"><strong>{fmt(st.totals.placed)}</strong></td><td>{st.totals.coldBays} bay{st.totals.coldBays === 1 ? '' : 's'} · {fmt(st.totals.coldCapacity)} cwt</td><td colSpan={canEdit ? 2 : 1} /></tr></tfoot>}
         </table>
       </div>
       <div className="contracts-sub">Capacity is each bay’s pipes × cwt per pipe from Potato Storage (9′ piles count half). Buildings are placed at the cellar with the same name on the Farm Map; pick a different cellar here if a match is wrong. Bays are edited in Potato Storage.</div>

@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   addDoc, collection, collectionGroup, doc, onSnapshot, query,
-  serverTimestamp, updateDoc, where, writeBatch
+  serverTimestamp, setDoc, updateDoc, where, writeBatch
 } from 'firebase/firestore'
 import { auth, db } from './firebase.js'
-import { UNITS, acresToUnits, contractProgress, fieldMatchesContract, fmtNum } from './contractMath.js'
+import { UNITS, acresToUnits, contractAllowsVariety, contractProgress, defaultPlannedVariety, fieldMatchesContract, fmtNum, sameCrop } from './contractMath.js'
 import { canonCrop, fieldKey } from './yieldMath.js'
 import ContractsRotation, { RotationStrip, useRotation } from './ContractsRotation.jsx'
 import ContractsStorage from './ContractsStorage.jsx'
@@ -18,11 +18,16 @@ import { seasonYear } from './rotationMath.js'
 // Data (see firestore.rules):
 //   contracts/{autoId}                       one doc per contract, tagged with seasonId;
 //                                             potato contracts carry delivery: 'direct' | 'storage'
+//                                             and refrigerated: true | false
 //   contractAllocations/{seasonId}__{fieldId} one doc per allocated field — keying on
 //                                             season+field means a field can only ever
 //                                             sit on ONE contract per season (whole-field
 //                                             allocation, per Kent), enforced by the data
 //                                             shape itself rather than by UI checks.
+//                                             variety: the variety picked for the field
+//                                             from the contract's list (blank = Agworld's)
+//   contractSettings/varieties               { lists: { CROP: [variety…] } } varieties
+//                                             added by hand to the pick lists
 // Admin/Owner can edit; Farm managers can view. The rules are the real gate.
 
 const CROP_COLOR = {
@@ -74,6 +79,8 @@ export default function Contracts({ userRole }) {
   const [seasonDataByField, setSeasonDataByField] = useState({})
   const [contracts, setContracts] = useState([])
   const [allocations, setAllocations] = useState([])
+  const [customVarieties, setCustomVarieties] = useState({})
+  const [storageVarieties, setStorageVarieties] = useState([])
   const [error, setError] = useState(null)
   // Lifted so the Acres view can jump straight into Allocate pre-filtered.
   const [allocFilter, setAllocFilter] = useState({ crop: 'all', status: 'all', contractId: 'all', search: '' })
@@ -149,9 +156,19 @@ export default function Contracts({ userRole }) {
     return () => { unsubC(); unsubA() }
   }, [selectedSeasonId])
 
+  // Variety pick lists: varieties added by hand, and Potato Storage's own list.
+  useEffect(() => {
+    const u1 = onSnapshot(doc(db, 'contractSettings', 'varieties'), (d) => setCustomVarieties((d.exists() && d.data().lists) || {}), () => setCustomVarieties({}))
+    const u2 = onSnapshot(doc(db, 'potatoStorage', 'norland-varieties-v2'), (d) => {
+      try { const v = d.exists() ? JSON.parse(d.data().value) : []; setStorageVarieties(Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : x && x.name)).filter(Boolean) : []) } catch { setStorageVarieties([]) }
+    }, () => setStorageVarieties([]))
+    return () => { u1(); u2() }
+  }, [])
+
   // Every field planted this season, across ALL farms. Contract progress is
   // always computed from this, since one contract can span several farms —
   // the farm picker only narrows what's listed, never the totals on a contract.
+  const plannedVariety = useMemo(() => Object.fromEntries(allocations.filter((a) => a.variety).map((a) => [a.fieldId, a.variety])), [allocations])
   const seasonFields = useMemo(() => {
     return Object.entries(baseFieldsById)
       .filter(([id]) => seasonDataByField[id])
@@ -165,12 +182,15 @@ export default function Contracts({ userRole }) {
           farmName: base.farmName,
           crop: (sd.cropName || '').toUpperCase(),
           rotCrop: canonCrop(sd.cropName), // same crop spelling as the rotation history
-          variety: sd.varietyName || null,
+          // the variety picked on the contract allocation wins over Agworld's
+          variety: plannedVariety[id] || sd.varietyName || null,
+          agworldVariety: sd.varietyName || null,
+          plannedVariety: plannedVariety[id] || null,
           acres: Number(sd.acres) || 0
         }
       })
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-  }, [baseFieldsById, seasonDataByField])
+  }, [baseFieldsById, seasonDataByField, plannedVariety])
 
   const seasonYearNum = seasonYear(seasons.find((s) => String(s.id) === String(selectedSeasonId)))
   const rotationData = useRotation(baseFieldsById, seasons, view === 'rotation' || view === 'allocate')
@@ -203,14 +223,29 @@ export default function Contracts({ userRole }) {
   }, [contracts, seasonFields, allocByField])
 
   const cropOptions = useMemo(() => [...new Set(seasonFields.map((f) => f.crop).filter(Boolean))].sort(), [seasonFields])
-  const varietiesByCrop = useMemo(() => {
-    const m = {}
-    seasonFields.forEach((f) => {
-      if (!f.crop || !f.variety) return
-      ;(m[f.crop] = m[f.crop] || new Set()).add(f.variety)
-    })
-    return Object.fromEntries(Object.entries(m).map(([k, s]) => [k, [...s].sort()]))
-  }, [seasonFields])
+  // Every variety to pick from for a crop: Agworld's, the contracts', the ones
+  // picked on fields, Potato Storage's list (potatoes) and any added by hand.
+  const varietyOptions = useMemo(() => {
+    const out = {}
+    const add = (crop, v) => { if (!crop || !v) return; const k = String(crop).toUpperCase(); (out[k] = out[k] || new Map()).set(String(v).trim().toUpperCase(), String(v).trim()) }
+    seasonFields.forEach((f) => { add(f.crop, f.agworldVariety); add(f.crop, f.plannedVariety) })
+    contracts.forEach((c) => (c.varieties || []).forEach((v) => add(c.crop, v)))
+    Object.entries(customVarieties).forEach(([crop, list]) => (list || []).forEach((v) => add(crop, v)))
+    const potatoCrops = new Set([...cropOptions, ...contracts.map((c) => c.crop)].filter((c) => /POTATO/i.test(c || '')).map((c) => c.toUpperCase()))
+    potatoCrops.forEach((crop) => storageVarieties.forEach((v) => add(crop, v)))
+    return Object.fromEntries(Object.entries(out).map(([k, m]) => [k, [...m.values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))]))
+  }, [seasonFields, contracts, customVarieties, storageVarieties, cropOptions])
+  const varietiesFor = (crop) => varietyOptions[String(crop || '').toUpperCase()] || []
+  async function addCustomVarieties(crop, names) {
+    const k = String(crop || '').toUpperCase()
+    const have = new Set(varietiesFor(crop).map((v) => v.toUpperCase()))
+    const fresh = names.map((v) => String(v).trim()).filter((v) => v && !have.has(v.toUpperCase()))
+    if (!fresh.length) return
+    await setDoc(doc(db, 'contractSettings', 'varieties'), { lists: { [k]: [...(customVarieties[k] || []), ...fresh] }, updatedBy: who(), updatedAt: serverTimestamp() }, { merge: true })
+  }
+  async function setFieldVariety(fieldId, variety) {
+    await updateDoc(doc(db, 'contractAllocations', allocId(String(selectedSeasonId), fieldId)), { variety: variety || null, updatedAt: serverTimestamp(), updatedBy: who() })
+  }
 
   async function assign(fieldIds, contractId) {
     const seasonKey = String(selectedSeasonId)
@@ -219,8 +254,12 @@ export default function Contracts({ userRole }) {
       const ref = doc(db, 'contractAllocations', allocId(seasonKey, fid))
       if (contractId) {
         const f = seasonFields.find((x) => x.id === fid)
+        const prev = allocations.find((a) => a.fieldId === fid)
+        // keep a variety already picked when it still fits; otherwise the default
+        const keep = prev && prev.variety && contractAllowsVariety(contractsById[contractId], prev.variety) ? prev.variety : null
         batch.set(ref, {
           seasonId: seasonKey, fieldId: fid, contractId,
+          variety: keep || defaultPlannedVariety(f ? f.agworldVariety : null, contractsById[contractId]),
           // Snapshot for reference/exports only — live acres always come from Agworld.
           acresAtAllocation: f ? f.acres : null,
           updatedAt: serverTimestamp(), updatedBy: who()
@@ -273,12 +312,12 @@ export default function Contracts({ userRole }) {
       )}
       {view === 'contracts' && (
         <ContractsView contracts={contracts} progressByContract={progressByContract} canEdit={canEdit}
-          seasonId={selectedSeasonId} cropOptions={cropOptions} varietiesByCrop={varietiesByCrop}
+          seasonId={selectedSeasonId} cropOptions={cropOptions} varietiesFor={varietiesFor} onAddVarieties={addCustomVarieties}
           allocations={allocations} onShowFields={showContractFields} seasonFields={seasonFields} allocByField={allocByField} />
       )}
       {view === 'allocate' && (
         <AllocateView fields={fields} contracts={contracts} contractsById={contractsById} allocByField={allocByField}
-          progressByContract={progressByContract} canEdit={canEdit} onAssign={assign}
+          progressByContract={progressByContract} canEdit={canEdit} onAssign={assign} onSetVariety={setFieldVariety} varietiesFor={varietiesFor}
           filter={allocFilter} setFilter={setAllocFilter} cropOptions={cropOptions}
           seasonName={(seasons.find((s) => String(s.id) === String(selectedSeasonId)) || {}).name}
           rotation={rotationData.rotation} refYear={seasonYearNum} />
@@ -419,13 +458,14 @@ function AcresView({ fields, allocByField, contracts, progressByContract, farmFi
 /* Contracts                                                          */
 /* ------------------------------------------------------------------ */
 
-const EMPTY_CONTRACT = { name: '', buyer: '', crop: '', varieties: [], unit: 'cwt', amount: '', yieldPerAcre: '', acresPerShare: '', price: '', notes: '', delivery: '' }
+const EMPTY_CONTRACT = { name: '', buyer: '', crop: '', varieties: [], unit: 'cwt', amount: '', yieldPerAcre: '', acresPerShare: '', price: '', notes: '', delivery: '', refrigerated: false }
 // Potato contracts are either delivered straight from the field (Direct) or
 // stored in our cellars first (Storage) — Storage ones feed the Storage plan.
 export const isPotatoCrop = (crop) => /POTATO/i.test(String(crop || ''))
 const DELIVERY = { direct: 'Direct', storage: 'Storage' }
 
-function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropOptions, varietiesByCrop, allocations, onShowFields, seasonFields, allocByField }) {
+function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropOptions, varietiesFor, onAddVarieties, allocations, onShowFields, seasonFields, allocByField }) {
+  const [newVariety, setNewVariety] = useState('')
   const [editing, setEditing] = useState(null) // null | 'new' | contract id
   const [form, setForm] = useState(EMPTY_CONTRACT)
   const [saving, setSaving] = useState(false)
@@ -441,7 +481,7 @@ function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropO
     setForm({
       name: c.name || '', buyer: c.buyer || '', crop: c.crop || '', varieties: c.varieties || [], unit: c.unit || 'cwt',
       amount: c.amount ?? '', yieldPerAcre: c.yieldPerAcre ?? '', acresPerShare: c.acresPerShare ?? '', price: c.price ?? '', notes: c.notes || '',
-      delivery: c.delivery || ''
+      delivery: c.delivery || '', refrigerated: !!c.refrigerated
     })
     setEditing(c.id); setFormError(null)
   }
@@ -461,6 +501,7 @@ function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropO
       acresPerShare: UNITS[form.unit].kind === 'share' ? num(form.acresPerShare) : null,
       price: num(form.price), notes: form.notes.trim(),
       delivery: isPotatoCrop(form.crop) ? form.delivery || null : null,
+      refrigerated: isPotatoCrop(form.crop) ? !!form.refrigerated : false,
       updatedAt: serverTimestamp(), updatedBy: who()
     }
     setSaving(true)
@@ -470,6 +511,8 @@ function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropO
       } else {
         await updateDoc(doc(db, 'contracts', editing), payload)
       }
+      // varieties typed in here join the pick list for next time
+      onAddVarieties(form.crop, form.varieties).catch(() => {})
       setEditing(null)
     } catch (e) {
       setFormError(e.message)
@@ -578,18 +621,29 @@ function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropO
                 </select>
               </label>
             )}
+            {isPotatoCrop(form.crop) && (
+              <label className="contracts-check">
+                <span><input type="checkbox" checked={!!form.refrigerated} onChange={(e) => setForm({ ...form, refrigerated: e.target.checked })} /> Refrigerated</span>
+                <small>{form.delivery === 'storage' ? 'Only goes in refrigerated bays on the Storage plan' : 'Needs refrigerated storage or transport'}</small>
+              </label>
+            )}
           </div>
-          {form.crop && (varietiesByCrop[form.crop] || []).length > 0 && (
+          {form.crop && (
             <>
-              <div className="editor-label">Varieties allowed <span className="contracts-sub">(none checked = any {form.crop.toLowerCase()} variety)</span></div>
+              <div className="editor-label">Varieties allowed <span className="contracts-sub">(none checked = any {form.crop.toLowerCase()} variety · fields on this contract pick from these)</span></div>
               <div className="contracts-variety-picks">
-                {[...new Set([...(varietiesByCrop[form.crop] || []), ...form.varieties])].sort().map((v) => (
+                {[...new Set([...varietiesFor(form.crop), ...form.varieties])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map((v) => (
                   <label key={v}>
                     <input type="checkbox" checked={form.varieties.includes(v)}
                       onChange={() => setForm({ ...form, varieties: form.varieties.includes(v) ? form.varieties.filter((x) => x !== v) : [...form.varieties, v] })} />
                     {v}
                   </label>
                 ))}
+                <span className="contracts-variety-add">
+                  <input value={newVariety} placeholder="Another variety…" onChange={(e) => setNewVariety(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const v = newVariety.trim(); if (v && !form.varieties.some((x) => x.toUpperCase() === v.toUpperCase())) setForm({ ...form, varieties: [...form.varieties, v] }); setNewVariety('') } }} />
+                  <button type="button" disabled={!newVariety.trim()} onClick={() => { const v = newVariety.trim(); if (v && !form.varieties.some((x) => x.toUpperCase() === v.toUpperCase())) setForm({ ...form, varieties: [...form.varieties, v] }); setNewVariety('') }}>Add</button>
+                </span>
               </div>
             </>
           )}
@@ -628,7 +682,7 @@ function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropO
               </div>
               <div style={{ margin: '6px 0' }}>
                 <CropBadge crop={c.crop} />{' '}
-                {isPotatoCrop(c.crop) && <><span className={`contracts-delivery ${c.delivery || 'unset'}`} title={c.delivery ? '' : 'Edit the contract to pick Direct or Storage'}>{DELIVERY[c.delivery] || 'Direct / Storage?'}</span>{' '}</>}
+                {isPotatoCrop(c.crop) && <><span className={`contracts-delivery ${c.delivery || 'unset'}`} title={c.delivery ? '' : 'Edit the contract to pick Direct or Storage'}>{DELIVERY[c.delivery] || 'Direct / Storage?'}</span>{' '}{c.refrigerated && <><span className="contracts-delivery cold">Refrigerated</span>{' '}</>}</>}
                 <span className="contracts-sub">{c.varieties && c.varieties.length ? c.varieties.join(', ') : 'Any variety'}</span>
               </div>
               <ProgressBar pct={p.pct} status={p.status || 'incomplete'} />
@@ -670,7 +724,7 @@ function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropO
 /* Allocate                                                           */
 /* ------------------------------------------------------------------ */
 
-function AllocateView({ fields, contracts, contractsById, allocByField, progressByContract, canEdit, onAssign, filter, setFilter, cropOptions, seasonName, rotation, refYear }) {
+function AllocateView({ fields, contracts, contractsById, allocByField, progressByContract, canEdit, onAssign, onSetVariety, varietiesFor, filter, setFilter, cropOptions, seasonName, rotation, refYear }) {
   const [selected, setSelected] = useState(new Set())
   const [bulkContract, setBulkContract] = useState('')
   const [busy, setBusy] = useState(false)
@@ -700,8 +754,8 @@ function AllocateView({ fields, contracts, contractsById, allocByField, progress
 
   const selectedFields = rows.filter((r) => selected.has(r.id))
   const selectedAcres = selectedFields.reduce((s, f) => s + f.acres, 0)
-  // Contracts every selected field is eligible for.
-  const bulkOptions = contracts.filter((c) => selectedFields.length > 0 && selectedFields.every((f) => fieldMatchesContract(f, c)))
+  // Contracts every selected field's crop fits (the variety is picked after).
+  const bulkOptions = contracts.filter((c) => selectedFields.length > 0 && selectedFields.every((f) => sameCrop(f, c)))
 
   useEffect(() => { if (bulkContract && !bulkOptions.find((c) => c.id === bulkContract)) setBulkContract('') }, [bulkOptions, bulkContract])
 
@@ -795,15 +849,20 @@ function AllocateView({ fields, contracts, contractsById, allocByField, progress
             {rows.map((f) => {
               const cid = allocByField[f.id]
               const c = cid ? contractsById[cid] : null
-              const eligible = contracts.filter((x) => fieldMatchesContract(f, x))
+              // any contract for the field's crop; ones whose varieties include the
+              // field's Agworld variety first
+              const eligible = contracts.filter((x) => sameCrop(f, x))
+                .sort((a, b) => (contractAllowsVariety(b, f.agworldVariety) - contractAllowsVariety(a, f.agworldVariety)) || (a.name || '').localeCompare(b.name || ''))
               const mismatch = c && !fieldMatchesContract(f, c)
+              const needVariety = c && (c.varieties || []).length > 0 && !f.variety
+              const varietyChoices = c ? ((c.varieties || []).length ? c.varieties : varietiesFor(f.crop)) : []
               return (
                 <tr key={f.id} className={selected.has(f.id) ? 'contracts-row-selected' : ''}>
                   {canEdit && <td><input type="checkbox" checked={selected.has(f.id)} onChange={() => setSelected((prev) => { const n = new Set(prev); n.has(f.id) ? n.delete(f.id) : n.add(f.id); return n })} /></td>}
                   <td><strong>{f.name}</strong></td>
                   <td className="hide-sm">{f.farmName || '—'}</td>
                   <td><CropBadge crop={f.crop} /></td>
-                  <td className="hide-sm">{f.variety || '—'}</td>
+                  <td className="hide-sm">{f.variety || '—'}{f.plannedVariety && f.agworldVariety && f.plannedVariety !== f.agworldVariety && <div className="contracts-sub">Agworld: {f.agworldVariety}</div>}</td>
                   <td className="hide-sm">{rotation && refYear ? <RotationStrip field={rotation[f.key]} from={refYear - 6} to={refYear - 1} highlight={f.rotCrop} /> : null}</td>
                   <td className="num">{fmtNum(f.acres, 1)}</td>
                   <td>
@@ -813,10 +872,20 @@ function AllocateView({ fields, contracts, contractsById, allocByField, progress
                         style={{ borderColor: c ? '#3c5a3f' : undefined }}>
                         <option value="">— Open —</option>
                         {c && !eligible.includes(c) && <option value={c.id}>{c.name} (doesn’t match)</option>}
-                        {eligible.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                        {eligible.map((x) => <option key={x.id} value={x.id}>{x.name}{f.agworldVariety && !contractAllowsVariety(x, f.agworldVariety) ? ' (pick a variety)' : ''}</option>)}
                       </select>
                     ) : (c ? c.name : <span className="contracts-sub">Open</span>)}
-                    {mismatch && <div className="contracts-sub" style={{ color: '#A32D2D' }}>⚠ Field’s crop/variety no longer matches this contract</div>}
+                    {c && canEdit && (
+                      <select className={`contracts-row-select contracts-variety-select${needVariety || mismatch ? ' warn' : ''}`} value={f.plannedVariety || ''} disabled={busy}
+                        onChange={(e) => { setMsg(null); onSetVariety(f.id, e.target.value || null).catch((err) => setMsg(err.message)) }} title="Variety for this field on this contract">
+                        <option value="">{f.agworldVariety && contractAllowsVariety(c, f.agworldVariety) ? `${f.agworldVariety} (Agworld)` : 'Pick a variety…'}</option>
+                        {f.plannedVariety && !varietyChoices.includes(f.plannedVariety) && <option value={f.plannedVariety}>{f.plannedVariety} (not on contract)</option>}
+                        {varietyChoices.filter((v) => v !== f.agworldVariety || !contractAllowsVariety(c, f.agworldVariety) || f.plannedVariety === v).map((v) => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                    )}
+                    {!canEdit && c && f.plannedVariety && <div className="contracts-sub">Variety: {f.plannedVariety}</div>}
+                    {needVariety && <div className="contracts-sub" style={{ color: '#A35A00' }}>Pick the variety from the contract’s list</div>}
+                    {mismatch && <div className="contracts-sub" style={{ color: '#A32D2D' }}>⚠ {f.variety} isn’t on this contract’s variety list</div>}
                     {c && <div className="contracts-sub">≈ {fmtNum(acresToUnits(c, f.acres), 0)} {UNITS[c.unit].label}</div>}
                   </td>
                 </tr>
@@ -835,7 +904,7 @@ function AllocateView({ fields, contracts, contractsById, allocByField, progress
           )}
         </table>
       </div>
-      {canEdit && <p className="contracts-hint">Whole fields only — each field can sit on one contract per season. The dropdown only lists contracts whose crop (and variety, if set) match the field.</p>}
+      {canEdit && <p className="contracts-hint">Whole fields only — each field can sit on one contract per season. The contract list shows every contract for the field’s crop; once a field is on a contract, pick its variety from that contract’s allowed varieties (blank keeps Agworld’s).</p>}
     </>
   )
 }

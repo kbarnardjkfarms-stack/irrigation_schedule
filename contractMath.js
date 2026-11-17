@@ -61,12 +61,27 @@ export function contractProgress(contract, allocatedAcres) {
 const norm = (s) => String(s || '').trim().toUpperCase()
 
 // A field can go on a contract when the crop matches and, if the contract
-// lists varieties, the field's variety is one of them.
+// lists varieties, the field's variety is one of them. A field with no
+// variety yet (next season, before Agworld has one) fits any contract for its
+// crop — its variety is then picked from the contract's list.
 export function fieldMatchesContract(field, contract) {
   if (!field || !contract) return false
   if (norm(field.crop) !== norm(contract.crop)) return false
-  const vs = (contract.varieties || []).map(norm)
-  return vs.length === 0 || vs.includes(norm(field.variety))
+  return !field.variety || contractAllowsVariety(contract, field.variety)
+}
+export function contractAllowsVariety(contract, variety) {
+  const vs = ((contract && contract.varieties) || []).map(norm)
+  return vs.length === 0 || vs.includes(norm(variety))
+}
+export const sameCrop = (field, contract) => !!field && !!contract && norm(field.crop) === norm(contract.crop)
+// The variety a field gets when it's put on a contract: none to set when the
+// field's own (Agworld) variety is allowed, the contract's only variety when
+// it lists just one, otherwise left for the user to pick.
+export function defaultPlannedVariety(agworldVariety, contract) {
+  const vs = (contract && contract.varieties) || []
+  if (!vs.length) return null
+  if (agworldVariety && contractAllowsVariety(contract, agworldVariety)) return null
+  return vs.length === 1 ? vs[0] : null
 }
 
 export function fmtNum(n, digits = 1) {
