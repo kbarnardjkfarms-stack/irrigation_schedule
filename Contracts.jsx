@@ -7,6 +7,7 @@ import { auth, db } from './firebase.js'
 import { UNITS, acresToUnits, contractProgress, fieldMatchesContract, fmtNum } from './contractMath.js'
 import { canonCrop, fieldKey } from './yieldMath.js'
 import ContractsRotation, { RotationStrip, useRotation } from './ContractsRotation.jsx'
+import ContractsStorage from './ContractsStorage.jsx'
 import { seasonYear } from './rotationMath.js'
 
 // Contracts module — a quick view of the season's acres (from the same
@@ -15,7 +16,8 @@ import { seasonYear } from './rotationMath.js'
 // fields are allocated to each.
 //
 // Data (see firestore.rules):
-//   contracts/{autoId}                       one doc per contract, tagged with seasonId
+//   contracts/{autoId}                       one doc per contract, tagged with seasonId;
+//                                             potato contracts carry delivery: 'direct' | 'storage'
 //   contractAllocations/{seasonId}__{fieldId} one doc per allocated field — keying on
 //                                             season+field means a field can only ever
 //                                             sit on ONE contract per season (whole-field
@@ -260,6 +262,7 @@ export default function Contracts({ userRole }) {
         <button className={view === 'contracts' ? 'active' : ''} onClick={() => setView('contracts')}>Contracts{contracts.length ? ` (${contracts.length})` : ''}</button>
         <button className={view === 'allocate' ? 'active' : ''} onClick={() => setView('allocate')}>{canEdit ? 'Allocate fields' : 'Field allocations'}</button>
         <button className={view === 'rotation' ? 'active' : ''} onClick={() => setView('rotation')}>Rotation</button>
+        <button className={view === 'storage' ? 'active' : ''} onClick={() => setView('storage')}>Storage plan</button>
       </div>
 
       {error && <div className="agronomy-error-banner">{error}</div>}
@@ -279,6 +282,10 @@ export default function Contracts({ userRole }) {
           filter={allocFilter} setFilter={setAllocFilter} cropOptions={cropOptions}
           seasonName={(seasons.find((s) => String(s.id) === String(selectedSeasonId)) || {}).name}
           rotation={rotationData.rotation} refYear={seasonYearNum} />
+      )}
+      {view === 'storage' && (
+        <ContractsStorage seasonId={selectedSeasonId} seasonName={(seasons.find((s) => String(s.id) === String(selectedSeasonId)) || {}).name}
+          seasonFields={seasonFields} contracts={contracts} allocByField={allocByField} canEdit={canEdit} onEditContracts={() => setView('contracts')} />
       )}
       {view === 'rotation' && (
         <ContractsRotation rotationData={rotationData} seasonFields={seasonFields} selectedFarmId={selectedFarmId} seasonYearNum={seasonYearNum} canEdit={canEdit} />
@@ -412,7 +419,11 @@ function AcresView({ fields, allocByField, contracts, progressByContract, farmFi
 /* Contracts                                                          */
 /* ------------------------------------------------------------------ */
 
-const EMPTY_CONTRACT = { name: '', buyer: '', crop: '', varieties: [], unit: 'cwt', amount: '', yieldPerAcre: '', acresPerShare: '', price: '', notes: '' }
+const EMPTY_CONTRACT = { name: '', buyer: '', crop: '', varieties: [], unit: 'cwt', amount: '', yieldPerAcre: '', acresPerShare: '', price: '', notes: '', delivery: '' }
+// Potato contracts are either delivered straight from the field (Direct) or
+// stored in our cellars first (Storage) — Storage ones feed the Storage plan.
+export const isPotatoCrop = (crop) => /POTATO/i.test(String(crop || ''))
+const DELIVERY = { direct: 'Direct', storage: 'Storage' }
 
 function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropOptions, varietiesByCrop, allocations, onShowFields, seasonFields, allocByField }) {
   const [editing, setEditing] = useState(null) // null | 'new' | contract id
@@ -429,7 +440,8 @@ function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropO
   function startEdit(c) {
     setForm({
       name: c.name || '', buyer: c.buyer || '', crop: c.crop || '', varieties: c.varieties || [], unit: c.unit || 'cwt',
-      amount: c.amount ?? '', yieldPerAcre: c.yieldPerAcre ?? '', acresPerShare: c.acresPerShare ?? '', price: c.price ?? '', notes: c.notes || ''
+      amount: c.amount ?? '', yieldPerAcre: c.yieldPerAcre ?? '', acresPerShare: c.acresPerShare ?? '', price: c.price ?? '', notes: c.notes || '',
+      delivery: c.delivery || ''
     })
     setEditing(c.id); setFormError(null)
   }
@@ -440,6 +452,7 @@ function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropO
     if (!form.name.trim()) return setFormError('Give the contract a name.')
     if (!form.crop) return setFormError('Pick a crop.')
     if (!(num(form.amount) > 0)) return setFormError('Enter the contracted amount.')
+    if (isPotatoCrop(form.crop) && !form.delivery) return setFormError('Pick Direct or Storage for this potato contract.')
     const payload = {
       seasonId: String(seasonId),
       name: form.name.trim(), buyer: form.buyer.trim(), crop: form.crop,
@@ -447,6 +460,7 @@ function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropO
       yieldPerAcre: UNITS[form.unit].kind === 'yield' ? num(form.yieldPerAcre) : null,
       acresPerShare: UNITS[form.unit].kind === 'share' ? num(form.acresPerShare) : null,
       price: num(form.price), notes: form.notes.trim(),
+      delivery: isPotatoCrop(form.crop) ? form.delivery || null : null,
       updatedAt: serverTimestamp(), updatedBy: who()
     }
     setSaving(true)
@@ -555,6 +569,15 @@ function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropO
               <label>Acres per share<input type="number" inputMode="decimal" value={form.acresPerShare} onChange={(e) => setForm({ ...form, acresPerShare: e.target.value })} placeholder="e.g. 1" /></label>
             )}
             <label>Price ($/{unitInfo.label}, optional)<input type="number" inputMode="decimal" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} /></label>
+            {isPotatoCrop(form.crop) && (
+              <label>Delivery
+                <select value={form.delivery} onChange={(e) => setForm({ ...form, delivery: e.target.value })}>
+                  <option value="">Pick…</option>
+                  <option value="direct">Direct — field to the buyer at harvest</option>
+                  <option value="storage">Storage — into our cellars first</option>
+                </select>
+              </label>
+            )}
           </div>
           {form.crop && (varietiesByCrop[form.crop] || []).length > 0 && (
             <>
@@ -605,6 +628,7 @@ function ContractsView({ contracts, progressByContract, canEdit, seasonId, cropO
               </div>
               <div style={{ margin: '6px 0' }}>
                 <CropBadge crop={c.crop} />{' '}
+                {isPotatoCrop(c.crop) && <><span className={`contracts-delivery ${c.delivery || 'unset'}`} title={c.delivery ? '' : 'Edit the contract to pick Direct or Storage'}>{DELIVERY[c.delivery] || 'Direct / Storage?'}</span>{' '}</>}
                 <span className="contracts-sub">{c.varieties && c.varieties.length ? c.varieties.join(', ') : 'Any variety'}</span>
               </div>
               <ProgressBar pct={p.pct} status={p.status || 'incomplete'} />
