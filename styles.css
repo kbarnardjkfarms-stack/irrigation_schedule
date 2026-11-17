@@ -1218,20 +1218,30 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .fmf-preview > * { min-width: 0; } .fmf-preview table { width: 100%; min-width: 0; }
 
 /* ---- Spray schedule (Spray.jsx) — dark, like the old spray app ---- */
-body.spray-dark { background: #0d100e; }
+/* Barlow Condensed (Open Font License, fonts/BarlowCondensed-OFL.txt) for field names, lanes and labels —
+   the font the old spray app used. Served with the app, no outside requests. */
+@font-face { font-family: 'Barlow Condensed'; font-style: normal; font-weight: 600; font-display: swap; src: url('./fonts/barlow-condensed-latin-600-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Barlow Condensed'; font-style: normal; font-weight: 700; font-display: swap; src: url('./fonts/barlow-condensed-latin-700-normal.woff2') format('woff2'); }
+body.spray-dark { background: #0c0f11; }
 .spray {
-  --sp-bg: #0d100e; --sp-card: #161b18; --sp-card2: #1c231f; --sp-line: #2a332d; --sp-tx: #e9efe9; --sp-tx2: #a3b0a6; --sp-tx3: #6f7c72;
-  --sp-green: #3fb565; --sp-amber: #f0b429; --sp-red: #f2665b; --sp-accent: #7fd39a;
+  /* the old Google spray app's colors */
+  --sp-bg: #0c0f11; --sp-card: #161a1e; --sp-card2: #1d2329; --sp-line: #252b31; --sp-line2: #323a42; --sp-tx: #e8e8e3; --sp-tx2: #9aa1a7; --sp-tx3: #6b737a;
+  --sp-green: #86c070; --sp-greenBg: #17261a; --sp-amber: #f0b24f; --sp-amberBg: #352813; --sp-red: #ff9b9b; --sp-redBg: #3a1b1d;
+  --sp-accent: #7aaef0; --sp-blueBg: #1f2a36; --sp-drone: #ecd84a; --sp-spray: #86c070; --sp-spread: #f2884a; --sp-ontag: #14130c;
   background: var(--sp-bg); color: var(--sp-tx); min-height: calc(100vh - 60px);
   padding: 12px 16px 80px; max-width: none; margin: 0;
 }
 .spray > * { max-width: 980px; margin-left: auto; margin-right: auto; }
 .spray button, .spray .spray-btn { background: var(--sp-card); color: var(--sp-tx); border: 1px solid var(--sp-line); }
 .spray button.active { background: var(--sp-card2); border-color: var(--sp-accent); color: var(--sp-accent); }
-.spray button.save, .spray .spray-btn.save { background: #2f7d47; border-color: #2f7d47; color: #fff; font-weight: 600; }
+.spray button.save, .spray .spray-btn.save { background: var(--sp-green); border-color: var(--sp-green); color: var(--sp-bg); font-weight: 700; }
 .spray button:disabled { opacity: .55; }
 .spray select, .spray input { background: var(--sp-card); color: var(--sp-tx); border: 1px solid var(--sp-line); border-radius: 6px; font-size: 13px; padding: 6px 8px; color-scheme: dark; }
 .spray a { color: var(--sp-accent); }
+.spray-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.spray-logo { width: 50px; height: 44px; border-radius: 10px; background: #fff; display: flex; align-items: center; justify-content: center; flex: none; padding: 3px; box-sizing: border-box; box-shadow: 0 0 0 1px var(--sp-line); }
+.spray-logo img { max-width: 100%; max-height: 100%; display: block; }
+.spray-brand h1 { margin: 0; font-family: var(--sp-cond); font-weight: 700; font-size: 24px; letter-spacing: 1px; text-transform: uppercase; color: var(--sp-tx); }
 .spray-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .spray-tabs button { font-size: 14px; padding: 8px 14px; }
 .spray-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
@@ -1246,28 +1256,28 @@ body.spray-dark { background: #0d100e; }
 .spray-muted { color: var(--sp-tx3); font-size: 12px; font-weight: 400; }
 .spray-day { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--sp-tx2); margin: 10px 2px 6px; }
 .spray-day.late { color: var(--sp-red); }
-.spray-card { background: var(--sp-card); border: 1px solid var(--sp-line); border-left: 6px solid var(--sp-green); border-radius: 12px; margin-bottom: 8px; overflow: hidden; }
-.spray-card.k-drone { border-left-color: #e8c22b; }
-.spray-card.k-spread { border-left-color: #f08a24; }
-.spray-card.k-spray { border-left-color: var(--sp-green); }
+.spray-card { background: var(--sp-card); border: 1px solid var(--sp-line); border-left: 6px solid var(--sp-spray); border-radius: 14px; margin-bottom: 8px; overflow: hidden; }
+.spray-card.k-drone { border-left-color: var(--sp-drone); }
+.spray-card.k-spread { border-left-color: var(--sp-spread); }
+.spray-card.k-spray { border-left-color: var(--sp-spray); }
 .spray-card.done { opacity: .7; }
-.spray-card.late { box-shadow: 0 0 0 1px rgba(242,102,91,.45) inset; }
+.spray-card.late { box-shadow: 0 0 0 1px rgba(255,155,155,.4) inset; }
 .spray-card-main { padding: 11px 13px 6px; cursor: pointer; }
 .spray-card-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.spray-tag { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; }
-.spray-tag.k-drone { background: rgba(232,194,43,.16); color: #f2d35e; }
-.spray-tag.k-spray { background: rgba(63,181,101,.16); color: #7fd39a; }
-.spray-tag.k-spread { background: rgba(240,138,36,.16); color: #f5a95a; }
-.spray-donetag { font-size: 11px; font-weight: 700; color: var(--sp-accent); }
+.spray-tag { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 6px; color: var(--sp-ontag); }
+.spray-tag.k-drone { background: var(--sp-drone); }
+.spray-tag.k-spray { background: var(--sp-spray); }
+.spray-tag.k-spread { background: var(--sp-spread); }
+.spray-donetag { font-size: 11px; font-weight: 700; color: var(--sp-green); }
 .spray-field { font-size: 22px; font-weight: 800; margin: 5px 0 2px; line-height: 1.15; letter-spacing: .01em; }
 .spray-meta { font-size: 13px; color: var(--sp-tx2); }
 .spray-op { font-size: 14px; font-weight: 600; margin-top: 4px; }
 .spray-op.none { color: var(--sp-amber); font-weight: 500; }
 .spray-wx { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-.spray-wx .wx { font-size: 12.5px; padding: 4px 9px; border-radius: 7px; background: rgba(63,181,101,.13); color: #9be0b0; border: 1px solid rgba(63,181,101,.25); }
-.spray-wx .wx b { font-size: 10px; letter-spacing: .06em; margin-right: 4px; }
-.spray-wx .wx.l1 { background: rgba(240,180,41,.13); color: #f5cd6b; border-color: rgba(240,180,41,.3); }
-.spray-wx .wx.l2 { background: rgba(242,102,91,.14); color: #ff9a91; border-color: rgba(242,102,91,.35); }
+.spray-wx .wx { font-size: 12.5px; padding: 4px 9px; border-radius: 7px; background: var(--sp-card2); color: var(--sp-tx); border: 1px solid var(--sp-line); }
+.spray-wx .wx b { font-size: 10px; letter-spacing: .06em; margin-right: 4px; color: var(--sp-tx2); }
+.spray-wx .wx.l1, .spray-wx .wx.l1 b { background: var(--sp-amberBg); color: var(--sp-amber); border-color: transparent; }
+.spray-wx .wx.l2, .spray-wx .wx.l2 b { background: var(--sp-redBg); color: var(--sp-red); border-color: transparent; }
 .spray-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 13px 11px; }
 .spray-btn { font-size: 13px; padding: 8px 13px; border-radius: 7px; text-decoration: none; display: inline-block; }
 .spray .spray-actions a.spray-btn { color: var(--sp-tx); }
@@ -1280,18 +1290,26 @@ body.spray-dark { background: #0d100e; }
 .spray-hidden { display: flex; justify-content: space-between; align-items: center; gap: 10px; background: var(--sp-card); border: 1px solid var(--sp-line); border-radius: 10px; padding: 9px 12px; margin-bottom: 6px; font-size: 13px; }
 .spray-hidden.off { opacity: .55; }
 .spray-empty { color: var(--sp-tx3); font-size: 13px; padding: 14px 4px; }
-.spray-error { background: rgba(242,102,91,.15); color: #ff9a91; padding: 10px 12px; border-radius: 8px; }
+.spray-error { background: var(--sp-redBg); color: var(--sp-red); padding: 10px 12px; border-radius: 8px; }
 .spray-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin: 8px 0; }
 .spray-form label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--sp-tx2); }
 .spray-form label.wide { grid-column: 1 / -1; }
 .spray-form label.check { flex-direction: row; align-items: center; gap: 6px; }
 .spray-toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--sp-tx); color: var(--sp-bg); padding: 9px 14px; border-radius: 8px; font-size: 13px; z-index: 50; display: flex; gap: 12px; align-items: center; max-width: calc(100vw - 32px); }
 .spray .spray-toast button { background: none; border: none; color: var(--sp-bg); font-weight: 700; text-decoration: underline; font-size: 13px; padding: 0; }
-.spray-mine .spray-lane-head { color: var(--sp-accent); border-bottom-color: rgba(127,211,154,.35); }
+.spray-mine .spray-lane-head { color: var(--sp-accent); border-bottom-color: rgba(122,174,240,.35); }
 .spray-rest { margin: 22px 2px 4px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--sp-tx2); }
+.spray { --sp-cond: 'Barlow Condensed', 'Arial Narrow', system-ui, sans-serif; }
+.spray-field { font-family: var(--sp-cond); font-weight: 700; font-size: 26px; letter-spacing: .01em; line-height: 1.08; }
+.spray-lane-head > span:first-child { font-family: var(--sp-cond); font-weight: 700; font-size: 19px; letter-spacing: .03em; text-transform: uppercase; }
+.spray-tag, .spray-day, .spray-rest, .spray-donetag, .spray-wx .wx b { font-family: var(--sp-cond); font-weight: 600; letter-spacing: .07em; }
+.spray-tag { font-size: 12px; }
+.spray-day, .spray-rest { font-size: 13px; }
+.spray-wx .wx b { font-size: 12px; }
+.spray-tabs button, .spray-seg button { font-family: var(--sp-cond); font-weight: 600; font-size: 15px; letter-spacing: .03em; }
 @media (max-width: 600px) {
   .spray { padding: 10px 10px 80px; }
-  .spray-field { font-size: 20px; }
+  .spray-field { font-size: 24px; }
 }
 /* Potato Seed: needs vs contracted, admin edits */
 .seed-need-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 6px 0 10px; }

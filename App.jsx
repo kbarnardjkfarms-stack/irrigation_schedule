@@ -33,6 +33,7 @@ import Spray from './Spray.jsx'
 import AioLogo from './AioLogo.jsx'
 
 import aioLogoIcon from './aio-logo-icon.png'
+import sprayTile from './spray-tile.jpg'
 
 import PivotIcon from './PivotIcon.jsx'
 
@@ -1511,18 +1512,10 @@ export default function App() {
               onClick={() => setPage('spray')}
               style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
             >
-              <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#E3EFE4', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <svg width="58" height="58" viewBox="0 0 48 48">
-                  <rect x="8" y="26" width="32" height="5" rx="2" fill="#3c5a3f" />
-                  <path d="M12 31v6M24 31v6M36 31v6" stroke="#3c5a3f" strokeWidth="2" strokeLinecap="round" />
-                  <path d="M10 39l-2 4M14 39l2 4M22 39l-2 4M26 39l2 4M34 39l-2 4M38 39l2 4" stroke="#2E9B4F" strokeWidth="1.6" strokeLinecap="round" />
-                  <rect x="18" y="12" width="12" height="14" rx="3" fill="#fff" stroke="#3c5a3f" strokeWidth="1.8" />
-                  <path d="M21 12V8h6v4" fill="none" stroke="#3c5a3f" strokeWidth="1.8" />
-                  <circle cx="38" cy="12" r="4" fill="#E0B100" />
-                  <path d="M33 12h-3M38 7V5M38 19v-2M43 12h2" stroke="#E0B100" strokeWidth="1.5" strokeLinecap="round" />
-                </svg>
+              <div style={{ width: '90px', height: '90px', borderRadius: '16px', overflow: 'hidden', background: '#2d6a35' }}>
+                <img src={sprayTile} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
               </div>
-              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Spray</div>
+              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', lineHeight: 1.25 }}>Spray Schedule</div>
             </div>
           )}
         </div>

@@ -6,6 +6,7 @@ import {
   mergeJobs, lanes, dayLabel, inRange, todayYmd, addDays, fmtDay, kindOf, KIND_LABEL, cropEmoji,
   weatherUrl, summarizeWeather, windLevel, phoneBook, normName, mapKey, isMine
 } from './sprayMath.js'
+import jkLogo from './jk-farms-logo.png'
 
 // Spray schedule module (drone crew + Ag Rows) — jobs come from AgWorld through
 // functions/spraySync.js. Every change goes through the sprayAct function, which
@@ -76,6 +77,10 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
 
   return (
     <div className="spray">
+      <div className="spray-brand">
+        <div className="spray-logo"><img src={jkLogo} alt="JK Farms" /></div>
+        <h1>Spray Schedule</h1>
+      </div>
       <div className="spray-tabs">
         <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
         {isAdmin && <button className={view === 'crew' ? 'active' : ''} onClick={() => setView('crew')}>Crew</button>}
