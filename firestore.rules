@@ -48,7 +48,7 @@ service cloud.firestore {
     // can use at all. A profile with NO `modules` field keeps exactly what
     // its role already allowed, so deploying this changes nothing for
     // anyone until an Admin actually sets a list. Admin/Owner always have
-    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts', 'yields', 'harvest', 'seed', 'map'.
+    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts', 'yields', 'harvest', 'seed', 'map', 'spray'.
     // This is the real enforcement — hiding a tile in the UI is only
     // cosmetic, since anyone could still query Firestore directly.
     // Potato planting staff only ever get the seed module.
@@ -454,6 +454,31 @@ service cloud.firestore {
     }
     match /potatoStorage/{document} {
       allow read, write: if signedIn() && hasModule('potato-storage');
+    }
+
+    // Spray schedule module (drone crew + Ag Rows), see functions/spraySync.js.
+    // Signed-in Admin, Owner and Farm manager logins with the 'spray' module can
+    // read; nobody writes from the browser. The AgWorld sync and the Spray
+    // functions (assign, done, move, remove, flight log) write with the admin
+    // SDK after their own checks, and crew links go through those functions too.
+    function canViewSpray() {
+      return isStaff() && hasModule('spray') && (isAdminOrOwner() || myRole() == 'farm_manager');
+    }
+    match /sprayJobs/{jobKey} {
+      allow read: if signedIn() && canViewSpray();
+      allow write: if false;
+    }
+    match /sprayJobState/{jobKey} {
+      allow read: if signedIn() && canViewSpray();
+      allow write: if false;
+    }
+    match /sprayMeta/{docId} {
+      allow read: if signedIn() && isAdminOrOwner();
+      allow write: if false;
+    }
+    match /spraySyncLog/{docId} {
+      allow read: if signedIn() && isAdminOrOwner();
+      allow write: if false;
     }
   }
 }
