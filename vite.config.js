@@ -19,7 +19,8 @@ const emitVersionFile = () => ({
 // The home-screen icons sit at the project root (flat layout), and Vite only copies
 // files from a public/ folder, so without this they never reached the deployed site
 // and phones showed a plain letter instead of the logo. This puts them into the build.
-const ICON_FILES = ['icon-192.png', 'icon-512.png', 'icon-maskable-512.png']
+// push-sw.js (phone alerts) rides along the same way; the service worker loads it (importScripts below).
+const ICON_FILES = ['icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'push-sw.js']
 const emitIcons = () => ({
   name: 'emit-home-screen-icons',
   generateBundle() {
@@ -66,6 +67,8 @@ export default defineConfig({
         skipWaiting: true,
         clientsClaim: true,
         cleanupOutdatedCaches: true,
+        // Phone alerts: shows pushes from Firebase Cloud Messaging (push-sw.js).
+        importScripts: ['push-sw.js'],
         runtimeCaching: [
           {
             urlPattern: ({ url }) => url.origin.includes('firestore.googleapis.com'),

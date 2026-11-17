@@ -72,3 +72,56 @@ Season log, Records, Costs, crew links.
   farm (Users screen). Their phone number from Users rides along on the job, so everyone gets the Call
   button. This replaces the Google app's Managers tab. Fills in on the next hourly sync.
 - **Weather on past-due jobs** (`Spray.jsx`): they show today's weather, since that's when they'd get done.
+
+## People from the spray Google Sheet (Managers + Operators tabs)
+
+AIO's Users list no longer decides who a job's farm manager is. Outside people with AIO logins never
+end up on a job, a Call button or a Done email. The spray schedule's Google Sheet is the list again:
+
+| Tab | Columns AIO reads | Used for |
+|---|---|---|
+| Managers | name, phone, farms, email, **notify** | The job's manager when the AgWorld comment has none (farms column), the Call button, Done emails |
+| Operators | name, crew, rig, phone, active, aliases | The operator dropdown on jobs. Pay, licenses and emails are NOT copied into AIO. |
+
+**notify** (Managers tab): `all` gets every Done email, `spreads` gets Ag Rows spread Done emails.
+Rows with notify don't need farms. So Done emails go to: the `all` people + the job's farm manager,
+plus the `spreads` people on Ag Rows spread jobs. (Sending is step 4; the recipients are worked out here.)
+
+| File | What |
+|---|---|
+| `functions/sprayContacts.js` | Reads both tabs with the Sheets API (hourly `syncSprayContacts`, and `syncSprayContactsNow` for the Refresh button, Spray admins only). Writes `sprayContacts` (server only, no browser rule) and `sprayOperators`. An empty or failed read never wipes the lists. |
+| `functions/spraySync.js` | Manager + phone come from `sprayContacts` instead of AIO Users. |
+| `functions/sprayActions.js` | In-app crew editing is off (the sheet is the list). |
+| `functions/index.js` | Two new lines at the bottom: `syncSprayContacts`, `syncSprayContactsNow`. |
+| `Spray.jsx` | Crew tab: read-only list from the sheet, Refresh, and the sheet link. Call button uses the sheet's phone. |
+
+Setup, once:
+1. Spray → Crew → paste the spray Google Sheet link → **Link + read**. The box shows the address AIO
+   reads with; share the sheet with that address as **Viewer**, then press **Refresh from sheet**.
+2. If it says the Google Sheets API is turned off, open the link it gives (Firebase project owner) and
+   press Enable, then Refresh again.
+3. Managers tab: add a `notify` column; put `all` on the operation lead's row and `spreads` on the
+   operations manager's row.
+
+## "Field is done" alerts on phones
+
+When a job is marked Done in the app, or the sync sees it closed in AgWorld, a phone alert is queued in
+`sprayAlerts/{jobKey}` for the Managers-tab people: `all` (the person running the spray operation), the
+job's farm manager, and `spreads` on Ag Rows spread jobs. It waits 90 seconds so Undo can take it back;
+`sprayAlerter` (every 2 minutes) sends what's due with Firebase Cloud Messaging. No outside service, no keys.
+
+A phone gets alerts once its person taps **Turn on alerts** on the Spray screen. Their AIO login must match
+their Managers-tab row by email (or name); AIO logins not on the sheet never get alerts. iPhone: AIO must be
+added to the Home Screen (Safari → Share → Add to Home Screen) and opened from that icon first.
+
+AgWorld closings only alert for jobs that were on the schedule, weren't already Done in the app, and finished
+in the last 2 days, so the first full sync never alerts for the whole season.
+
+| File | What |
+|---|---|
+| `functions/sprayAlerts.js` | Queue / cancel / send alerts; `sprayPushSetup` saves a phone, turns it off, or sends its owner a test. `sprayAlerts` and `sprayPushTokens` have no Firestore rules (server only). |
+| `functions/sprayActions.js` | Done queues the alert, Undo cancels it. |
+| `functions/spraySync.js` | Job closed in AgWorld → alert (following the job from work order to actual). |
+| `functions/index.js` | Two lines: `sprayAlerter`, `sprayPushSetup`. |
+| `sprayPush.js`, `push-sw.js`, `vite.config.js` | The phone side: permission + push code, and showing the alert. `push-sw.js` is loaded into AIO's service worker (`importScripts`), copied into the build like the icons. |
+| `Spray.jsx`, `styles.css` | The alerts bar under the header (Turn on / Send a test / Turn off). The Done toast says how many people get the alert. |

@@ -1218,10 +1218,10 @@ thead th.sticky-col { top: 0; z-index: 4; }
 .fmf-preview > * { min-width: 0; } .fmf-preview table { width: 100%; min-width: 0; }
 
 /* ---- Spray schedule (Spray.jsx) — dark, like the old spray app ---- */
-/* Barlow Condensed (Open Font License, fonts/BarlowCondensed-OFL.txt) for field names, lanes and labels —
+/* Barlow Condensed (Open Font License, BarlowCondensed-OFL.txt) for field names, lanes and labels —
    the font the old spray app used. Served with the app, no outside requests. */
-@font-face { font-family: 'Barlow Condensed'; font-style: normal; font-weight: 600; font-display: swap; src: url('./fonts/barlow-condensed-latin-600-normal.woff2') format('woff2'); }
-@font-face { font-family: 'Barlow Condensed'; font-style: normal; font-weight: 700; font-display: swap; src: url('./fonts/barlow-condensed-latin-700-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Barlow Condensed'; font-style: normal; font-weight: 600; font-display: swap; src: url('./barlow-condensed-latin-600-normal.woff2') format('woff2'); }
+@font-face { font-family: 'Barlow Condensed'; font-style: normal; font-weight: 700; font-display: swap; src: url('./barlow-condensed-latin-700-normal.woff2') format('woff2'); }
 body.spray-dark { background: #0c0f11; }
 .spray {
   /* the old Google spray app's colors */
@@ -1243,6 +1243,8 @@ body.spray-dark { background: #0c0f11; }
 .spray-logo img { max-width: 100%; max-height: 100%; display: block; }
 .spray-brand h1 { margin: 0; font-family: var(--sp-cond); font-weight: 700; font-size: 24px; letter-spacing: 1px; text-transform: uppercase; color: var(--sp-tx); }
 .spray-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.spray-alerts { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; background: var(--sp-blueBg); border: 1px solid var(--sp-line); border-radius: 10px; padding: 9px 12px; margin-bottom: 12px; font-size: 13.5px; color: var(--sp-tx); }
+.spray-alerts button { font-size: 13px; padding: 6px 11px; border-radius: 7px; }
 .spray-tabs button { font-size: 14px; padding: 8px 14px; }
 .spray-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .spray-seg { display: inline-flex; border: 1px solid var(--sp-line); border-radius: 8px; overflow: hidden; }
