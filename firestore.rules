@@ -391,8 +391,10 @@ service cloud.firestore {
     }
     // Potato Seed module (Seed.jsx). Every staff login with the 'seed'
     // module (incl. Potato planting staff) can enter tickets and read the
-    // live inventory; contracts, settings, edits and deletes are Admin,
-    // Owner and Farm manager. Staff may only flip a pickup to "unloaded".
+    // live inventory; contracts, seed needs, settings, edits and deletes are
+    // Admin, Owner and Farm manager. Staff may only flip a pickup to
+    // "unloaded". Deleting a ticket or photo for good (not the soft delete
+    // managers use) is Admin / Owner only.
     function canSeed() {
       return isStaff() && hasModule('seed');
     }
@@ -411,6 +413,10 @@ service cloud.firestore {
       allow read: if canSeed();
       allow write: if canSeedManage();
     }
+    match /seedNeeds/{id} {
+      allow read: if canSeed();
+      allow write: if canSeedManage();
+    }
     match /seedTrucks/{id} {
       allow read, create, update: if canSeed();
       allow delete: if canSeedManage();
@@ -419,11 +425,12 @@ service cloud.firestore {
       allow read, create: if canSeed();
       allow update: if canSeedManage() || (canSeed() &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'unloadedAt', 'unloadedBy']));
-      allow delete: if canSeedManage();
+      allow delete: if canSeedManage() && isAdminOrOwner();
     }
     match /seedPhotos/{id} {
       allow read, create: if canSeed();
-      allow update, delete: if canSeedManage();
+      allow update: if canSeedManage();
+      allow delete: if canSeedManage() && isAdminOrOwner();
     }
     // Farm Map module (FarmMap.jsx): field outlines, points (cellars, shops,
     // dumps…) and the imported Main Field Plan rows. Any staff login with
