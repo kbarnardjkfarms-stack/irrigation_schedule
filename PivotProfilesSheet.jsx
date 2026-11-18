@@ -22,7 +22,7 @@ const BAD = '#A32D2D'
 
 // Fixed column widths (px) so every column has the same breathing room and nothing stretches with the window.
 // Groups: pivot info | package and flow | alerts and machine.
-const COLS = { pivot: 210, acres: 84, src: 104, len: 90, wiper: 124, travel: 96, steel: 118, pkg: 200, gpm: 220, gpmAc: 112, noPrint: 96, stuck: 110, corner: 104, cornerLen: 120, lap: 100 }
+const COLS = { pivot: 236, acres: 98, steel: 114, src: 104, len: 90, wiper: 124, travel: 96, pkg: 200, gpm: 220, gpmAc: 112, noPrint: 96, stuck: 110, corner: 104, cornerLen: 120, lap: 100 }
 const TABLE_W = Object.values(COLS).reduce((a, b) => a + b, 0)
 const GROUP_EDGE = `1px solid ${LINE}`
 const th = { textAlign: 'center', padding: '8px 12px', fontSize: 11.5, color: MUTED, fontWeight: 600, borderBottom: `1px solid ${LINE}`, background: '#f4f2ec', position: 'sticky', top: 30, zIndex: 3, lineHeight: 1.25 }
@@ -321,19 +321,20 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
           </colgroup>
           <thead>
             <tr>
-              <th colSpan={2} style={{ ...thGroup, left: 0, zIndex: 5 }}>Pivot</th>
-              <th colSpan={5} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>From controller (read-only)</th>
+              <th style={{ ...thGroup, left: 0, zIndex: 5 }}>Pivot</th>
+              <th colSpan={2} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>Acres</th>
+              <th colSpan={4} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>From controller (read-only)</th>
               <th colSpan={4} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>Package and flow</th>
               <th colSpan={4} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>Alerts and corner machine</th>
             </tr>
             <tr>
               <th style={{ ...th, textAlign: 'left', left: 0, zIndex: 4 }}>Pivot</th>
-              <th style={th}>Farmed<br />acres</th>
+              <th style={{ ...th, borderLeft: GROUP_EDGE }}>Farmed<br />acres</th>
+              <th style={th}>Acres under<br />steel</th>
               <th style={{ ...th, textAlign: 'left', borderLeft: GROUP_EDGE }}>Source</th>
               <th style={th}>Length<br />(feet)</th>
               <th style={th}>Wiper range</th>
               <th style={th}>Degrees of<br />travel</th>
-              <th style={th}>Acres under<br />steel</th>
               <th style={{ ...th, textAlign: 'left', borderLeft: GROUP_EDGE }}>Package</th>
               <th style={{ ...th, textAlign: 'left' }}>GPM</th>
               <th style={th}>GPM per acre<br />(under steel)</th>
@@ -355,16 +356,16 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                     <button type="button" onClick={() => onOpenProfile(r.guid)} title="Open this pivot's full profile" style={{ border: 'none', background: 'none', padding: 0, textAlign: 'left', cursor: 'pointer', color: INK, fontWeight: 600, fontSize: 13 }}>{r.name}</button>
                     {r.baseName && <div style={small}>{r.baseName}</div>}
                   </td>
-                  <td style={{ ...td, background: zebra }}>{r.acres != null ? r.acres.toFixed(1) : '—'}</td>
-                  <td style={{ ...td, background: zebra, textAlign: 'left', borderLeft: GROUP_EDGE, color: MUTED }}>{r.brand}</td>
-                  <td style={{ ...td, background: zebra, color: r.lengthFt != null ? INK : MUTED }}>{r.lengthFt != null ? Math.round(r.lengthFt).toLocaleString() : '—'}</td>
-                  <td style={{ ...td, background: zebra, color: r.wiper ? INK : MUTED }}>{r.wiper || 'Full circle'}</td>
-                  <td data-testid="travel" style={{ ...td, background: zebra }}>{`${Math.round(r.travel * 10) / 10}\u00b0`}</td>
+                  <td style={{ ...td, background: zebra, borderLeft: GROUP_EDGE }}>{r.acres != null ? r.acres.toFixed(1) : '—'}</td>
                   <td data-testid="steel-acres" style={{ ...td, background: zebra, color: r.steel > 0 ? INK : MUTED }}>
                     {r.steel > 0 ? r.steel.toFixed(1) : '\u2014'}
                     {r.steel > 0 && r.steelSource === 'agworld-corner' && <div style={small}>AgWorld, corner</div>}
                     {r.steel > 0 && r.steelSource === 'agworld' && <div style={small}>AgWorld, no length</div>}
                   </td>
+                  <td style={{ ...td, background: zebra, textAlign: 'left', borderLeft: GROUP_EDGE, color: MUTED }}>{r.brand}</td>
+                  <td style={{ ...td, background: zebra, color: r.lengthFt != null ? INK : MUTED }}>{r.lengthFt != null ? Math.round(r.lengthFt).toLocaleString() : '—'}</td>
+                  <td style={{ ...td, background: zebra, color: r.wiper ? INK : MUTED }}>{r.wiper || 'Full circle'}</td>
+                  <td data-testid="travel" style={{ ...td, background: zebra }}>{`${Math.round(r.travel * 10) / 10}\u00b0`}</td>
                   <td style={{ ...td, background: zebra, textAlign: 'left', borderLeft: GROUP_EDGE, overflow: 'hidden' }}>
                     {r.pkg ? (
                       <>
