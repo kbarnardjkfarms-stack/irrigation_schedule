@@ -641,12 +641,13 @@ const ALERT_STATUS = {
 function AlertLog({ say }) {
   const [log, setLog] = useState(null)
   const [busy, setBusy] = useState(false)
-  const load = async (sendNow) => {
+  const load = async (sendNow, testLikeDone) => {
     setBusy(true)
     try {
-      const r = (await alertLogCall(sendNow ? { sendNow: true } : {})).data
+      const r = (await alertLogCall(testLikeDone ? { testLikeDone: true } : sendNow ? { sendNow: true } : {})).data
       setLog(r)
-      if (sendNow) say(r.sent ? 'Sent ' + r.sent.sent + ', no phone ' + r.sent.noPhone + ', errors ' + r.sent.errors : 'Nothing waiting')
+      if (r.test) say('Test sent to ' + r.test.sent + ' of ' + r.test.phones + ' phone' + (r.test.phones === 1 ? '' : 's') + (r.test.failed ? ', ' + r.test.failed + ' failed' : ''))
+      else if (sendNow) say(r.sent ? 'Sent ' + r.sent.sent + ', no phone ' + r.sent.noPhone + ', errors ' + r.sent.errors : 'Nothing waiting')
     } catch (e) { say(e.message || String(e)) }
     setBusy(false)
   }
@@ -658,6 +659,7 @@ function AlertLog({ say }) {
         <b>Recent field-done alerts</b>
         <span className="spray-row" style={{ margin: 0 }}>
           <button disabled={busy} onClick={() => load(false)}>Refresh</button>
+          <button disabled={busy} onClick={() => load(false, true)}>Test like a Done</button>
           {log && <button className="save" disabled={busy} onClick={() => load(true)}>Send now</button>}
         </span>
       </div>
