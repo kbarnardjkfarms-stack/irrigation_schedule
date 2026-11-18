@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, Fragment } from 'react'
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { collection, onSnapshot, doc, updateDoc, deleteField, getDoc, getDocs } from 'firebase/firestore'
 import { sendPasswordResetEmail } from 'firebase/auth'
@@ -235,6 +235,68 @@ function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabe
   )
 }
 
+// Columns the team table can be sorted by (the filter boxes sit under the same headings).
+const COLUMNS = [
+  { key: 'name', label: 'Name' },
+  { key: 'phone', label: 'Phone' },
+  { key: 'role', label: 'Role' },
+  { key: 'farms', label: 'Farms' },
+  { key: 'sched', label: 'Schedule access' },
+  { key: 'modules', label: 'Modules' }
+]
+const EMPTY_FILTERS = { name: '', phone: '', role: '', farm: '', sched: '', module: '', status: '' }
+const CUSTOMER_PORTAL_FILTER = '__customer_portal'
+const ALL_FARMS_FILTER = '__all_farms'
+
+// Does this person have access to the module? (Same rule as the Modules column:
+// admin/owner, or a profile with no list, get everything; customers get none.)
+function userHasModule(user, moduleId) {
+  if (user.role === CUSTOMER_ROLE) return false
+  if (FULL_ACCESS_ROLES.includes(user.role) || !Array.isArray(user.modules)) return true
+  return user.modules.includes(moduleId)
+}
+
+// The three-dot menu at the end of each row. Closes on a click anywhere else,
+// on Escape, or after a choice.
+function RowMenu({ label, items }) {
+  const [open, setOpen] = useState(false)
+  const boxRef = useRef(null)
+  useEffect(() => {
+    if (!open) return undefined
+    function onDown(e) { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false) }
+    function onKey(e) { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
+  }, [open])
+  return (
+    <div ref={boxRef} style={{ position: 'relative', display: 'inline-block' }}>
+      <button
+        type="button"
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        style={{ padding: '2px 10px', fontSize: '18px', lineHeight: 1, fontWeight: 700 }}
+      >{'\u22ef'}</button>
+      {open && (
+        <div role="menu" style={{ position: 'absolute', right: 0, top: '100%', marginTop: '4px', zIndex: 20, background: '#fff', border: '1px solid #ddd', borderRadius: '8px', boxShadow: '0 4px 14px rgba(0,0,0,0.14)', minWidth: '190px', padding: '4px 0', textAlign: 'left' }}>
+          {items.filter(Boolean).map((it) => (
+            <button
+              key={it.label}
+              type="button"
+              role="menuitem"
+              disabled={it.disabled}
+              onClick={() => { setOpen(false); it.onClick() }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 14px', fontSize: '13px', border: 'none', borderRadius: 0, background: 'transparent', color: it.danger ? '#A32D2D' : '#2b2b26', cursor: it.disabled ? 'default' : 'pointer', opacity: it.disabled ? 0.5 : 1 }}
+            >{it.label}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Users() {
   const [farms, setFarms] = useState([])
   const [users, setUsers] = useState([])
@@ -245,6 +307,10 @@ export default function Users() {
   const [lastLink, setLastLink] = useState(null)
   const [copiedKey, setCopiedKey] = useState(null)
   const [busyUid, setBusyUid] = useState(null)
+  const [sort, setSort] = useState({ key: 'name', dir: 'asc' })
+  const [filters, setFilters] = useState(EMPTY_FILTERS)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'farms'), (snap) => {
@@ -396,6 +462,24 @@ export default function Users() {
     }
   }
 
+  async function handleConfirmDelete() {
+    if (!deleteTarget) return
+    const who = deleteTarget.name || deleteTarget.email || 'That account'
+    setDeleting(true)
+    try {
+      const deleteUserAccount = httpsCallable(functions, 'deleteUserAccount')
+      await deleteUserAccount({ uid: deleteTarget.uid })
+      if (editingUid === deleteTarget.uid) setEditingUid(null)
+      setDeleteTarget(null)
+      setNotice(`${who} was deleted.`)
+    } catch (err) {
+      setDeleteTarget(null)
+      setNotice(err.message || 'Could not delete that account.')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   async function handleResend(user) {
     setBusyUid(user.uid)
     try {
@@ -429,8 +513,68 @@ export default function Users() {
     return user.canEditSchedule ? 'Edit' : 'View only'
   }
 
+  function sortValue(user, key) {
+    switch (key) {
+      case 'name': return user.name || user.email || ''
+      case 'phone': return user.phone || ''
+      case 'role': return ROLE_LABELS[user.role] || user.role || ''
+      case 'farms': return farmSummary(user)
+      case 'sched': return scheduleAccessSummary(user)
+      case 'modules': return moduleSummary(user)
+      default: return ''
+    }
+  }
+
+  function toggleSort(key) {
+    setSort((cur) => (cur.key === key ? { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }))
+  }
+  function setFilter(key, value) { setFilters((f) => ({ ...f, [key]: value })) }
+
+  function matchesFilters(user) {
+    const f = filters
+    if (f.name) {
+      const q = f.name.trim().toLowerCase()
+      if (!`${user.name || ''} ${user.email || ''}`.toLowerCase().includes(q)) return false
+    }
+    if (f.phone) {
+      const q = f.phone.trim()
+      const digits = q.replace(/\D/g, '')
+      const phone = user.phone || ''
+      if (digits ? !phone.replace(/\D/g, '').includes(digits) : !phone.toLowerCase().includes(q.toLowerCase())) return false
+    }
+    if (f.role && user.role !== f.role) return false
+    if (f.farm) {
+      if (f.farm === ALL_FARMS_FILTER) {
+        if (user.role === CUSTOMER_ROLE || FARM_SCOPED_ROLES.includes(user.role)) return false
+      } else if (!(FARM_SCOPED_ROLES.includes(user.role) && (user.farmIds || []).includes(f.farm))) return false
+    }
+    if (f.sched && scheduleAccessSummary(user) !== f.sched) return false
+    if (f.module) {
+      if (f.module === CUSTOMER_PORTAL_FILTER) { if (user.role !== CUSTOMER_ROLE) return false }
+      else if (!userHasModule(user, f.module)) return false
+    }
+    if (f.status === 'active' && user.disabled) return false
+    if (f.status === 'disabled' && !user.disabled) return false
+    return true
+  }
+
+  const anyFilter = Object.values(filters).some((v) => v)
+  const shownUsers = users.filter(matchesFilters).sort((a, b) => {
+    const av = sortValue(a, sort.key)
+    const bv = sortValue(b, sort.key)
+    // Blank cells always sink to the bottom, whichever way it's sorted.
+    const aBlank = !av || av === '\u2014'
+    const bBlank = !bv || bv === '\u2014'
+    if (aBlank !== bBlank) return aBlank ? 1 : -1
+    const c = av.localeCompare(bv, undefined, { numeric: true, sensitivity: 'base' })
+    return sort.dir === 'asc' ? c : -c
+  })
+  const scheduleOptions = [...new Set(users.map(scheduleAccessSummary))].filter((v) => v !== '\u2014').sort()
+  const myUid = auth && auth.currentUser ? auth.currentUser.uid : null
+  const filterBox = { width: '100%', boxSizing: 'border-box', padding: '4px 6px', fontSize: '12px', borderRadius: '6px', border: '1px solid #ccc', background: '#fff', fontWeight: 400, color: '#2b2b26' }
+
   return (
-    <div style={{ padding: '16px 24px', maxWidth: '900px' }}>
+    <div style={{ padding: '16px 24px', maxWidth: '1100px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
         <h2 style={{ margin: 0, fontSize: '18px' }}>Team</h2>
         {!adding && <button className="save" onClick={() => setAdding(true)}>Add team member</button>}
@@ -440,6 +584,18 @@ export default function Users() {
         <div className="mode-bar" style={{ background: '#3c5a3f' }}>
           {notice}
           <div className="mode-bar-actions"><button className="cancel" onClick={() => setNotice(null)}>Dismiss</button></div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="mode-bar" style={{ background: '#8a2d2d' }}>
+          <div>
+            Permanently delete {deleteTarget.name || deleteTarget.email}&rsquo;s account? This removes their login and profile and can&rsquo;t be undone. To bring them back later you would add them again as a new team member.
+          </div>
+          <div className="mode-bar-actions">
+            <button className="apply" onClick={handleConfirmDelete} disabled={deleting}>{deleting ? 'Deleting\u2026' : 'Delete permanently'}</button>
+            <button className="cancel" onClick={() => setDeleteTarget(null)} disabled={deleting}>Cancel</button>
+          </div>
         </div>
       )}
 
@@ -477,45 +633,95 @@ export default function Users() {
         </div>
       )}
 
+      <div style={{ fontSize: '12px', color: '#888', margin: '0 0 6px 2px' }}>
+        Showing {shownUsers.length} of {users.length}. Click a heading to sort; use the boxes under it to filter.
+      </div>
       <table style={{ width: '100%', fontSize: '13px', borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ textAlign: 'left', color: '#888', fontSize: '11px' }}>
-            <th style={{ padding: '6px 8px' }}>Name</th>
-            <th style={{ padding: '6px 8px' }}>Phone</th>
-            <th style={{ padding: '6px 8px' }}>Role</th>
-            <th style={{ padding: '6px 8px' }}>Farms</th>
-            <th style={{ padding: '6px 8px' }}>Schedule access</th>
-            <th style={{ padding: '6px 8px' }}>Modules</th>
+            {COLUMNS.map((col) => {
+              const active = sort.key === col.key
+              return (
+                <th key={col.key} aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'} style={{ padding: '6px 8px' }}>
+                  <button type="button" onClick={() => toggleSort(col.key)} title={`Sort by ${col.label.toLowerCase()}`}
+                    style={{ background: 'none', border: 'none', padding: 0, font: 'inherit', color: active ? '#2b2b26' : '#888', fontWeight: active ? 700 : 600, cursor: 'pointer', textAlign: 'left' }}>
+                    {col.label}{active ? (sort.dir === 'asc' ? ' \u25b2' : ' \u25bc') : ''}
+                  </button>
+                </th>
+              )
+            })}
             <th style={{ padding: '6px 8px' }}></th>
+          </tr>
+          <tr>
+            <th style={{ padding: '0 8px 8px' }}>
+              <input aria-label="Filter name" placeholder="Name or email" value={filters.name} onChange={(e) => setFilter('name', e.target.value)} style={filterBox} />
+            </th>
+            <th style={{ padding: '0 8px 8px' }}>
+              <input aria-label="Filter phone" placeholder="Phone" value={filters.phone} onChange={(e) => setFilter('phone', e.target.value)} style={filterBox} />
+            </th>
+            <th style={{ padding: '0 8px 8px' }}>
+              <select aria-label="Filter role" value={filters.role} onChange={(e) => setFilter('role', e.target.value)} style={filterBox}>
+                <option value="">All roles</option>
+                {Object.entries(ROLE_LABELS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+              </select>
+            </th>
+            <th style={{ padding: '0 8px 8px' }}>
+              <select aria-label="Filter farms" value={filters.farm} onChange={(e) => setFilter('farm', e.target.value)} style={filterBox}>
+                <option value="">All</option>
+                <option value={ALL_FARMS_FILTER}>All farms (no limit)</option>
+                {farms.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+              </select>
+            </th>
+            <th style={{ padding: '0 8px 8px' }}>
+              <select aria-label="Filter schedule access" value={filters.sched} onChange={(e) => setFilter('sched', e.target.value)} style={filterBox}>
+                <option value="">All</option>
+                {scheduleOptions.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </th>
+            <th style={{ padding: '0 8px 8px' }}>
+              <select aria-label="Filter modules" value={filters.module} onChange={(e) => setFilter('module', e.target.value)} style={filterBox}>
+                <option value="">All</option>
+                {MODULES.map((m) => <option key={m.id} value={m.id}>Has {m.label}</option>)}
+                <option value={CUSTOMER_PORTAL_FILTER}>Customer portal</option>
+              </select>
+            </th>
+            <th style={{ padding: '0 8px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+              <select aria-label="Filter status" value={filters.status} onChange={(e) => setFilter('status', e.target.value)} style={{ ...filterBox, width: 'auto' }}>
+                <option value="">All accounts</option>
+                <option value="active">Active only</option>
+                <option value="disabled">Disabled only</option>
+              </select>
+              {anyFilter && <button type="button" onClick={() => setFilters(EMPTY_FILTERS)} style={{ marginLeft: '6px', fontSize: '12px' }}>Clear</button>}
+            </th>
           </tr>
         </thead>
         <tbody>
-          {users.map((user) => (
+          {shownUsers.map((user) => (
             <Fragment key={user.uid}>
-              <tr style={{ borderTop: '1px solid #eee', opacity: user.disabled ? 0.5 : 1 }}>
-                <td style={{ padding: '8px' }}>
+              <tr style={{ borderTop: '1px solid #eee' }}>
+                <td style={{ padding: '8px', ...(user.disabled ? { opacity: 0.5 } : null) }}>
                   <div style={{ fontWeight: 600 }}>{user.name || '\u2014'}</div>
                   <div style={{ fontSize: '11px', color: '#888' }}>{user.email}{user.disabled ? ' \u00b7 disabled' : ''}</div>
                 </td>
-                <td style={{ padding: '8px', color: '#666' }}>
+                <td style={{ padding: '8px', color: '#666', ...(user.disabled ? { opacity: 0.5 } : null) }}>
                   {user.phone || '\u2014'}
                   {user.phone && <div style={{ fontSize: '10px', color: '#888' }}>Texts {user.receiveTextAlerts === true ? 'on' : 'off'}</div>}
                 </td>
-                <td style={{ padding: '8px' }}>{ROLE_LABELS[user.role] || user.role}</td>
-                <td style={{ padding: '8px', color: '#666' }}>{farmSummary(user)}</td>
-                <td style={{ padding: '8px', color: '#666' }}>{scheduleAccessSummary(user)}</td>
-                <td style={{ padding: '8px', color: '#666' }}>{moduleSummary(user)}</td>
+                <td style={{ padding: '8px', ...(user.disabled ? { opacity: 0.5 } : null) }}>{ROLE_LABELS[user.role] || user.role}</td>
+                <td style={{ padding: '8px', color: '#666', ...(user.disabled ? { opacity: 0.5 } : null) }}>{farmSummary(user)}</td>
+                <td style={{ padding: '8px', color: '#666', ...(user.disabled ? { opacity: 0.5 } : null) }}>{scheduleAccessSummary(user)}</td>
+                <td style={{ padding: '8px', color: '#666', ...(user.disabled ? { opacity: 0.5 } : null) }}>{moduleSummary(user)}</td>
                 <td style={{ padding: '8px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  <button onClick={() => setEditingUid(editingUid === user.uid ? null : user.uid)} style={{ marginRight: '6px' }}>
-                    {editingUid === user.uid ? 'Close' : 'Edit'}
-                  </button>
-                  <button onClick={() => handleResend(user)} disabled={busyUid === user.uid} style={{ marginRight: '6px' }}>Resend setup email</button>
-                  <button onClick={() => handleGetLink(user)} disabled={busyUid === user.uid} style={{ marginRight: '6px' }}>
-                    {copiedKey === user.uid ? 'Copied!' : 'Copy setup link'}
-                  </button>
-                  <button onClick={() => handleToggleDisabled(user)} disabled={busyUid === user.uid}>
-                    {user.disabled ? 'Enable' : 'Disable'}
-                  </button>
+                  <RowMenu
+                    label={`Actions for ${user.name || user.email}`}
+                    items={[
+                      { label: editingUid === user.uid ? 'Close editor' : 'Edit', onClick: () => setEditingUid(editingUid === user.uid ? null : user.uid) },
+                      { label: 'Resend setup email', onClick: () => handleResend(user), disabled: busyUid === user.uid },
+                      { label: copiedKey === user.uid ? 'Copied!' : 'Copy setup link', onClick: () => handleGetLink(user), disabled: busyUid === user.uid },
+                      { label: user.disabled ? 'Enable' : 'Disable', onClick: () => handleToggleDisabled(user), disabled: busyUid === user.uid },
+                      user.disabled && user.uid !== myUid ? { label: 'Delete account\u2026', onClick: () => setDeleteTarget(user), danger: true } : null
+                    ]}
+                  />
                 </td>
               </tr>
               {editingUid === user.uid && (
@@ -549,6 +755,7 @@ export default function Users() {
         </tbody>
       </table>
       {users.length === 0 && <p style={{ color: '#888', padding: '1rem 0' }}>No team members yet.</p>}
+      {users.length > 0 && shownUsers.length === 0 && <p style={{ color: '#888', padding: '1rem 0' }}>No one matches these filters.</p>}
     </div>
   )
 }
