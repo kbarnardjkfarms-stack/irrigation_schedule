@@ -5,6 +5,7 @@ import { db, storage, auth } from './firebase.js'
 import PivotIcon from './PivotIcon.jsx'
 import GpmChangeDialog from './GpmChangeDialog.jsx'
 import { nextGpm, describeHistory } from './gpmHistory.js'
+import { travelDegrees } from './appliedMath.js'
 
 // ---------------------------------------------------------------------------
 // Photo of a printout -> PDF. The phone's own camera takes the picture (the
@@ -696,6 +697,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
         </InfoRow>
         <InfoRow label="Start angle" muted={ctlNoStops}>{ctlNoStops ? 'Not set' : ctlStart}</InfoRow>
         <InfoRow label="Stop angle" muted={ctlNoStops}>{ctlNoStops ? 'Not set' : ctlStop}</InfoRow>
+        <InfoRow label="Degrees of travel">{`${Math.round(travelDegrees(pivot) * 10) / 10}\u00b0`}{ctlNoStops ? ' (full circle)' : ''}</InfoRow>
         {pivot && pivot.rtuId != null && pivot.rtuId !== '' && <InfoRow label="Panel ID (RTU)">{String(pivot.rtuId)}</InfoRow>}
         <div style={{ fontSize: '10px', color: '#888', marginTop: '10px', background: '#f4f2ec', borderRadius: '8px', padding: '8px 10px', lineHeight: 1.45 }}>
           This comes straight from {brand}. To change it, edit the pivot in {brand}. AIO can't change these numbers.
