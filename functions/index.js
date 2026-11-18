@@ -961,6 +961,49 @@ exports.setUserDisabled = onCall(async (request) => {
   return { ok: true };
 });
 
+// Permanently deletes a team member's login and profile. Only works on an
+// account that is already DISABLED (disable first, then delete), so a stray
+// click can't remove someone who is still working. Admin/owner only, and you
+// can't delete yourself. This can't be undone: to bring the person back, add
+// them again as a new team member.
+exports.deleteUserAccount = onCall(async (request) => {
+  await requireAdminOrOwner(request.auth);
+
+  const { uid } = request.data || {};
+  if (!uid || typeof uid !== 'string') {
+    throw new HttpsError('invalid-argument', 'uid is required.');
+  }
+  if (uid === request.auth.uid) {
+    throw new HttpsError('invalid-argument', "You can't delete your own account.");
+  }
+
+  let authUser = null;
+  try {
+    authUser = await admin.auth().getUser(uid);
+  } catch (err) {
+    if (err.code !== 'auth/user-not-found') {
+      throw new HttpsError('internal', err.message);
+    }
+  }
+  const ref = admin.firestore().doc(`users/${uid}`);
+  const snap = await ref.get();
+  if (!authUser && !snap.exists) {
+    throw new HttpsError('not-found', 'That account no longer exists.');
+  }
+
+  // The login's own disabled flag is the one that really blocks sign-in, so
+  // it decides. (A leftover profile with no login falls back to its flag.)
+  const isDisabled = authUser ? authUser.disabled === true : snap.data().disabled === true;
+  if (!isDisabled) {
+    throw new HttpsError('failed-precondition', 'Disable this account first, then delete it.');
+  }
+
+  if (authUser) await admin.auth().deleteUser(uid);
+  if (snap.exists) await ref.delete();
+  console.log(`deleteUserAccount: ${request.auth.uid} deleted disabled account ${uid}`);
+  return { ok: true };
+});
+
 // --- Stukenholtz Results sync -------------------------------------------
 //
 // Reuses admin, onSchedule, onRequest, and defineSecret already required
