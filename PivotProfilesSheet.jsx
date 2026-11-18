@@ -21,7 +21,7 @@ const BAD = '#A32D2D'
 
 // Fixed column widths (px) so every column has the same breathing room and nothing stretches with the window.
 // Groups: pivot info | package and flow | alerts and machine.
-const COLS = { pivot: 210, acres: 84, src: 104, len: 90, wiper: 124, pkg: 200, gpm: 220, noPrint: 96, stuck: 110, corner: 104, cornerLen: 120, lap: 100 }
+const COLS = { pivot: 210, acres: 84, src: 104, len: 90, wiper: 124, pkg: 200, gpm: 220, gpmAc: 92, noPrint: 96, stuck: 110, corner: 104, cornerLen: 120, lap: 100 }
 const TABLE_W = Object.values(COLS).reduce((a, b) => a + b, 0)
 const GROUP_EDGE = `1px solid ${LINE}`
 const th = { textAlign: 'center', padding: '8px 12px', fontSize: 11.5, color: MUTED, fontWeight: 600, borderBottom: `1px solid ${LINE}`, background: '#f4f2ec', position: 'sticky', top: 30, zIndex: 3, lineHeight: 1.25 }
@@ -162,6 +162,10 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
         name: names.length ? names.join(' + ') : (pivot.name || guid),
         baseName: pivot.name && names.length && !names.includes(pivot.name) ? pivot.name : '',
         acres: hasAcres ? acres : null,
+        // GPM per acre: the confirmed package GPM spread over the acres the
+        // Acres column shows. Blank until a package is uploaded and its GPM
+        // is confirmed, and when the pivot has no acres.
+        gpmPerAcre: gpmMode === 'confirmed' && gpm > 0 && hasAcres && acres > 0 ? gpm / acres : null,
         brand: brandOf(pivot),
         lengthFt: profile.machineLengthFt != null && Number(profile.machineLengthFt) > 0 ? Number(profile.machineLengthFt) : null,
         wiper: wiperText(pivot),
@@ -311,7 +315,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
             <tr>
               <th colSpan={2} style={{ ...thGroup, left: 0, zIndex: 5 }}>Pivot</th>
               <th colSpan={3} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>From controller (read-only)</th>
-              <th colSpan={3} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>Package and flow</th>
+              <th colSpan={4} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>Package and flow</th>
               <th colSpan={4} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>Alerts and corner machine</th>
             </tr>
             <tr>
@@ -322,6 +326,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
               <th style={th}>Wiper range</th>
               <th style={{ ...th, textAlign: 'left', borderLeft: GROUP_EDGE }}>Package</th>
               <th style={{ ...th, textAlign: 'left' }}>GPM</th>
+              <th style={th}>GPM per<br />acre</th>
               <th style={th}>No printout</th>
               <th style={{ ...th, borderLeft: GROUP_EDGE }}>Stuck alert<br />(minutes)</th>
               <th style={th}>Corner<br />machine</th>
@@ -408,6 +413,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                       </div>
                     )}
                   </td>
+                  <td data-testid="gpm-per-acre" title="Package GPM divided by the acres in the Acres column" style={{ ...td, background: zebra, color: r.gpmPerAcre != null ? INK : MUTED }}>{r.gpmPerAcre != null ? r.gpmPerAcre.toFixed(1) : ''}</td>
                   <td style={{ ...td, background: zebra }}>
                     <input type="checkbox" aria-label={k('No printout')} checked={!!r.profile.noPackagePrintout && !r.pkg} disabled={lockEdit || !!r.pkg}
                       title={r.pkg ? 'A package is on file' : ''}
@@ -432,7 +438,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
               )
             })}
             {shown.length === 0 && (
-              <tr><td colSpan={12} style={{ ...td, height: 'auto', color: MUTED, padding: 24 }}>{rows.length ? 'No pivots match this filter.' : 'No pivots are linked to fields on this farm yet.'}</td></tr>
+              <tr><td colSpan={13} style={{ ...td, height: 'auto', color: MUTED, padding: 24 }}>{rows.length ? 'No pivots match this filter.' : 'No pivots are linked to fields on this farm yet.'}</td></tr>
             )}
           </tbody>
         </table>
