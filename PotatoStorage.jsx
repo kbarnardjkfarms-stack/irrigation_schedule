@@ -5009,10 +5009,14 @@ function buildLedger(bays, statsById, buildingsById, locationsById) {
       }
       // Started-with cwt, projected shrink, and $ value (see bayEconomics).
       const eco = bayEconomics(bay, building);
-      const projShrink = eco.projectedShrinkPct != null ? zs.baseCwt * eco.projectedShrinkPct / 100 : 0;
+      // Nothing left in storage = nothing left to shrink: projected shrink
+      // is zeroed (and the field is left out of the projected-% average).
+      const stillStored = zs.currentCwt > 0;
+      const projShrink = eco.projectedShrinkPct != null && stillStored ? zs.baseCwt * eco.projectedShrinkPct / 100 : 0;
       rows.push({ ...base, customer: zone.customer, metric: "Initial", cwt: zs.baseCwt });
       rows.push({ ...base, customer: zone.customer, metric: "Proj Shrink", cwt: projShrink });
-      if (eco.projectedShrinkPct != null) rows.push({ ...base, customer: zone.customer, metric: "Proj Rated", cwt: zs.baseCwt });
+      if (eco.projectedShrinkPct != null) rows.push({ ...base, customer: zone.customer, metric: "Proj Set", cwt: 1 });
+      if (eco.projectedShrinkPct != null && stillStored) rows.push({ ...base, customer: zone.customer, metric: "Proj Rated", cwt: zs.baseCwt });
       if (eco.valuePerCwt != null) {
         rows.push({ ...base, customer: zone.customer, metric: "Value Proj", cwt: Math.max(0, zs.currentCwt - projShrink) * eco.valuePerCwt });
         rows.push({ ...base, customer: zone.customer, metric: "Value Actual", cwt: Math.max(0, zs.currentCwt) * eco.valuePerCwt });
@@ -5182,7 +5186,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
         ? dims.map((d) => (d === "variety" ? (varietyLabels.get(row.variety) || row.variety) : row[d]))
         : ["All"];
       const key = keyParts.join(" · ");
-      if (!map.has(key)) map.set(key, { key, labelParts: keyParts, members: new Set(), capacity: 0, inStorage: 0, shipped: 0, shrink: 0, initial: 0, shrinkBase: 0, projShrink: 0, projRated: 0, valueProj: 0, valueActual: 0, valueSet: 0 });
+      if (!map.has(key)) map.set(key, { key, labelParts: keyParts, members: new Set(), capacity: 0, inStorage: 0, shipped: 0, shrink: 0, initial: 0, shrinkBase: 0, projShrink: 0, projRated: 0, projSet: 0, valueProj: 0, valueActual: 0, valueSet: 0 });
       const g = map.get(key);
       g.members.add(row.variety);
       if (row.metric === "Capacity") g.capacity += row.cwt;
@@ -5193,6 +5197,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
       if (row.metric === "Shrink Base") g.shrinkBase += row.cwt;
       if (row.metric === "Proj Shrink") g.projShrink += row.cwt;
       if (row.metric === "Proj Rated") g.projRated += row.cwt;
+      if (row.metric === "Proj Set") g.projSet += row.cwt;
       if (row.metric === "Value Proj") g.valueProj += row.cwt;
       if (row.metric === "Value Actual") g.valueActual += row.cwt;
       if (row.metric === "Value Set") g.valueSet += row.cwt;
@@ -5202,9 +5207,9 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
   const totals = grouped.reduce((acc, g) => ({
     capacity: acc.capacity + g.capacity, inStorage: acc.inStorage + g.inStorage,
     shipped: acc.shipped + g.shipped, shrink: acc.shrink + g.shrink,
-    initial: acc.initial + g.initial, shrinkBase: acc.shrinkBase + g.shrinkBase, projShrink: acc.projShrink + g.projShrink, projRated: acc.projRated + g.projRated,
+    initial: acc.initial + g.initial, shrinkBase: acc.shrinkBase + g.shrinkBase, projShrink: acc.projShrink + g.projShrink, projRated: acc.projRated + g.projRated, projSet: acc.projSet + g.projSet,
     valueProj: acc.valueProj + g.valueProj, valueActual: acc.valueActual + g.valueActual, valueSet: acc.valueSet + g.valueSet,
-  }), { capacity: unassignedCapacity, inStorage: 0, shipped: 0, shrink: 0, initial: 0, shrinkBase: 0, projShrink: 0, projRated: 0, valueProj: 0, valueActual: 0, valueSet: 0 });
+  }), { capacity: unassignedCapacity, inStorage: 0, shipped: 0, shrink: 0, initial: 0, shrinkBase: 0, projShrink: 0, projRated: 0, projSet: 0, valueProj: 0, valueActual: 0, valueSet: 0 });
   const fmtMoney = (v) => `$${Math.round(v).toLocaleString()}`;
   // Exports exactly what's on screen: the grouped table under the current
   // filters and Group-by choices (Summary sheet), plus a field-by-field
@@ -5221,9 +5226,9 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
       const header = [...dimLabels, "Capacity (cwt)", "In Storage (cwt)", "In Storage − proj. shrink (cwt)", "Proj. shrink %", "Proj. shrink (cwt)", "Value ($)", "Run out (cwt)", "Actual shrink (cwt)", "Actual shrink %"];
       const metricCells = (g) => [
         r2(g.capacity), r2(g.inStorage),
-        g.projRated ? r2(g.inStorage - g.projShrink) : "",
+        g.projSet ? r2(g.inStorage - g.projShrink) : "",
         g.projRated ? r2((g.projShrink / g.projRated) * 100) : "",
-        g.projRated ? r2(g.projShrink) : "",
+        g.projSet ? r2(g.projShrink) : "",
         g.valueSet ? r2(g.valueProj) : "",
         r2(g.shipped),
         g.shrinkBase ? r2(g.shrink) : "",
@@ -5238,7 +5243,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
       filteredLedger.forEach((row) => {
         if (row.unassignedPipe) return;
         const key = `${row.location}|${row.bay}|${row.field}|${row.variety}|${row.customer}`;
-        if (!fieldMap.has(key)) fieldMap.set(key, { row, capacity: 0, inStorage: 0, shipped: 0, shrink: 0, shrinkBase: 0, projShrink: 0, projRated: 0, valueProj: 0, valueSet: 0 });
+        if (!fieldMap.has(key)) fieldMap.set(key, { row, capacity: 0, inStorage: 0, shipped: 0, shrink: 0, shrinkBase: 0, projShrink: 0, projSet: 0, valueProj: 0, valueSet: 0 });
         const f = fieldMap.get(key);
         if (row.metric === "Capacity") f.capacity += row.cwt;
         if (row.metric === "In Storage") f.inStorage += row.cwt;
@@ -5246,7 +5251,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
         if (row.metric === "Shrink") f.shrink += row.cwt;
         if (row.metric === "Shrink Base") f.shrinkBase += row.cwt;
         if (row.metric === "Proj Shrink") f.projShrink += row.cwt;
-        if (row.metric === "Proj Rated") f.projRated += row.cwt;
+        if (row.metric === "Proj Set") f.projSet += row.cwt;
         if (row.metric === "Value Proj") f.valueProj += row.cwt;
         if (row.metric === "Value Set") f.valueSet += row.cwt;
       });
@@ -5254,7 +5259,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
       const fieldRows = Array.from(fieldMap.values())
         .sort((a, b) => naturalCompare(`${a.row.location} ${a.row.bay} ${a.row.field}`, `${b.row.location} ${b.row.bay} ${b.row.field}`))
         .map((f) => [f.row.location, f.row.bay, f.row.field, f.row.variety, f.row.customer,
-          r2(f.capacity), r2(f.inStorage), f.projRated ? r2(f.inStorage - f.projShrink) : "", f.projRated ? r2(f.projShrink) : "",
+          r2(f.capacity), r2(f.inStorage), f.projSet ? r2(f.inStorage - f.projShrink) : "", f.projSet ? r2(f.projShrink) : "",
           f.valueSet ? r2(f.valueProj) : "", r2(f.shipped), f.shrinkBase ? r2(f.shrink) : ""]);
       const wsFields = XLSX.utils.aoa_to_sheet([fieldHeader, ...fieldRows]);
       wsFields["!cols"] = fieldHeader.map((h, i) => ({ wch: i < 5 ? 24 : 16 }));
@@ -5347,7 +5352,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
         <StatBlock label="Actual shrink" value={totals.shrinkBase ? `${fmt(totals.shrink)} cwt` : "—"} sub={totals.shrinkBase ? `${((totals.shrink / totals.shrinkBase) * 100).toFixed(2)}% of ${fmt(totals.shrinkBase)} cwt with loads logged` : "log cwt loads to see"} accent="#e08787" />
       </div>
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
-        <StatBlock label="Projected shrink" value={totals.projRated ? `${fmt(totals.projShrink)} cwt` : "—"} sub={totals.projRated ? `${((totals.projShrink / totals.projRated) * 100).toFixed(2)}% projected` : "default · change in Manage Sites"} accent="#e0a63e" />
+        <StatBlock label="Projected shrink" value={totals.projSet ? `${fmt(totals.projShrink)} cwt` : "—"} sub={totals.projRated ? `${((totals.projShrink / totals.projRated) * 100).toFixed(2)}% projected` : "default · change in Manage Sites"} accent="#e0a63e" />
         <StatBlock label="Actual vs projected" value={totals.projRated && totals.shrinkBase ? `${(((totals.shrink / totals.shrinkBase) - (totals.projShrink / totals.projRated)) * 100) > 0 ? "+" : ""}${(((totals.shrink / totals.shrinkBase) - (totals.projShrink / totals.projRated)) * 100).toFixed(2)} pts` : "—"} sub={totals.projRated && totals.shrinkBase ? ((totals.shrink / totals.shrinkBase) > (totals.projShrink / totals.projRated) ? "running over projection" : "under projection") : "needs logged loads"} accent={totals.projRated && totals.shrinkBase && (totals.shrink / totals.shrinkBase) > (totals.projShrink / totals.projRated) ? "#e08787" : "#8fd19e"} />
         <StatBlock label="Pile value (projected shrink)" value={totals.valueSet ? fmtMoney(totals.valueProj) : "—"} sub={totals.valueSet ? "(in storage − projected shrink) × $/cwt" : "default · change in Manage Sites"} accent="#8fd19e" />
         <StatBlock label="Value of in storage" value={totals.valueSet ? fmtMoney(totals.valueActual) : "—"} sub={totals.valueSet ? "in storage × $/cwt" : ""} />
@@ -5395,9 +5400,9 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
                 </td>
                 <td style={tdStyle}>{fmt(g.capacity)}</td>
                 <td style={{ ...tdStyle, color: "#f2c14e" }}>{fmt(g.inStorage)}</td>
-                <td style={tdStyle}>{g.projRated ? fmt(g.inStorage - g.projShrink) : "—"}</td>
+                <td style={tdStyle}>{g.projSet ? fmt(g.inStorage - g.projShrink) : "—"}</td>
                 <td style={tdStyle}>{g.projRated ? `${((g.projShrink / g.projRated) * 100).toFixed(2)}%` : "—"}</td>
-                <td style={tdStyle}>{g.projRated ? fmt(g.projShrink) : "—"}</td>
+                <td style={tdStyle}>{g.projSet ? fmt(g.projShrink) : "—"}</td>
                 <td style={{ ...tdStyle, color: "#8fd19e" }}>{g.valueSet ? fmtMoney(g.valueProj) : "—"}</td>
                 <td style={tdStyle}>{fmt(g.shipped)}</td>
                 <td style={{ ...tdStyle, color: g.shrinkBase && g.shrink / g.shrinkBase > 0.08 ? "#e08787" : "#8fd19e" }}>{g.shrinkBase ? fmt(g.shrink) : "—"}</td>
