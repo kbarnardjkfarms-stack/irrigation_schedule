@@ -185,9 +185,17 @@ function makeExports() {
     const db = admin.firestore();
     const me = (await db.collection('users').doc(request.auth.uid).get()).data() || {};
     if (me.sprayAdmin !== true) throw new HttpsError('permission-denied', 'Spray admins only.');
-    let sent = null;
+    let sent = null, test = null;
     if (request.data && request.data.sendNow) sent = await sendQueued({ db, now: Date.now() + SEND_DELAY_SEC * 1000 });
-    return Object.assign({ sent }, await alertLog(db));
+    // "Test like a Done": matched by my email/name (as a Done alert is) and sent with a Done-style label,
+    // to my phones. Press it from a computer with AIO closed on the phone.
+    if (request.data && request.data.testLikeDone) {
+      const people = [{ name: me.name || '', email: String(me.email || request.auth.token.email || '').toLowerCase() }];
+      const list = tokensFor(people, await readAll(db, TOKENS));
+      const r = await push(db, admin.messaging(), list, { title: '✅ Test field done', body: 'Drone · 1 ac · Norland (sent like a real Done alert)', tag: 'done-test-' + Date.now() });
+      test = { phones: list.length, sent: r.sent, failed: r.failed };
+    }
+    return Object.assign({ sent, test }, await alertLog(db));
   });
   return { sprayAlerter, sprayPushSetup, sprayAlertLog };
 }
