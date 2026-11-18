@@ -21,14 +21,35 @@ export const WET_LOG_START_WEEK = '2026-11-09'
 // Show "+?" when at least this many hours of the week had no signal.
 export const UNKNOWN_MARK_HOURS = 0.5
 
-function circleAcres(pivot, profile) {
-  const len = profile && profile.machineLengthFt != null ? Number(profile.machineLengthFt) : null
-  if (!(len > 0)) return null
+// Degrees the pivot travels between its two stop angles (reverse stop to
+// forward stop, the same sweep the pivot icon draws). Equal or missing angles
+// (usually 0 and 0) mean no stops are set: a full circle, 360.
+export function travelDegrees(pivot) {
   const rev = Number(pivot && pivot.reverseAngle) || 0
   const fwd = Number(pivot && pivot.forwardAngle) || 0
   let arc = 360
   if (rev !== fwd) { arc = fwd - rev; if (arc < 0) arc += 360 }
-  return (Math.PI * len * len / 43560) * (arc / 360)
+  return arc
+}
+
+export function circleAcres(pivot, profile) {
+  const len = profile && profile.machineLengthFt != null ? Number(profile.machineLengthFt) : null
+  if (!(len > 0)) return null
+  return (Math.PI * len * len / 43560) * (travelDegrees(pivot) / 360)
+}
+
+// The acres the water actually falls on ("acres under steel"), and where that
+// number came from. A pivot with a corner machine uses the AgWorld acres (they
+// include the corner machine's ground; the length only covers the main
+// pivot). Any other pivot uses the circle it sweeps when its length is known,
+// farmed or not. No length: AgWorld acres. Used by Applied inches and by the
+// Pivot Profiles spreadsheet so both always agree.
+export function acresUnderSteel({ pivot, profile, agworldAcres }) {
+  const ag = agworldAcres ? agworldAcres : null
+  if (profile && profile.hasCornerMachine) return { acres: ag, source: 'agworld-corner' }
+  const circle = circleAcres(pivot, profile)
+  if (circle) return { acres: circle, source: 'circle' }
+  return { acres: ag, source: 'agworld' }
 }
 
 // currentWeekId: the Monday (YYYY-MM-DD) of the week that contains today.
@@ -42,11 +63,7 @@ export function computeApplied({ pivotGuid, pivot, profile, field, wetLog, weekI
   if (!gpm) return blank('no-gpm')
 
   const hasCorner = !!(profile && profile.hasCornerMachine)
-  const circle = circleAcres(pivot, profile)
-  let acres, acresSource
-  if (hasCorner) { acres = field && field.acres ? field.acres : null; acresSource = 'agworld-corner' }
-  else if (circle) { acres = circle; acresSource = 'circle' }
-  else { acres = field && field.acres ? field.acres : null; acresSource = 'agworld' }
+  const { acres, source: acresSource } = acresUnderSteel({ pivot, profile, agworldAcres: field && field.acres })
   if (!(acres > 0)) return blank('no-acres')
 
   const rec = (wetLog && wetLog[pivotGuid]) || {}
