@@ -311,6 +311,14 @@ export default function Users() {
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState(null)
+
+  useEffect(() => {
+    if (!deleteTarget) return undefined
+    function onKey(e) { if (e.key === 'Escape' && !deleting) { setDeleteTarget(null); setDeleteError(null) } }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [deleteTarget, deleting])
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'farms'), (snap) => {
@@ -466,6 +474,7 @@ export default function Users() {
     if (!deleteTarget) return
     const who = deleteTarget.name || deleteTarget.email || 'That account'
     setDeleting(true)
+    setDeleteError(null)
     try {
       const deleteUserAccount = httpsCallable(functions, 'deleteUserAccount')
       await deleteUserAccount({ uid: deleteTarget.uid })
@@ -473,8 +482,7 @@ export default function Users() {
       setDeleteTarget(null)
       setNotice(`${who} was deleted.`)
     } catch (err) {
-      setDeleteTarget(null)
-      setNotice(err.message || 'Could not delete that account.')
+      setDeleteError(err.message || 'Could not delete that account.')
     } finally {
       setDeleting(false)
     }
@@ -588,13 +596,26 @@ export default function Users() {
       )}
 
       {deleteTarget && (
-        <div className="mode-bar" style={{ background: '#8a2d2d' }}>
-          <div>
-            Permanently delete {deleteTarget.name || deleteTarget.email}&rsquo;s account? This removes their login and profile and can&rsquo;t be undone. To bring them back later you would add them again as a new team member.
-          </div>
-          <div className="mode-bar-actions">
-            <button className="apply" onClick={handleConfirmDelete} disabled={deleting}>{deleting ? 'Deleting\u2026' : 'Delete permanently'}</button>
-            <button className="cancel" onClick={() => setDeleteTarget(null)} disabled={deleting}>Cancel</button>
+        <div
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+          onClick={(e) => { if (e.target === e.currentTarget && !deleting) { setDeleteTarget(null); setDeleteError(null) } }}
+        >
+          <div role="dialog" aria-modal="true" aria-label="Delete account" data-testid="delete-dialog" style={{ background: '#fff', borderRadius: '10px', padding: '20px', width: '400px', maxWidth: '100%', boxShadow: '0 4px 20px rgba(0,0,0,0.2)' }}>
+            <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '8px', color: '#2b2b26' }}>Permanently delete this account?</div>
+            <div style={{ fontSize: '13px', color: '#2b2b26', fontWeight: 600, wordBreak: 'break-word' }}>{deleteTarget.name || deleteTarget.email}</div>
+            {deleteTarget.name && deleteTarget.email && (
+              <div style={{ fontSize: '12px', color: '#888', marginBottom: '10px', wordBreak: 'break-word' }}>{deleteTarget.email}</div>
+            )}
+            <div style={{ fontSize: '13px', color: '#555', lineHeight: 1.5, margin: deleteTarget.name && deleteTarget.email ? '0 0 16px' : '10px 0 16px' }}>
+              This removes their login and profile and can&rsquo;t be undone. To bring them back later you would add them again as a new team member.
+            </div>
+            {deleteError && (
+              <div role="alert" style={{ fontSize: '12px', color: '#A32D2D', background: '#FBEAEA', border: '1px solid #E8B4B4', borderRadius: '6px', padding: '8px 10px', marginBottom: '12px' }}>{deleteError}</div>
+            )}
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button onClick={() => { setDeleteTarget(null); setDeleteError(null) }} disabled={deleting} style={{ fontSize: '13px' }}>Cancel</button>
+              <button onClick={handleConfirmDelete} disabled={deleting} style={{ fontSize: '13px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: '#A32D2D' }}>{deleting ? 'Deleting\u2026' : 'Delete permanently'}</button>
+            </div>
           </div>
         </div>
       )}
