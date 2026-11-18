@@ -4,6 +4,7 @@ import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'fi
 import { auth, db, storage } from './firebase.js'
 import GpmChangeDialog from './GpmChangeDialog.jsx'
 import { nextGpm } from './gpmHistory.js'
+import { acresUnderSteel, travelDegrees } from './appliedMath.js'
 
 // "Pivot Profiles" spreadsheet view (Irrigation views dropdown): every pivot on one farm in a grid, with the
 // profile settings editable in place. Saves go to the same pivotProfiles/{guid} document the single profile page
@@ -21,7 +22,7 @@ const BAD = '#A32D2D'
 
 // Fixed column widths (px) so every column has the same breathing room and nothing stretches with the window.
 // Groups: pivot info | package and flow | alerts and machine.
-const COLS = { pivot: 210, acres: 84, src: 104, len: 90, wiper: 124, pkg: 200, gpm: 220, gpmAc: 92, noPrint: 96, stuck: 110, corner: 104, cornerLen: 120, lap: 100 }
+const COLS = { pivot: 210, acres: 84, src: 104, len: 90, wiper: 124, travel: 96, steel: 118, pkg: 200, gpm: 220, gpmAc: 112, noPrint: 96, stuck: 110, corner: 104, cornerLen: 120, lap: 100 }
 const TABLE_W = Object.values(COLS).reduce((a, b) => a + b, 0)
 const GROUP_EDGE = `1px solid ${LINE}`
 const th = { textAlign: 'center', padding: '8px 12px', fontSize: 11.5, color: MUTED, fontWeight: 600, borderBottom: `1px solid ${LINE}`, background: '#f4f2ec', position: 'sticky', top: 30, zIndex: 3, lineHeight: 1.25 }
@@ -157,15 +158,22 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
       else if (pkg) gpmMode = 'typeFromPackage'
       else if (profile.noPackagePrintout) gpmMode = 'manual'
       else gpmMode = 'locked'
+      const steelInfo = acresUnderSteel({ pivot, profile, agworldAcres: hasAcres ? acres : null })
       list.push({
         guid, profile, pkg, scan, gpm, gpmMode,
         name: names.length ? names.join(' + ') : (pivot.name || guid),
         baseName: pivot.name && names.length && !names.includes(pivot.name) ? pivot.name : '',
         acres: hasAcres ? acres : null,
-        // GPM per acre: the GPM AIO is using for this pivot (from a confirmed
-        // package or typed by hand) spread over the acres the Acres column
-        // shows. Blank when there is no GPM yet or the pivot has no acres.
-        gpmPerAcre: gpm > 0 && hasAcres && acres > 0 ? gpm / acres : null,
+        // Acres under steel: the ground the water falls on (the circle the pivot
+        // sweeps, farmed or not). Same rule Applied inches uses: AgWorld acres
+        // stand in for a corner machine pivot or a pivot with no length yet.
+        steel: steelInfo.acres,
+        steelSource: steelInfo.source,
+        travel: travelDegrees(pivot),
+        // GPM per acre (under steel): the GPM AIO is using for this pivot (from
+        // a confirmed package or typed by hand) spread over the acres under
+        // steel. Blank when there is no GPM yet or no acres to divide by.
+        gpmPerAcre: gpm > 0 && steelInfo.acres > 0 ? gpm / steelInfo.acres : null,
         brand: brandOf(pivot),
         lengthFt: profile.machineLengthFt != null && Number(profile.machineLengthFt) > 0 ? Number(profile.machineLengthFt) : null,
         wiper: wiperText(pivot),
@@ -314,19 +322,21 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
           <thead>
             <tr>
               <th colSpan={2} style={{ ...thGroup, left: 0, zIndex: 5 }}>Pivot</th>
-              <th colSpan={3} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>From controller (read-only)</th>
+              <th colSpan={5} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>From controller (read-only)</th>
               <th colSpan={4} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>Package and flow</th>
               <th colSpan={4} style={{ ...thGroup, borderLeft: GROUP_EDGE }}>Alerts and corner machine</th>
             </tr>
             <tr>
               <th style={{ ...th, textAlign: 'left', left: 0, zIndex: 4 }}>Pivot</th>
-              <th style={th}>Acres</th>
+              <th style={th}>Farmed<br />acres</th>
               <th style={{ ...th, textAlign: 'left', borderLeft: GROUP_EDGE }}>Source</th>
               <th style={th}>Length<br />(feet)</th>
               <th style={th}>Wiper range</th>
+              <th style={th}>Degrees of<br />travel</th>
+              <th style={th}>Acres under<br />steel</th>
               <th style={{ ...th, textAlign: 'left', borderLeft: GROUP_EDGE }}>Package</th>
               <th style={{ ...th, textAlign: 'left' }}>GPM</th>
-              <th style={th}>GPM per<br />acre</th>
+              <th style={th}>GPM per acre<br />(under steel)</th>
               <th style={th}>No printout</th>
               <th style={{ ...th, borderLeft: GROUP_EDGE }}>Stuck alert<br />(minutes)</th>
               <th style={th}>Corner<br />machine</th>
@@ -349,6 +359,12 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                   <td style={{ ...td, background: zebra, textAlign: 'left', borderLeft: GROUP_EDGE, color: MUTED }}>{r.brand}</td>
                   <td style={{ ...td, background: zebra, color: r.lengthFt != null ? INK : MUTED }}>{r.lengthFt != null ? Math.round(r.lengthFt).toLocaleString() : '—'}</td>
                   <td style={{ ...td, background: zebra, color: r.wiper ? INK : MUTED }}>{r.wiper || 'Full circle'}</td>
+                  <td data-testid="travel" style={{ ...td, background: zebra }}>{`${Math.round(r.travel * 10) / 10}\u00b0`}</td>
+                  <td data-testid="steel-acres" style={{ ...td, background: zebra, color: r.steel > 0 ? INK : MUTED }}>
+                    {r.steel > 0 ? r.steel.toFixed(1) : '\u2014'}
+                    {r.steel > 0 && r.steelSource === 'agworld-corner' && <div style={small}>AgWorld, corner</div>}
+                    {r.steel > 0 && r.steelSource === 'agworld' && <div style={small}>AgWorld, no length</div>}
+                  </td>
                   <td style={{ ...td, background: zebra, textAlign: 'left', borderLeft: GROUP_EDGE, overflow: 'hidden' }}>
                     {r.pkg ? (
                       <>
@@ -413,7 +429,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                       </div>
                     )}
                   </td>
-                  <td data-testid="gpm-per-acre" title="The GPM in use divided by the acres in the Acres column" style={{ ...td, background: zebra, color: r.gpmPerAcre != null ? INK : MUTED }}>{r.gpmPerAcre != null ? r.gpmPerAcre.toFixed(1) : ''}</td>
+                  <td data-testid="gpm-per-acre" title="The GPM in use divided by the acres under steel" style={{ ...td, background: zebra, color: r.gpmPerAcre != null ? INK : MUTED }}>{r.gpmPerAcre != null ? r.gpmPerAcre.toFixed(1) : ''}</td>
                   <td style={{ ...td, background: zebra }}>
                     <input type="checkbox" aria-label={k('No printout')} checked={!!r.profile.noPackagePrintout && !r.pkg} disabled={lockEdit || !!r.pkg}
                       title={r.pkg ? 'A package is on file' : ''}
@@ -438,7 +454,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
               )
             })}
             {shown.length === 0 && (
-              <tr><td colSpan={13} style={{ ...td, height: 'auto', color: MUTED, padding: 24 }}>{rows.length ? 'No pivots match this filter.' : 'No pivots are linked to fields on this farm yet.'}</td></tr>
+              <tr><td colSpan={15} style={{ ...td, height: 'auto', color: MUTED, padding: 24 }}>{rows.length ? 'No pivots match this filter.' : 'No pivots are linked to fields on this farm yet.'}</td></tr>
             )}
           </tbody>
         </table>
