@@ -1418,3 +1418,4 @@ body.spray-dark { background: #0c0f11; }
 .contracts-variety-add input { font: inherit; font-size: 13px; padding: 4px 7px; border: 0.5px solid #ddd8cc; border-radius: 6px; width: 140px; }
 .contracts-variety-select { margin-top: 4px; font-size: 12.5px; }
 .contracts-variety-select.warn { border-color: #E0A050; background: #FFF8EC; }
+.seed-need-shrink select { font-family: inherit; font-size: 12.5px; padding: 4px 6px; border: 0.5px solid #ddd8cc; border-radius: 6px; background: #fff; }

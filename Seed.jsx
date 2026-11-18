@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { collection, collectionGroup, doc, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from './firebase.js'
 import { canonCrop } from './yieldMath.js'
-import { computeNeeds, computeSales, computeSeed, fmtAge, fmtCwt, fmtWhen, lotLabel, varietyKey } from './seedMath.js'
+import { computeNeeds, computeSales, computeSeed, contractPlantAcres, fmtAge, fmtCwt, fmtWhen, lotLabel, varietyKey } from './seedMath.js'
 import SeedPortals from './SeedPortals.jsx'
 import SeedSales from './SeedSales.jsx'
 import { SeedContracts, SeedLots, SeedReport, SeedSettings, SeedTickets } from './SeedManage.jsx'
@@ -19,7 +19,9 @@ import { SeedContracts, SeedLots, SeedReport, SeedSettings, SeedTickets } from '
 //   seedLotClose/{id}    a lot closed out at the cutter, with its shrink
 //   seedSettings/{seasonId} cutting-zone capacity, truck-age warnings,
 //                        needShrinkPct (allowance added to seed needs)
-//   seedNeeds/{seasonId}__{VARIETY} seed needed for a variety: acres × rate, or cwt
+//   seedNeeds/{seasonId}__{VARIETY} seed needed for a variety: acres × rate, or cwt;
+//                        acres default to the Contracts module's potato contracts
+//                        (contracts + contractAllocations, read only here)
 //   seedSales/{id}       seed we sell: customer, variety, contractedCwt (SeedSales.jsx)
 //   seedShipments/{id}   a load shipped against a sale
 // Plant tickets carry the Agworld field id so the planting schedule module
@@ -38,6 +40,8 @@ export default function Seed({ userRole }) {
   const [closes, setCloses] = useState([])
   const [needs, setNeeds] = useState([])
   const [sales, setSales] = useState([])
+  const [cropContracts, setCropContracts] = useState(null) // Contracts module (null = can't read)
+  const [cropAllocs, setCropAllocs] = useState([])
   const [shipments, setShipments] = useState([])
   const [trucks, setTrucks] = useState({})
   const [settingsDoc, setSettingsDoc] = useState(null)
@@ -97,6 +101,8 @@ export default function Seed({ userRole }) {
       onSnapshot(query(collection(db, 'seedLotClose'), where('seasonId', '==', sid)), list(setCloses), onErr),
       onSnapshot(query(collection(db, 'seedNeeds'), where('seasonId', '==', sid)), list(setNeeds), () => setNeeds([])),
       onSnapshot(query(collection(db, 'seedSales'), where('seasonId', '==', sid)), list(setSales), () => setSales([])),
+      onSnapshot(query(collection(db, 'contracts'), where('seasonId', '==', sid)), list(setCropContracts), () => setCropContracts(null)),
+      onSnapshot(query(collection(db, 'contractAllocations'), where('seasonId', '==', sid)), list(setCropAllocs), () => setCropAllocs([])),
       onSnapshot(query(collection(db, 'seedShipments'), where('seasonId', '==', sid)), list(setShipments), () => setShipments([])),
       onSnapshot(doc(db, 'seedSettings', sid), (d) => setSettingsDoc(d.exists() ? d.data() : null), onErr),
       onSnapshot(query(collectionGroup(db, 'seasons'), where('seasonId', '==', seasonId)), (snap) => {
@@ -116,12 +122,20 @@ export default function Seed({ userRole }) {
     return { id, name: b.name || id, farmName: b.farmName || null, crop: canonCrop(sd.cropName) || '', variety: sd.varietyName || null, acres: Number(sd.acres) || 0 }
   }).filter((f) => f.name).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })), [seasonData, baseFields])
 
-  const needsCalc = useMemo(() => computeNeeds({ needs, contractRows: seed.contractRows, fieldList, shrinkPct: settings.needShrinkPct }), [needs, seed.contractRows, fieldList, settings.needShrinkPct])
+  // Seed need acres from the Contracts module: contracted acres (default),
+  // the acres of the fields allocated, or 'manual' (typed in only).
+  const needAcresFrom = settings.needAcresFrom || 'contracted'
+  const plantAcres = useMemo(() => {
+    if (needAcresFrom === 'manual' || !cropContracts) return null
+    const fields = Object.fromEntries(fieldList.map((f) => [f.id, { acres: f.acres, variety: f.variety }]))
+    return contractPlantAcres({ contracts: cropContracts, allocations: cropAllocs, fields, mode: needAcresFrom })
+  }, [needAcresFrom, cropContracts, cropAllocs, fieldList])
+  const needsCalc = useMemo(() => computeNeeds({ needs, contractRows: seed.contractRows, fieldList, shrinkPct: settings.needShrinkPct, plantAcres }), [needs, seed.contractRows, fieldList, settings.needShrinkPct, plantAcres])
 
   const salesCalc = useMemo(() => computeSales({ sales, shipments }), [sales, shipments])
 
   const season = seasons.find((s) => String(s.id) === String(seasonId))
-  const ctx = { seasonId: String(seasonId), seasonName: season && season.name, contracts, tickets, closes, trucks, settings, seed, fieldList, canManage, isAdmin, now, userRole, needs, needsCalc, sales, shipments, salesCalc }
+  const ctx = { seasonId: String(seasonId), seasonName: season && season.name, contracts, tickets, closes, trucks, settings, seed, fieldList, canManage, isAdmin, now, userRole, needs, needsCalc, needAcresFrom, cropContractsReadable: cropContracts != null, sales, shipments, salesCalc }
   const tabs = canManage
     ? [['overview', 'Overview'], ['portals', 'Ticket portals'], ['contracts', 'Contracts'], ['sales', 'Seed sales'], ['tickets', 'Tickets'], ['lots', 'Lots & shrink'], ['report', 'Planted by field'], ['settings', 'Settings']]
     : [['portals', 'Ticket portals'], ['inventory', 'Inventory']]

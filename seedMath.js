@@ -181,12 +181,52 @@ export function computeSeed({ contracts = [], tickets = [], closes = [], now = D
 // ---------------------------------------------------------------------------
 export const varietyKey = (v) => String(v || '').trim().toUpperCase().replace(/\s+/g, ' ')
 
-export function computeNeeds({ needs = [], contractRows = [], fieldList = [], shrinkPct = 0 }) {
+// Acres to plant by variety from the Contracts module's potato contracts.
+//   mode 'contracted': each contract's acres = cwt ÷ expected yield (acres
+//     for an acre contract). One variety → all to it; several → split by the
+//     varieties of the fields allocated to it; nothing to split by → listed
+//     in `unsplit` and not counted.
+//   mode 'allocated': the acres of the fields allocated to each contract, by
+//     each field's variety (picked on the allocation, else Agworld's).
+// contracts: Contracts-module docs; allocations: contractAllocations docs;
+// fields: { [fieldId]: { acres, variety } } for the season.
+export function contractPlantAcres({ contracts = [], allocations = [], fields = {}, mode = 'contracted' }) {
+  const out = [], unsplit = []
+  const potato = contracts.filter((c) => /POTATO/i.test(String(c.crop || '')))
+  potato.forEach((c) => {
+    const vs = (c.varieties || []).filter(Boolean)
+    const byVar = {}
+    let allocAc = 0, noVarAc = 0
+    allocations.filter((a) => a.contractId === c.id).forEach((a) => {
+      const f = fields[a.fieldId]
+      if (!f || !(Number(f.acres) > 0)) return
+      const v = a.variety || f.variety || (vs.length === 1 ? vs[0] : null)
+      allocAc += Number(f.acres)
+      if (v) byVar[v] = (byVar[v] || 0) + Number(f.acres); else noVarAc += Number(f.acres)
+    })
+    const label = c.name || c.buyer || 'contract'
+    if (mode === 'allocated') {
+      Object.entries(byVar).forEach(([v, ac]) => out.push({ variety: v, acres: ac, contract: label }))
+      if (noVarAc > 0) unsplit.push({ contract: label, acres: noVarAc, why: 'fields with no variety picked' })
+      return
+    }
+    const yieldPer = c.unit === 'acres' ? 1 : c.unit === 'cwt' && Number(c.yieldPerAcre) > 0 ? Number(c.yieldPerAcre) : null
+    if (!(Number(c.amount) > 0) || !yieldPer) { unsplit.push({ contract: label, acres: null, why: 'no expected yield on the contract' }); return }
+    const acres = c.unit === 'acres' ? Number(c.amount) : Number(c.amount) / yieldPer
+    if (vs.length === 1) { out.push({ variety: vs[0], acres, contract: label }); return }
+    const known = Object.values(byVar).reduce((t, x) => t + x, 0)
+    if (known > 0) { Object.entries(byVar).forEach(([v, ac]) => out.push({ variety: v, acres: (acres * ac) / known, contract: label })); return }
+    unsplit.push({ contract: label, acres, why: vs.length ? `lists ${vs.length} varieties and no fields are allocated to split by` : 'allows any variety and no fields are allocated' })
+  })
+  return { list: out, unsplit }
+}
+
+export function computeNeeds({ needs = [], contractRows = [], fieldList = [], shrinkPct = 0, plantAcres = null }) {
   const rows = {}
   const row = (variety) => {
     const k = varietyKey(variety)
     if (!k) return null
-    return (rows[k] = rows[k] || { key: k, variety: String(variety).trim(), contracted: 0, picked: 0, rateCwt: 0, rateAcres: 0, contracts: 0, agAcres: 0, agFields: 0, need: null })
+    return (rows[k] = rows[k] || { key: k, variety: String(variety).trim(), contracted: 0, picked: 0, rateCwt: 0, rateAcres: 0, contracts: 0, agAcres: 0, agFields: 0, need: null, ctAcres: 0, ctFrom: [] })
   }
   contractRows.forEach((c) => {
     const r = row(c.variety)
@@ -207,12 +247,24 @@ export function computeNeeds({ needs = [], contractRows = [], fieldList = [], sh
     if (!r) r = row(f.variety || 'Variety not set in Agworld')
     r.agAcres += Number(f.acres); r.agFields++
   })
+  // Acres from the Contracts module's potato contracts, matched to the seed
+  // variety the same way (exact, then one name containing the other).
+  if (plantAcres) {
+    plantAcres.list.forEach((x) => {
+      const k = varietyKey(x.variety)
+      let r = rows[k] || Object.values(rows).find((y) => y.key.includes(k) || k.includes(y.key)) || null
+      if (!r) r = row(x.variety)
+      r.ctAcres += x.acres
+      if (!r.ctFrom.includes(x.contract)) r.ctFrom.push(x.contract)
+    })
+  }
   const allow = 1 + (Number(shrinkPct) > 0 ? Number(shrinkPct) / 100 : 0)
   const out = Object.values(rows).map((r) => {
     const n = r.need || {}
     const contractRate = r.rateAcres > 0 ? r.rateCwt / r.rateAcres : null
     const rate = Number(n.rate) > 0 ? Number(n.rate) : contractRate
-    const acres = Number(n.acres) > 0 ? Number(n.acres) : null
+    const typedAcres = Number(n.acres) > 0 ? Number(n.acres) : null
+    const acres = typedAcres != null ? typedAcres : plantAcres && r.ctAcres > 0 ? r.ctAcres : null
     const typed = Number(n.cwt) > 0 ? Number(n.cwt) : null
     const needCwt = typed != null ? typed : acres != null && rate ? acres * rate * allow : null
     const diff = needCwt != null ? r.contracted - needCwt : null
@@ -220,7 +272,7 @@ export function computeNeeds({ needs = [], contractRows = [], fieldList = [], sh
     const status = needCwt == null ? (r.contracted > 0 ? 'no-need' : 'empty')
       : Math.abs(diff) <= Math.max(1, needCwt * 0.02) ? 'covered' : diff < 0 ? 'short' : 'over'
     return {
-      ...r, contractRate, rate, rateFromContracts: !(Number(n.rate) > 0) && contractRate != null, acres, typedCwt: typed,
+      ...r, contractRate, rate, rateFromContracts: !(Number(n.rate) > 0) && contractRate != null, acres, typedAcres, acresFromContracts: typedAcres == null && acres != null, typedCwt: typed,
       needCwt, diff, diffAcres: diff != null && perAc ? diff / perAc : null,
       contractedAcres: perAc ? r.contracted / perAc : null, status, note: n.note || null, needId: n.id || null
     }
@@ -228,9 +280,10 @@ export function computeNeeds({ needs = [], contractRows = [], fieldList = [], sh
   const sum = (f) => out.reduce((s, r) => s + (r[f] || 0), 0)
   const withNeed = out.filter((r) => r.needCwt != null)
   return {
-    rows: out,
+    rows: out, unsplit: plantAcres ? plantAcres.unsplit : [],
     totals: {
-      need: sum('needCwt'), contracted: sum('contracted'), agAcres: sum('agAcres'), acres: sum('acres'),
+      need: sum('needCwt'), contracted: sum('contracted'), agAcres: sum('agAcres'), acres: sum('acres'), ctAcres: sum('ctAcres'),
+      typedCwtCount: out.filter((r) => r.typedCwt != null).length, noRate: out.filter((r) => r.acres != null && !r.rate && r.typedCwt == null).length,
       short: withNeed.filter((r) => r.status === 'short').reduce((s, r) => s - r.diff, 0),
       over: withNeed.filter((r) => r.status === 'over').reduce((s, r) => s + r.diff, 0),
       contractedWithNeed: withNeed.reduce((s, r) => s + r.contracted, 0), needCount: withNeed.length

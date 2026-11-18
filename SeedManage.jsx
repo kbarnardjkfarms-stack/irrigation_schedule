@@ -235,6 +235,21 @@ function SeedNeeds({ ctx }) {
     setShrink(null)
     run(() => setDoc(doc(db, 'seedSettings', ctx.seasonId), { seasonId: ctx.seasonId, needShrinkPct: v, updatedBy: who(), updatedAt: Date.now() }, { merge: true }), `Shrink allowance set to ${v}%.`)
   }
+  function setAcresFrom(v) {
+    run(() => setDoc(doc(db, 'seedSettings', ctx.seasonId), { seasonId: ctx.seasonId, needAcresFrom: v, updatedBy: who(), updatedAt: Date.now() }, { merge: true }),
+      v === 'manual' ? 'Plant acres are typed in by hand now.' : `Plant acres now come from the Contracts module (${v === 'allocated' ? 'fields allocated' : 'contracted acres'}).`)
+  }
+  // Typed acres / cwt win over the contracts — clear them so the contracts take over.
+  const typedRows = N.rows.filter((r) => r.needId && (r.typedAcres != null || r.typedCwt != null))
+  function useContractsForAll() {
+    if (!window.confirm(`Clear the typed acres and cwt on ${typedRows.length} variet${typedRows.length === 1 ? 'y' : 'ies'} so the Contracts module sets them? Seeding rates and notes stay.`)) return
+    run(async () => {
+      const b = writeBatch(db)
+      typedRows.forEach((r) => b.set(doc(db, 'seedNeeds', r.needId), { acres: null, cwt: null, updatedBy: who(), updatedAt: Date.now() }, { merge: true }))
+      await b.commit()
+    }, `Cleared — ${typedRows.length} variet${typedRows.length === 1 ? 'y' : 'ies'} now use the contracts.`)
+  }
+  const fromContracts = ctx.needAcresFrom !== 'manual'
   const T = N.totals
   const agToFill = N.rows.filter((r) => r.agAcres > 0 && r.acres == null && r.typedCwt == null).length
   return (
@@ -242,19 +257,36 @@ function SeedNeeds({ ctx }) {
       <div className="yields-card-head">
         <div>
           <div className="yields-card-title">Seed needs vs contracted — crop year {ctx.seasonName}</div>
-          <div className="contracts-sub">For each variety, the acres you’ll plant × seeding rate (plus the shrink allowance), or type the cwt needed outright. Agworld acres are this season’s potato fields in Agworld.</div>
+          <div className="contracts-sub">For each variety: acres to plant × seeding rate (plus the shrink allowance). {fromContracts ? `Acres come from the potato contracts in the Contracts module (${ctx.needAcresFrom === 'allocated' ? 'acres of the fields allocated to them' : 'each contract’s cwt ÷ its expected yield'}); typing acres or a cwt on a line overrides it.` : 'Type the acres, or the cwt needed outright.'} Agworld acres are this season’s potato fields in Agworld.</div>
         </div>
         {edit && (
           <div className="agronomy-filter-bar" style={{ margin: 0 }}>
             <label className="seed-need-shrink">Shrink allowance
               <input className="yields-cell-input" inputMode="decimal" value={shrink ?? String(ctx.settings.needShrinkPct ?? 0)} onChange={(e) => setShrink(e.target.value)} onBlur={saveShrink} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />%
             </label>
-            <button disabled={!agToFill} onClick={fillFromAgworld} title="Copies Agworld potato acres into every variety that has no acres yet">Fill acres from Agworld{agToFill ? ` (${agToFill})` : ''}</button>
+            <label className="seed-need-shrink">Plant acres from
+              <select value={ctx.needAcresFrom} onChange={(e) => setAcresFrom(e.target.value)}>
+                <option value="contracted">Contracts — contracted acres</option>
+                <option value="allocated">Contracts — fields allocated</option>
+                <option value="manual">Typed in by hand</option>
+              </select>
+            </label>
+            {!fromContracts && <button disabled={!agToFill} onClick={fillFromAgworld} title="Copies Agworld potato acres into every variety that has no acres yet">Fill acres from Agworld{agToFill ? ` (${agToFill})` : ''}</button>}
           </div>
         )}
       </div>
       {measured != null && <div className="contracts-sub" style={{ marginTop: -4, marginBottom: 6 }}>Closed lots this year have run {measured.toFixed(1)}% shrink.</div>}
       <Msg />
+      {fromContracts && !ctx.cropContractsReadable && <div className="agronomy-error-banner">Your login can’t read the Contracts module, so acres can’t come from the contracts. Ask an Admin to add the Contracts module, or switch to “Typed in by hand”.</div>}
+      {fromContracts && edit && typedRows.length > 0 && (
+        <div className="csp-warn" style={{ marginBottom: 8 }}>
+          {typedRows.length} variet{typedRows.length === 1 ? 'y has' : 'ies have'} acres or a cwt typed in ({typedRows.map((r) => r.variety).join(', ')}), which win over the contracts.{' '}
+          <button className="link-btn" onClick={useContractsForAll}>Use the contracts for all of them</button>
+        </div>
+      )}
+      {fromContracts && N.unsplit.length > 0 && (
+        <div className="csp-warn" style={{ marginBottom: 8 }}>Not counted: {N.unsplit.map((u) => `${u.contract}${u.acres ? ` (${fmtCwt(u.acres)} ac)` : ''} — ${u.why}`).join(' · ')}. Give the contract one variety or allocate fields to it in the Contracts module.</div>
+      )}
       {T.needCount > 0 && (
         <div className="seed-need-sum">
           <div><span>Need</span><strong>{fmtCwt(T.need)}</strong><small>cwt</small></div>
@@ -266,7 +298,7 @@ function SeedNeeds({ ctx }) {
       <div className="table-scroll">
         <table className="contracts-table contracts-table-auto seed-need-table">
           <thead><tr>
-            <th>Variety</th><th className="num">Agworld ac</th><th className="num">Plant ac</th><th className="num">Rate (cwt/ac)</th><th className="num">Need (cwt)</th>
+            <th>Variety</th><th className="num">Agworld ac</th>{fromContracts && <th className="num">Contract ac</th>}<th className="num">Plant ac</th><th className="num">Rate (cwt/ac)</th><th className="num">Need (cwt)</th>
             <th className="num">Contracted</th><th>Short / over</th><th className="num">Picked up</th><th>Note</th>{edit && <th />}
           </tr></thead>
           <tbody>
@@ -277,7 +309,8 @@ function SeedNeeds({ ctx }) {
                 <tr key={r.key}>
                   <td><strong>{r.variety}</strong>{r.contracts > 0 && <div className="contracts-sub" style={{ marginTop: 0 }}>{r.contracts} contract{r.contracts === 1 ? '' : 's'}</div>}</td>
                   <td className="num">{r.agAcres > 0 ? <span title={`${r.agFields} Agworld field${r.agFields === 1 ? '' : 's'}`}>{fmtCwt(r.agAcres)}</span> : <span className="contracts-sub">—</span>}</td>
-                  <td className="num">{input(r, 'acres', { placeholder: r.agAcres > 0 ? fmtCwt(r.agAcres) : 'ac' })}</td>
+                  {fromContracts && <td className="num">{r.ctAcres > 0 ? <span title={`From ${r.ctFrom.join(', ')}`}>{fmtCwt(r.ctAcres)}</span> : <span className="contracts-sub">—</span>}{r.ctFrom.length > 0 && <div className="contracts-sub" style={{ marginTop: 0 }}>{r.ctFrom.length} contract{r.ctFrom.length === 1 ? '' : 's'}</div>}</td>}
+                  <td className="num">{input(r, 'acres', { placeholder: r.acresFromContracts ? fmtCwt(r.acres) : r.agAcres > 0 && !fromContracts ? fmtCwt(r.agAcres) : 'ac', title: r.acresFromContracts ? 'From the contracts — type a number to override' : '' })}</td>
                   <td className="num">{input(r, 'rate', { placeholder: r.contractRate ? fmtCwt(r.contractRate, 1) : 'cwt/ac', title: r.rateFromContracts ? 'Blank uses the seeding rate on the contracts' : '' })}</td>
                   <td className="num">{edit
                     ? <input className={`yields-cell-input${r.typedCwt != null ? ' seed-need-typed' : ''}`} inputMode="decimal" value={val(r, 'cwt')} placeholder={r.needCwt != null ? fmtCwt(r.needCwt) : 'cwt'}
@@ -293,11 +326,11 @@ function SeedNeeds({ ctx }) {
                 </tr>
               )
             })}
-            {!N.rows.length && <tr><td colSpan={10} className="contracts-sub">No varieties yet. Add a contract below, add a variety here, or put potato varieties on this season’s fields in Agworld.</td></tr>}
+            {!N.rows.length && <tr><td colSpan={11} className="contracts-sub">No varieties yet. Add a contract below, add a variety here, or put potato varieties on this season’s fields in Agworld.</td></tr>}
           </tbody>
           {N.rows.length > 0 && (
             <tfoot><tr>
-              <td><strong>Total</strong></td><td className="num">{T.agAcres > 0 ? fmtCwt(T.agAcres) : ''}</td><td className="num"><strong>{T.acres > 0 ? fmtCwt(T.acres) : ''}</strong></td><td />
+              <td><strong>Total</strong></td><td className="num">{T.agAcres > 0 ? fmtCwt(T.agAcres) : ''}</td>{fromContracts && <td className="num">{T.ctAcres > 0 ? fmtCwt(T.ctAcres) : ''}</td>}<td className="num"><strong>{T.acres > 0 ? fmtCwt(T.acres) : ''}</strong></td><td />
               <td className="num"><strong>{T.needCount ? fmtCwt(T.need) : ''}</strong></td><td className="num"><strong>{fmtCwt(T.contracted)}</strong></td>
               <td>{T.short > 0 && <span className="seed-need-chip seed-need-short">Short {fmtCwt(T.short)} cwt</span>}</td><td colSpan={edit ? 3 : 2} />
             </tr></tfoot>
