@@ -5206,6 +5206,75 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
     valueProj: acc.valueProj + g.valueProj, valueActual: acc.valueActual + g.valueActual, valueSet: acc.valueSet + g.valueSet,
   }), { capacity: unassignedCapacity, inStorage: 0, shipped: 0, shrink: 0, initial: 0, shrinkBase: 0, projShrink: 0, projRated: 0, valueProj: 0, valueActual: 0, valueSet: 0 });
   const fmtMoney = (v) => `$${Math.round(v).toLocaleString()}`;
+  // Exports exactly what's on screen: the grouped table under the current
+  // filters and Group-by choices (Summary sheet), plus a field-by-field
+  // breakdown of the same filtered rows (Fields sheet), and a note of which
+  // filters were applied.
+  const [exporting, setExporting] = useState(false);
+  const exportToExcel = async () => {
+    setExporting(true);
+    try {
+      const mod = await import("xlsx");
+      const XLSX = mod.utils ? mod : mod.default;
+      const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+      const dimLabels = dims.length ? dims.map((d) => DIM_OPTIONS.find((o) => o.key === d).label) : ["Group"];
+      const header = [...dimLabels, "Capacity (cwt)", "In Storage (cwt)", "In Storage − proj. shrink (cwt)", "Proj. shrink %", "Proj. shrink (cwt)", "Value ($)", "Run out (cwt)", "Actual shrink (cwt)", "Actual shrink %"];
+      const metricCells = (g) => [
+        r2(g.capacity), r2(g.inStorage),
+        g.projRated ? r2(g.inStorage - g.projShrink) : "",
+        g.projRated ? r2((g.projShrink / g.projRated) * 100) : "",
+        g.projRated ? r2(g.projShrink) : "",
+        g.valueSet ? r2(g.valueProj) : "",
+        r2(g.shipped),
+        g.shrinkBase ? r2(g.shrink) : "",
+        g.shrinkBase ? r2((g.shrink / g.shrinkBase) * 100) : "",
+      ];
+      const summaryRows = grouped.map((g) => [...(dims.length ? g.labelParts : [g.key]), ...metricCells(g)]);
+      summaryRows.push([ "Total", ...Array(dimLabels.length - 1).fill(""), ...metricCells(totals) ]);
+      const wsSummary = XLSX.utils.aoa_to_sheet([header, ...summaryRows]);
+      wsSummary["!cols"] = header.map((h, i) => ({ wch: i < dimLabels.length ? 26 : 16 }));
+      // field-level breakdown of the same filtered ledger
+      const fieldMap = new Map();
+      filteredLedger.forEach((row) => {
+        if (row.unassignedPipe) return;
+        const key = `${row.location}|${row.bay}|${row.field}|${row.variety}|${row.customer}`;
+        if (!fieldMap.has(key)) fieldMap.set(key, { row, capacity: 0, inStorage: 0, shipped: 0, shrink: 0, shrinkBase: 0, projShrink: 0, projRated: 0, valueProj: 0, valueSet: 0 });
+        const f = fieldMap.get(key);
+        if (row.metric === "Capacity") f.capacity += row.cwt;
+        if (row.metric === "In Storage") f.inStorage += row.cwt;
+        if (row.metric === "Shipped") f.shipped += row.cwt;
+        if (row.metric === "Shrink") f.shrink += row.cwt;
+        if (row.metric === "Shrink Base") f.shrinkBase += row.cwt;
+        if (row.metric === "Proj Shrink") f.projShrink += row.cwt;
+        if (row.metric === "Proj Rated") f.projRated += row.cwt;
+        if (row.metric === "Value Proj") f.valueProj += row.cwt;
+        if (row.metric === "Value Set") f.valueSet += row.cwt;
+      });
+      const fieldHeader = ["Location", "Bay", "Field", "Variety", "Customer", "Capacity (cwt)", "In Storage (cwt)", "In Storage − proj. shrink (cwt)", "Proj. shrink (cwt)", "Value ($)", "Run out (cwt)", "Actual shrink (cwt, share of bay)"];
+      const fieldRows = Array.from(fieldMap.values())
+        .sort((a, b) => naturalCompare(`${a.row.location} ${a.row.bay} ${a.row.field}`, `${b.row.location} ${b.row.bay} ${b.row.field}`))
+        .map((f) => [f.row.location, f.row.bay, f.row.field, f.row.variety, f.row.customer,
+          r2(f.capacity), r2(f.inStorage), f.projRated ? r2(f.inStorage - f.projShrink) : "", f.projRated ? r2(f.projShrink) : "",
+          f.valueSet ? r2(f.valueProj) : "", r2(f.shipped), f.shrinkBase ? r2(f.shrink) : ""]);
+      const wsFields = XLSX.utils.aoa_to_sheet([fieldHeader, ...fieldRows]);
+      wsFields["!cols"] = fieldHeader.map((h, i) => ({ wch: i < 5 ? 24 : 16 }));
+      const filterLines = [["Exported", new Date().toLocaleString()], ["Grouped by", dims.length ? dimLabels.join(" / ") : "none"]];
+      DIM_OPTIONS.forEach((d) => { if (invFilter[d.key]?.length) filterLines.push([`Filter — ${d.label}`, invFilter[d.key].join(", ")]); });
+      if (!isFilterActive(invFilter)) filterLines.push(["Filters", "none (everything)"]);
+      const wsInfo = XLSX.utils.aoa_to_sheet(filterLines);
+      wsInfo["!cols"] = [{ wch: 22 }, { wch: 70 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
+      XLSX.utils.book_append_sheet(wb, wsFields, "Fields");
+      XLSX.utils.book_append_sheet(wb, wsInfo, "Filters");
+      XLSX.writeFile(wb, `inventory-summary-${todayStr()}.xlsx`);
+    } catch (e) {
+      console.error("Excel export failed:", e);
+      window.alert("Couldn't create the Excel file. Please try again.");
+    } finally {
+      setExporting(false);
+    }
+  };
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {onFilterChange && (
@@ -5268,6 +5337,9 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
         </div>
       </div>
       <Legend bays={bays} />
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <Button onClick={exportToExcel} disabled={exporting || grouped.length === 0}>{exporting ? "Preparing…" : "Export to Excel"}</Button>
+      </div>
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", background: "#141b28", border: "1px solid #232d40", borderRadius: 10, padding: 16 }}>
         <StatBlock label="Total capacity" value={`${fmt(totals.capacity)} cwt`} />
         <StatBlock label="In storage" value={`${fmt(totals.inStorage)} cwt`} accent="#f2c14e" />
