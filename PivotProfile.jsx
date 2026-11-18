@@ -7,190 +7,6 @@ import GpmChangeDialog from './GpmChangeDialog.jsx'
 import { nextGpm, describeHistory } from './gpmHistory.js'
 import { travelDegrees } from './appliedMath.js'
 
-// ---------------------------------------------------------------------------
-// Photo of a printout -> PDF. The phone's own camera takes the picture (the
-// file picker with capture), each photo is shrunk to a JPEG, and the JPEGs are
-// wrapped in a plain PDF in the browser. The package that gets saved is an
-// ordinary PDF, so the GPM reader treats it like any scanned page.
-
-const PHOTO_MAX_EDGE = 1800 // pixels on the long side: sharp enough to read, small enough for 12 pages
-const PHOTO_MAX_PAGES = 12
-
-function loadPhoto(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file)
-    const img = new Image()
-    img.onload = () => { URL.revokeObjectURL(url); resolve(img) }
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Couldn't open that photo. Try taking it again.")) }
-    img.src = url
-  })
-}
-
-async function photoToPage(file) {
-  const img = await loadPhoto(file)
-  const scale = Math.min(1, PHOTO_MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight))
-  const w = Math.max(1, Math.round(img.naturalWidth * scale))
-  const h = Math.max(1, Math.round(img.naturalHeight * scale))
-  const canvas = document.createElement('canvas')
-  canvas.width = w
-  canvas.height = h
-  const ctx = canvas.getContext('2d')
-  ctx.fillStyle = '#fff'
-  ctx.fillRect(0, 0, w, h)
-  ctx.drawImage(img, 0, 0, w, h)
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8))
-  if (!blob) throw new Error("Couldn't use that photo. Try taking it again.")
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  return { bytes, w, h, previewUrl: URL.createObjectURL(blob) }
-}
-
-// One JPEG per page, each page 612 points wide (US Letter width).
-function buildPdf(pages) {
-  const enc = new TextEncoder()
-  const chunks = []
-  const offsets = []
-  let len = 0
-  const push = (x) => {
-    const b = typeof x === 'string' ? enc.encode(x) : x
-    chunks.push(b)
-    len += b.length
-  }
-  const obj = (id, parts) => {
-    offsets[id] = len
-    push(`${id} 0 obj\n`)
-    parts.forEach(push)
-    push('\nendobj\n')
-  }
-  const total = 2 + pages.length * 3
-  push('%PDF-1.4\n')
-  obj(1, ['<< /Type /Catalog /Pages 2 0 R >>'])
-  obj(2, [`<< /Type /Pages /Kids [${pages.map((_, i) => `${3 + i * 3} 0 R`).join(' ')}] /Count ${pages.length} >>`])
-  pages.forEach((p, i) => {
-    const base = 3 + i * 3
-    const W = 612
-    const H = Math.round((612 * p.h) / p.w)
-    const content = `q ${W} 0 0 ${H} 0 0 cm /Im0 Do Q`
-    obj(base, [`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Resources << /XObject << /Im0 ${base + 2} 0 R >> >> /Contents ${base + 1} 0 R >>`])
-    obj(base + 1, [`<< /Length ${content.length} >>\nstream\n${content}\nendstream`])
-    obj(base + 2, [
-      `<< /Type /XObject /Subtype /Image /Width ${p.w} /Height ${p.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${p.bytes.length} >>\nstream\n`,
-      p.bytes,
-      '\nendstream'
-    ])
-  })
-  const xrefPos = len
-  let xref = `xref\n0 ${total + 1}\n0000000000 65535 f \n`
-  for (let id = 1; id <= total; id++) xref += `${String(offsets[id]).padStart(10, '0')} 00000 n \n`
-  push(`${xref}trailer\n<< /Size ${total + 1} /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`)
-  const out = new Uint8Array(len)
-  let at = 0
-  chunks.forEach((c) => { out.set(c, at); at += c.length })
-  return out
-}
-
-// Photos pile up as pages; "Use" turns them into one PDF and hands it to
-// onPdf (which returns true once it is saved). The parent calls this once and
-// passes the result to <CameraButton> (the icon next to the upload button)
-// and <PhotoPages> (the thumbnails and Use button under it).
-function usePhotoPages(onPdf, onError) {
-  const [pages, setPages] = useState([])
-  const [busy, setBusy] = useState(false)
-
-  async function addPhoto(e) {
-    const file = e.target.files && e.target.files[0]
-    e.target.value = ''
-    if (!file) return
-    setBusy(true)
-    onError(null)
-    try {
-      const page = await photoToPage(file)
-      setPages((prev) => (prev.length >= PHOTO_MAX_PAGES ? prev : [...prev, page]))
-    } catch (err) {
-      onError(err.message || "Couldn't use that photo.")
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  function startOver() {
-    pages.forEach((p) => URL.revokeObjectURL(p.previewUrl))
-    setPages([])
-    onError(null)
-  }
-
-  async function usePages() {
-    setBusy(true)
-    onError(null)
-    try {
-      const stamp = new Date().toISOString().slice(0, 10)
-      const file = new File([buildPdf(pages)], `Package photo ${stamp}.pdf`, { type: 'application/pdf' })
-      const saved = await onPdf(file)
-      if (saved) startOver()
-    } catch (err) {
-      onError(err.message || "Couldn't make the PDF. Try again.")
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return { pages, busy, addPhoto, startOver, usePages }
-}
-
-function CameraIcon() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2b2b26" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
-      <circle cx="12" cy="13.5" r="3.5" />
-    </svg>
-  )
-}
-
-// The camera icon button. On a phone it opens the camera; on a computer it
-// opens the picker for image files.
-function CameraButton({ photos, disabled }) {
-  const locked = disabled || photos.busy || photos.pages.length >= PHOTO_MAX_PAGES
-  const label = photos.busy ? 'Preparing photo…' : 'Take photo of printout'
-  return (
-    <label
-      title={label}
-      aria-label={label}
-      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '42px', height: '36px', boxSizing: 'border-box', border: '1px solid #ccc', borderRadius: '8px', background: '#fff', cursor: locked ? 'default' : 'pointer', opacity: locked ? 0.5 : 1 }}
-    >
-      <CameraIcon />
-      <input type="file" accept="image/*" capture="environment" onChange={photos.addPhoto} disabled={locked} style={{ display: 'none' }} />
-    </label>
-  )
-}
-
-function PhotoPages({ photos, disabled }) {
-  const { pages, busy } = photos
-  if (pages.length === 0) return null
-  const locked = disabled || busy
-  return (
-    <div style={{ background: '#f4f2ec', borderRadius: '8px', padding: '10px 12px', marginTop: '10px' }}>
-      <div style={{ fontSize: '12px', color: '#555', marginBottom: '8px' }}>{pages.length} of up to {PHOTO_MAX_PAGES} pages</div>
-      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
-        {pages.map((p, i) => (
-          <img key={i} src={p.previewUrl} alt={`Page ${i + 1}`} style={{ height: '72px', width: 'auto', borderRadius: '4px', border: '1px solid #ccc' }} />
-        ))}
-      </div>
-      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-        <button onClick={photos.usePages} disabled={locked} style={{ fontSize: '13px', padding: '8px 14px', background: '#2b2b26', color: '#fff', border: 'none', borderRadius: '6px', cursor: locked ? 'default' : 'pointer' }}>
-          {busy ? 'Working…' : `Use ${pages.length === 1 ? 'this page' : `these ${pages.length} pages`}`}
-        </button>
-        {pages.length < PHOTO_MAX_PAGES && (
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '6px 12px', border: '1px solid #ccc', borderRadius: '8px', background: '#fff', cursor: locked ? 'default' : 'pointer', opacity: locked ? 0.5 : 1 }}>
-            <CameraIcon />
-            Add page
-            <input type="file" accept="image/*" capture="environment" onChange={photos.addPhoto} disabled={locked} style={{ display: 'none' }} />
-          </label>
-        )}
-        <button onClick={photos.startOver} disabled={locked} style={{ fontSize: '12px', border: 'none', background: 'transparent', color: '#555', cursor: locked ? 'default' : 'pointer' }}>Start over</button>
-      </div>
-    </div>
-  )
-}
-
 // Layout helpers for the profile page: each data section sits in its own
 // white card with a title, and cards are grouped under small headings so
 // the sections don't run together on the cream page background.
@@ -249,7 +65,6 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState(null)
   const [uploadError, setUploadError] = useState(null)
-  const photos = usePhotoPages(savePackage, setUploadError)
   const [gpmSaved, setGpmSaved] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [pendingGpm, setPendingGpm] = useState(null) // { newGpm, source, extra } waiting for "mistake or real change?"
@@ -350,7 +165,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     // PDFs. A photo is turned away here, before anything is saved.
     const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')
     if (!isPdf) {
-      setUploadError('AIO needs a PDF. Use a scanning app to turn the photo into a PDF, then upload that.')
+      setUploadError('AIO needs a PDF. Scan the printout with your phone\u2019s scanner (steps below), then upload the PDF it saves.')
       e.target.value = ''
       return
     }
@@ -361,7 +176,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
 
   // Saves a PDF as the pivot's package: uploads it, files the old package
   // in the history, and leaves the GPM unconfirmed until a manager confirms
-  // the number the reader finds. Used by the PDF picker and by the camera.
+  // the number the reader finds. Used by the PDF picker.
   // Returns true when it saved.
   async function savePackage(file) {
     setUploading(true)
@@ -717,7 +532,6 @@ export default function PivotProfile({ pivotGuid, onBack }) {
               {uploading ? 'Uploading\u2026' : 'Replace'}
               <input type="file" accept="application/pdf" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
             </label>
-            <CameraButton photos={photos} disabled={uploading} />
             {canDelete && (
               <button onClick={() => setDeleteTarget({ kind: 'current', entry: pkg })} style={{ fontSize: '12px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: '#A32D2D' }}>Delete</button>
             )}
@@ -729,7 +543,6 @@ export default function PivotProfile({ pivotGuid, onBack }) {
                 {uploading ? 'Uploading\u2026' : 'Upload package PDF'}
                 <input type="file" accept="application/pdf" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
               </label>
-              <CameraButton photos={photos} disabled={uploading} />
             </div>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: '#555', marginTop: '12px', cursor: 'pointer' }}>
               <input type="checkbox" checked={!!(profile && profile.noPackagePrintout)} onChange={(e) => handleToggleNoPackage(e.target.checked)} />
@@ -737,8 +550,26 @@ export default function PivotProfile({ pivotGuid, onBack }) {
             </label>
           </>
         )}
-        <div style={{ fontSize: '10px', color: '#888', marginTop: '8px' }}>PDF only. No PDF? Tap the camera to photograph the printout (up to 12 pages, cover page first) and AIO makes the PDF.</div>
-        <PhotoPages photos={photos} disabled={uploading} />
+        <div style={{ fontSize: '10px', color: '#888', marginTop: '8px' }}>PDF only.</div>
+        <details open={!pkg} data-testid="scan-howto" style={{ marginTop: '8px', background: '#f4f2ec', borderRadius: '8px', padding: '8px 12px' }}>
+          <summary style={{ fontSize: '12px', fontWeight: 600, color: '#2b2b26', cursor: 'pointer' }}>No PDF? Scan the printout with your phone</summary>
+          <div style={{ fontSize: '12px', color: '#2b2b26', lineHeight: 1.5, marginTop: '8px' }}>
+            <div style={{ fontWeight: 600 }}>iPhone</div>
+            <ol style={{ margin: '2px 0 8px', paddingLeft: '18px' }}>
+              <li>Open the <b>Files</b> app and tap the <b>&hellip;</b> button at the top right.</li>
+              <li>Tap <b>Scan Documents</b>.</li>
+              <li>Hold the phone over the first page (the cover page). It takes the picture by itself. Scan every page, then tap <b>Save</b>.</li>
+              <li>Name it and save it to Files.</li>
+            </ol>
+            <div style={{ fontWeight: 600 }}>Android</div>
+            <ol style={{ margin: '2px 0 8px', paddingLeft: '18px' }}>
+              <li>Open the <b>Google Drive</b> app and tap the <b>+</b> button.</li>
+              <li>Tap <b>Scan</b>.</li>
+              <li>Take a picture of each page, cover page first, then tap <b>Save</b>. It saves as a PDF in Drive.</li>
+            </ol>
+            <div>Then tap <b>{pkg ? 'Replace' : 'Upload package PDF'}</b> above and pick the file you just saved. Lay the printout flat in good light and keep each whole page in view so the numbers are sharp.</div>
+          </div>
+        </details>
         {uploadError && (
           <div style={{ background: '#FBEAEA', border: '1px solid #E8B4B4', borderRadius: '8px', padding: '8px 12px', marginTop: '8px', fontSize: '12px', color: '#A32D2D' }}>{uploadError}</div>
         )}
