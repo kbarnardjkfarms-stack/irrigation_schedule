@@ -162,10 +162,10 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
         name: names.length ? names.join(' + ') : (pivot.name || guid),
         baseName: pivot.name && names.length && !names.includes(pivot.name) ? pivot.name : '',
         acres: hasAcres ? acres : null,
-        // GPM per acre: the confirmed package GPM spread over the acres the
-        // Acres column shows. Blank until a package is uploaded and its GPM
-        // is confirmed, and when the pivot has no acres.
-        gpmPerAcre: gpmMode === 'confirmed' && gpm > 0 && hasAcres && acres > 0 ? gpm / acres : null,
+        // GPM per acre: the GPM AIO is using for this pivot (from a confirmed
+        // package or typed by hand) spread over the acres the Acres column
+        // shows. Blank when there is no GPM yet or the pivot has no acres.
+        gpmPerAcre: gpm > 0 && hasAcres && acres > 0 ? gpm / acres : null,
         brand: brandOf(pivot),
         lengthFt: profile.machineLengthFt != null && Number(profile.machineLengthFt) > 0 ? Number(profile.machineLengthFt) : null,
         wiper: wiperText(pivot),
@@ -413,7 +413,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                       </div>
                     )}
                   </td>
-                  <td data-testid="gpm-per-acre" title="Package GPM divided by the acres in the Acres column" style={{ ...td, background: zebra, color: r.gpmPerAcre != null ? INK : MUTED }}>{r.gpmPerAcre != null ? r.gpmPerAcre.toFixed(1) : ''}</td>
+                  <td data-testid="gpm-per-acre" title="The GPM in use divided by the acres in the Acres column" style={{ ...td, background: zebra, color: r.gpmPerAcre != null ? INK : MUTED }}>{r.gpmPerAcre != null ? r.gpmPerAcre.toFixed(1) : ''}</td>
                   <td style={{ ...td, background: zebra }}>
                     <input type="checkbox" aria-label={k('No printout')} checked={!!r.profile.noPackagePrintout && !r.pkg} disabled={lockEdit || !!r.pkg}
                       title={r.pkg ? 'A package is on file' : ''}
