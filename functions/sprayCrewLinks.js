@@ -16,6 +16,7 @@ const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { act } = require('./sprayActions')._internal;
+const records = require('./sprayRecords');
 const { _internal: S } = require('./spraySync');
 
 const LINKS = 'sprayLinks';
@@ -78,11 +79,24 @@ async function crewCall(db, data) {
     await db.collection(LINKS).doc(link.code).set({ lastUsed: Date.now() }, { merge: true });
   }
   if (action === 'done' || action === 'undo') {
-    const r = await act(db, crewMe(link), { action, jobKey: data.jobKey });
+    const r = await act(db, crewMe(link), { action, jobKey: data.jobKey, flight: data.flight });
     return Object.assign({}, r, { jobs: await crewJobs(db, link) });
   }
+  // Ag Rows link: the crew's application records (whole Ag Rows crew, this year), acres by operator
+  if (action === 'records') {
+    if (link.crew === 'drone') throw new HttpsError('permission-denied', 'Records on this link are for Ag Rows.');
+    return records.listGround(db, { from: S.today().slice(0, 4) + '-01-01', to: S.today() }, { crew: true });
+  }
   if (action !== 'load') throw new HttpsError('invalid-argument', 'Unknown action.');
-  return { name: link.name, crew: link.crew === 'drone' ? 'drone' : 'ground', today: S.today(), jobs: await crewJobs(db, link) };
+  const out = { name: link.name, crew: link.crew === 'drone' ? 'drone' : 'ground', today: S.today(), jobs: await crewJobs(db, link) };
+  if (out.crew === 'drone') {
+    // for the flight log on Done: drone pilots and the drones list (names only); the drone is picked per job
+    const pilots = [];
+    (await db.collection('sprayOperators').get()).forEach((d) => { const o = d.data() || {}; if (o.crew === 'drone' && o.active !== false) pilots.push({ name: o.name, license_exp: o.license_exp || '' }); });
+    out.pilots = pilots.sort((a, b) => a.name.localeCompare(b.name));
+    out.drones = (await records.listDrones(db)).filter((d) => d.active !== false).map((d) => ({ name: d.name, model: d.model || '' }));
+  }
+  return out;
 }
 
 /** Spray admin: { action: 'list' } | { action: 'make', name, crew } | { action: 'off', name } */
@@ -105,7 +119,11 @@ async function linkAdmin(db, me, data) {
 
 function makeExports() {
   // No sign-in: the link's code is the key. Callable functions work without a login.
-  const sprayCrew = onCall({ timeoutSeconds: 60 }, async (request) => crewCall(admin.firestore(), request.data || {}));
+  // the company's paid Open-Meteo plan for the weather on records (same secret as openMeteo.js)
+  const { defineSecret } = require('firebase-functions/params');
+  const OPEN_METEO_API_KEY = defineSecret('OPEN_METEO_API_KEY');
+  records.useApiKey(() => OPEN_METEO_API_KEY.value());
+  const sprayCrew = onCall({ timeoutSeconds: 60, secrets: [OPEN_METEO_API_KEY] }, async (request) => crewCall(admin.firestore(), request.data || {}));
   const sprayLinkAdmin = onCall({ timeoutSeconds: 60 }, async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
     const db = admin.firestore();

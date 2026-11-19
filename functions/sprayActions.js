@@ -19,6 +19,7 @@ const admin = require('firebase-admin');
 const { _internal: S } = require('./spraySync');
 const alerts = require('./sprayAlerts');
 const contacts = require('./sprayContacts');
+const records = require('./sprayRecords');
 const OPS = 'sprayOperators';
 
 /** What a role may do in the Spray module. */
@@ -73,11 +74,64 @@ async function act(db, me, data) {
     const crew = data.crew === 'drone' ? 'drone' : 'ground';
     if (!name) throw new HttpsError('invalid-argument', 'Enter a name.');
     const ref = data.id ? db.collection(OPS).doc(clean(data.id, 80)) : db.collection(OPS).doc();
-    await ref.set({
+    const row = {
       name, crew, rig: clean(data.rig, 60), phone: clean(data.phone, 30), active: data.active !== false,
-      aliases: clean(data.aliases, 200), from_sheet: admin.firestore.FieldValue.delete(), updated_by: me.name, updated_at: nowIso()
-    }, { merge: true });
+      // names come only from this tab (no AgWorld / Paycom spellings), so old "other spellings" are dropped
+      aliases: admin.firestore.FieldValue.delete(), from_sheet: admin.firestore.FieldValue.delete(), updated_by: me.name, updated_at: nowIso()
+    };
+    // Idaho applicator license (both crews) + FAA details (drone pilots only), copied into each
+    // application record when it's saved (functions/sprayRecords.js).
+    const papers = records.cleanPilotPapers(data);
+    if (crew !== 'drone') { delete papers.faa_cert; delete papers.part137_date; delete papers.address; }
+    Object.assign(row, papers);
+    await ref.set(row, { merge: true });
     return { ok: true, id: ref.id };
+  }
+
+  // ---- drones list (Operators tab) ----
+  if (action === 'listDrones') {
+    if (!me.admin && me.see.indexOf('drone') < 0) throw new HttpsError('permission-denied', 'Not your crew.');
+    return { ok: true, drones: await records.listDrones(db) };
+  }
+  if (action === 'saveDrone' || action === 'deleteDrone') {
+    if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can change the drones list.');
+    if (action === 'deleteDrone') {
+      const id = clean(data.id, 80);
+      if (!id) throw new HttpsError('invalid-argument', 'Which drone?');
+      await db.collection(records.DRONES).doc(id).delete();   // old flight records keep their own copy of the drone
+    } else {
+      const d = records.cleanDrone(data);
+      const ref = data.id ? db.collection(records.DRONES).doc(clean(data.id, 80)) : db.collection(records.DRONES).doc();
+      await ref.set(Object.assign(d, { updated_by: me.name, updated_at: nowIso() }), { merge: true });
+    }
+    return { ok: true, drones: await records.listDrones(db) };
+  }
+
+  // ---- flight records: corrections and voids (Spray admin; every change is kept in the record's history) ----
+  if (action === 'editFlight') return records.editFlight(db, me, data);
+  if (action === 'listFlights') {
+    if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can see the flight records.');
+    return records.listFlights(db, data);
+  }
+  if (action === 'listGround') {
+    if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can see the Ag Rows records.');
+    return records.listGround(db, data);
+  }
+  if (action === 'voidGround') {
+    if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can void an Ag Rows record.');
+    if (clean(data.reason, 300).length < 4) throw new HttpsError('invalid-argument', 'Say why it\'s being voided (it stays on file with the reason).');
+    return records.voidGround(db, me, clean(data.jobKey, 40), data.reason);
+  }
+  // ---- drone maintenance log (Drones tab) ----
+  if (action === 'listMaint') {
+    if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can see the maintenance log.');
+    return { ok: true, maint: await records.listMaint(db, {}), kinds: records.MAINT_KINDS };
+  }
+  if (action === 'addMaint') { await records.addMaint(db, me, data); return { ok: true, maint: await records.listMaint(db, {}) }; }
+  if (action === 'voidMaint') { await records.voidMaint(db, me, clean(data.id, 80), data.reason); return { ok: true, maint: await records.listMaint(db, {}) }; }
+  if (action === 'voidFlight') {
+    if (clean(data.reason, 300).length < 4) throw new HttpsError('invalid-argument', 'Say why it\'s being voided (it stays on file with the reason).');
+    return records.voidFlight(db, me, clean(data.id, 80), data.reason);
   }
 
   // ---- farm managers (Spray admin): Spray > Managers tab ----
@@ -125,10 +179,19 @@ async function act(db, me, data) {
       if (state.done) return { ok: true, already: true };
       const operator = (state.assign && state.assign.operator) || '';
       const row = quickDoneRow(job, me, operator);
+      if (job.source === 'drone') {
+        // Drone jobs: Done saves the flight record (application record + logbooks) at the same time
+        if (!data.flight) throw new HttpsError('invalid-argument', 'Fill in the flight log to mark a drone job done.');
+        const f = await records.logFlight(db, me, job, jobKey, data.flight);
+        Object.assign(row, { operator: f.record.pilot.name, acres_done: f.record.acres, flight_id: f.id, drone: f.record.drone.name, flights: f.record.flights });
+      }
+      let missing = row.flight_id ? ((await db.collection(records.FLIGHTS).doc(row.flight_id).get()).data() || {}).missing || [] : [];
       await stateRef.set({ done: row }, { merge: true });
+      // Ag Rows: the one tap saves the application record too (time of the tap, operator's license, weather)
+      if (job.source !== 'drone') missing = (await records.logGround(db, me, job, jobKey, operator)).record.missing || [];
       // Phone alert (farm manager, the "all" people, + "spreads" people on spreads), after a short wait so Undo can take it back
       const a = await alerts.queueDoneAlert(db, jobKey, job, row, 'app');
-      return { ok: true, alerted: a.people };
+      return { ok: true, alerted: a.people, missing: missing };
     }
     case 'undo': {
       if (me.complete.indexOf(job.source) < 0) throw new HttpsError('permission-denied', 'You can\'t change that.');
@@ -138,7 +201,17 @@ async function act(db, me, data) {
       }
       await stateRef.set({ done: admin.firestore.FieldValue.delete() }, { merge: true });
       await alerts.cancelDoneAlert(db, jobKey);
+      // its flight record stays on file, voided, so the history is complete
+      if (state.done.flight_id) await records.voidFlight(db, { name: me.name, system: true }, state.done.flight_id, 'Done was undone in the app by ' + me.name);
+      if (job.source !== 'drone') await records.voidGround(db, me, jobKey, 'Done was undone in the app by ' + me.name);
       return { ok: true };
+    }
+    case 'logFlight': {
+      if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can add a flight record afterwards.');
+      const f = await records.logFlight(db, me, job, jobKey, data.flight);
+      // a job closed in AgWorld (or done before flight logs) now points at its record
+      if (state.done && !state.done.flight_id) await stateRef.set({ done: Object.assign({}, state.done, { flight_id: f.id }) }, { merge: true });
+      return { ok: true, id: f.id, missing: f.record.missing };
     }
     case 'move': {
       if (!me.admin) throw new HttpsError('permission-denied', 'Only an Admin can move jobs.');
@@ -167,7 +240,11 @@ async function act(db, me, data) {
 }
 
 function makeExports() {
-  const sprayAct = onCall(async (request) => {
+  // the company's paid Open-Meteo plan for the weather on records (same secret as openMeteo.js)
+  const { defineSecret } = require('firebase-functions/params');
+  const OPEN_METEO_API_KEY = defineSecret('OPEN_METEO_API_KEY');
+  records.useApiKey(() => OPEN_METEO_API_KEY.value());
+  const sprayAct = onCall({ secrets: [OPEN_METEO_API_KEY] }, async (request) => {
     const db = admin.firestore();
     const me = await meFromAuth(db, request.auth);
     return act(db, me, request.data || {});

@@ -95,11 +95,54 @@ async function push(db, messaging, tokenList, msg) {
   return { sent: res.successCount || 0, failed: res.failureCount || 0 };
 }
 
+/** Once a day (after 7 am): queue an alert to the "all" people for each Idaho applicator license
+ *  that expires within 30 days, within 7 days, or has expired. Each stage is sent once. Never throws. */
+async function checkLicenses(db, now) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Denver', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false }).formatToParts(new Date(now));
+    const g = (t) => (parts.find((p) => p.type === t) || {}).value;
+    const day = g('year') + '-' + g('month') + '-' + g('day');
+    if (Number(g('hour')) % 24 < 7) return 0;
+    const metaRef = db.collection('sprayMeta').doc('licenses');
+    if (((await metaRef.get()).data() || {}).lastDay === day) return 0;
+    await metaRef.set({ lastDay: day }, { merge: true });
+    const ops = [];
+    (await db.collection('sprayOperators').get()).forEach((d) => ops.push(Object.assign({ id: d.id }, d.data())));
+    const rec = require('./sprayRecords');
+    const warn = rec.licenseWarnings(ops, day);
+    const drones = [];
+    (await db.collection('sprayDrones').get()).forEach((d) => drones.push(Object.assign({ id: d.id }, d.data())));
+    const wWarn = rec.warrantyWarnings(drones, day);
+    if (!warn.length && !wWarn.length) return 0;
+    const people = Object.values(await readAll(db, 'sprayContacts')).filter((c) => c.notify === 'all').map((c) => ({ name: c.name, email: c.email || '' }));
+    let n = 0;
+    // drone warranties: one alert per drone, about 30 days before the year is up
+    for (const w of wWarn) {
+      const ref = db.collection(ALERTS).doc(('warranty-' + w.id + '-' + w.ends).replace(/[^A-Za-z0-9_-]/g, ''));
+      if ((await ref.get()).data()) continue;
+      await ref.set({ jobKey: ref.id, how: 'warranty', people, title: '⚠ ' + w.name + '\'s warranty ends soon',
+        body: 'The drone warranty ends ' + w.ends + ' (in ' + w.days + ' day' + (w.days === 1 ? '' : 's') + '). Get any repairs in before then.',
+        createdAt: now, sendAfter: now, status: people.length ? 'queued' : 'no_one' });
+      n++;
+    }
+    for (const w of warn) {
+      const ref = db.collection(ALERTS).doc(('license-' + w.id + '-' + w.exp + '-' + w.stage).replace(/[^A-Za-z0-9_-]/g, ''));
+      if ((await ref.get()).data()) continue;
+      const when = w.stage === 'expired' ? 'expired ' + w.exp : 'expires ' + w.exp + ' (in ' + w.days + ' day' + (w.days === 1 ? '' : 's') + ')';
+      await ref.set({ jobKey: ref.id, how: 'license', people, title: '⚠ ' + w.name + '\'s applicator license', body: 'Idaho license ' + (w.license_no || '') + ' ' + when + '. Update it on Spray > Operators.',
+        createdAt: now, sendAfter: now, status: people.length ? 'queued' : 'no_one' });
+      n++;
+    }
+    return n;
+  } catch (err) { console.error('checkLicenses', err); return 0; }
+}
+
 /** Send every queued alert that's due. deps: { db, messaging, now } for tests. */
 async function sendQueued(deps = {}) {
   const db = deps.db || admin.firestore();
   const messaging = deps.messaging || admin.messaging();
   const now = deps.now || Date.now();
+  await checkLicenses(db, now);
   const snap = await db.collection(ALERTS).where('status', '==', 'queued').get();
   const due = [];
   snap.forEach((d) => due.push({ ref: d.ref, a: d.data() }));
@@ -202,5 +245,5 @@ function makeExports() {
 
 module.exports = {
   makeExports, queueDoneAlert, cancelDoneAlert,
-  _internal: { buildAlert, queueDoneAlert, cancelDoneAlert, tokensFor, sendQueued, pushSetup, alertLog, SEND_DELAY_SEC, STALE_HOURS }
+  _internal: { buildAlert, queueDoneAlert, cancelDoneAlert, tokensFor, sendQueued, pushSetup, alertLog, checkLicenses, SEND_DELAY_SEC, STALE_HOURS }
 };
