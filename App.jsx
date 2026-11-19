@@ -22,7 +22,7 @@ import PivotProfile from './PivotProfile.jsx'
 import PivotProfilesSheet from './PivotProfilesSheet.jsx'
 import Agronomy from './Agronomy.jsx'
 import CustomerPortal from './CustomerPortal.jsx'
-import Contracts from './Contracts.jsx'
+import Planning from './Planning.jsx'
 import Yields from './Yields.jsx'
 import Operations from './Operations.jsx'
 import Seed from './Seed.jsx'
@@ -1415,7 +1415,7 @@ export default function App() {
               <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Agronomy</div>
             </div>
           )}
-          {canSeeContracts && (
+          {(canSeeContracts || canSeeSeed) && (
             <div
               onClick={() => setPage('contracts')}
               style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
@@ -1434,7 +1434,7 @@ export default function App() {
                   <path d="M25 37c2-3 4-3 5-1s3 1 5-2" fill="none" stroke="#3c5a3f" strokeWidth="2" strokeLinecap="round" />
                 </svg>
               </div>
-              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Contracts</div>
+              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Planning</div>
             </div>
           )}
           {canSeeYields && (
@@ -1474,25 +1474,6 @@ export default function App() {
               <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Operations</div>
             </div>
           )}
-          {canSeeSeed && (
-            <div
-              onClick={() => setPage('seed')}
-              style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
-            >
-              <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#EFE6D6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <svg width="58" height="58" viewBox="0 0 48 48">
-                  <ellipse cx="17" cy="26" rx="10" ry="8" fill="#C9A26B" stroke="#7a5a32" strokeWidth="1.6" />
-                  <path d="M17 18v16" stroke="#7a5a32" strokeWidth="1.4" />
-                  <circle cx="13" cy="24" r="1.2" fill="#7a5a32" /><circle cx="21" cy="29" r="1.2" fill="#7a5a32" />
-                  <path d="M17 18c0-5 3-8 7-9" fill="none" stroke="#3B6D11" strokeWidth="2" strokeLinecap="round" />
-                  <path d="M24 9c2 3 1 6-2 7" fill="#7FB04F" stroke="#3B6D11" strokeWidth="1.2" />
-                  <rect x="29" y="27" width="14" height="9" rx="1.5" fill="#fff" stroke="#7a5a32" strokeWidth="1.6" />
-                  <path d="M31 30h10M31 33h6" stroke="#7a5a32" strokeWidth="1.2" />
-                </svg>
-              </div>
-              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Potato Seed</div>
-            </div>
-          )}
           {canSeeMap && (
             <div
               onClick={() => setPage('map')}
@@ -1518,13 +1499,14 @@ export default function App() {
       {page === 'schedule-import' && hasModule('irrigation') && <ScheduleImport userRole={userRole} onBack={() => setPage('irrigation')} />}
       {page === 'pivot-profile' && hasModule('irrigation') && <PivotProfile pivotGuid={pivotProfileGuid} onBack={() => setPage('irrigation')} />}
       {page === 'agronomy' && canSeeAgronomy && <Agronomy userRole={userRole} />}
-      {page === 'contracts' && canSeeContracts && <Contracts userRole={userRole} />}
+      {(page === 'contracts' || page === 'seed') && (canSeeContracts || canSeeSeed) && (
+        <Planning userRole={userRole} canContracts={canSeeContracts} canSeed={canSeeSeed} initial={page === 'seed' ? 'seed' : null} />
+      )}
       {page === 'yields' && canSeeYields && <Yields userRole={userRole} />}
       {(page === 'harvest' || page === 'spray') && (canSeeHarvest || canSeeGround || canSeeSpray) && (
         <Operations userRole={userRole} canHarvest={canSeeHarvest} canField={canSeeHarvest || canSeeGround}
           canSpray={canSeeSpray} sprayAdmin={sprayAdmin} userProfile={userProfile} initial={page === 'spray' ? 'spray' : null} />
       )}
-      {page === 'seed' && canSeeSeed && <Seed userRole={userRole} />}
       {page === 'map' && canSeeMap && <FarmMap userRole={userRole} />}
       {page === 'irrigation' && hasModule('irrigation') && (
         <>
