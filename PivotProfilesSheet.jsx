@@ -3,6 +3,7 @@ import { doc, setDoc } from 'firebase/firestore'
 import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage'
 import { auth, db, storage } from './firebase.js'
 import GpmChangeDialog from './GpmChangeDialog.jsx'
+import PackageScanner from './PackageScanner.jsx'
 import { nextGpm } from './gpmHistory.js'
 import { acresUnderSteel, travelDegrees } from './appliedMath.js'
 
@@ -246,7 +247,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
   async function replacePackage(r, file) {
     if (!file) return
     const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')
-    if (!isPdf) { setPkgError((m) => ({ ...m, [r.guid]: 'AIO needs a PDF.' })); return }
+    if (!isPdf) { setPkgError((m) => ({ ...m, [r.guid]: 'AIO needs a PDF.' })); return false }
     setPkgError((m) => { const n = { ...m }; delete n[r.guid]; return n })
     const key = `Package ${r.name}`
     setBusy((b) => ({ ...b, [key]: true }))
@@ -262,8 +263,10 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
         ? [{ ...r.profile.sprinklerPackage, replacedAt: new Date().toISOString() }, ...existingHistory]
         : existingHistory
       await save(r.guid, { sprinklerPackage: newEntry, sprinklerPackageHistory: history, noPackagePrintout: false })
+      return true
     } catch (e) {
       setPkgError((m) => ({ ...m, [r.guid]: e.message || 'Upload failed.' }))
+      return false
     } finally {
       setBusy((b) => { const n = { ...b }; delete n[key]; return n })
     }
@@ -311,7 +314,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
       </div>
       {!canEdit && <p style={{ ...small, color: WARN }}>You can look at these but not change them.</p>}
       <p style={{ ...small, margin: '0 0 8px', maxWidth: '90ch' }}>
-        Click a box and type. It saves when you leave the box or press Enter. You can upload, replace or delete a package PDF here. No PDF? Open the pivot&rsquo;s own profile (click the pivot name) and tap Scan with camera to scan the printout with your phone. A GPM can only be typed when &ldquo;No printout&rdquo; is ticked, or when the package couldn&rsquo;t be read; otherwise confirm the number read from the package.
+        Click a box and type. It saves when you leave the box or press Enter. You can upload, replace or delete a package PDF here, or tap the camera icon to scan the printout with your phone. The pivot&rsquo;s own profile page (click the pivot name) also has a Scan with camera button. A GPM can only be typed when &ldquo;No printout&rdquo; is ticked, or when the package couldn&rsquo;t be read; otherwise confirm the number read from the package.
       </p>
 
       <div style={{ width: 'fit-content', maxWidth: '100%', overflowX: 'auto', border: `0.5px solid ${LINE}`, borderRadius: 10, background: '#fff', maxHeight: 'calc(100vh - 230px)', overflowY: 'auto' }}>
@@ -377,6 +380,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                             <input type="file" accept="application/pdf" aria-label={k('Replace package')} disabled={lockEdit || !!busy[k('Package')]} style={{ display: 'none' }}
                               onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; replacePackage(r, f) }} />
                           </label>
+                          <PackageScanner iconOnly onPdf={(f) => replacePackage(r, f)} disabled={lockEdit || !!busy[k('Package')]} onError={(msg) => setPkgError((m) => { const n = { ...m }; if (msg) n[r.guid] = msg; else delete n[r.guid]; return n })} />
                           {canDelete && (
                             <button type="button" aria-label={k('Delete package')} disabled={!!busy[k('Package')]} onClick={() => setDeleteTarget({ guid: r.guid, name: r.name, pkg: r.pkg })}
                               style={{ fontSize: 11, padding: '2px 8px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: BAD, borderRadius: 5 }}>Delete</button>
@@ -387,12 +391,13 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                     ) : (
                       <div>
                         <span style={{ color: MUTED }}>None</span>
-                        <div style={{ marginTop: 3 }}>
+                        <div style={{ display: 'flex', gap: 6, marginTop: 3 }}>
                           <label style={{ fontSize: 11, padding: '2px 8px', border: '1px solid #ccc', borderRadius: 5, background: lockEdit ? '#f4f2ec' : '#fff', cursor: lockEdit || busy[k('Package')] ? 'default' : 'pointer', color: lockEdit ? MUTED : INK }}>
                             {busy[k('Package')] ? 'Uploading\u2026' : 'Upload PDF'}
                             <input type="file" accept="application/pdf" aria-label={k('Upload package')} disabled={lockEdit || !!busy[k('Package')]} style={{ display: 'none' }}
                               onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; replacePackage(r, f) }} />
                           </label>
+                          <PackageScanner iconOnly onPdf={(f) => replacePackage(r, f)} disabled={lockEdit || !!busy[k('Package')]} onError={(msg) => setPkgError((m) => { const n = { ...m }; if (msg) n[r.guid] = msg; else delete n[r.guid]; return n })} />
                         </div>
                         {pkgError[r.guid] && <div style={{ fontSize: 11, color: BAD }}>{pkgError[r.guid]}</div>}
                       </div>
