@@ -168,7 +168,7 @@ function EdgeEditor({ file, quad, srcW, srcH, onApply, onCancel }) {
   )
 }
 
-export default function PackageScanner({ onPdf, disabled, onError, label = 'Scan with camera', replaceStyle = false, iconOnly = false }) {
+export default function PackageScanner({ onPdf, disabled, onError, label = 'Scan with camera', replaceStyle = false, iconOnly = false, title = 'Scan the package', fileLabel = 'Package scan' }) {
   const [open, setOpen] = useState(false)
   const [pages, setPages] = useState([])   // { id, file, blob, url, w, h, quad, srcW, srcH, info }
   const [sel, setSel] = useState(0)
@@ -250,7 +250,7 @@ export default function PackageScanner({ onPdf, disabled, onError, label = 'Scan
     try {
       const bytes = await Promise.all(pages.map(async (p) => ({ bytes: new Uint8Array(await p.blob.arrayBuffer()), w: p.w, h: p.h })))
       const stamp = new Date().toISOString().slice(0, 10)
-      const file = new File([buildPdf(bytes)], `Package scan ${stamp}.pdf`, { type: 'application/pdf' })
+      const file = new File([buildPdf(bytes)], `${fileLabel} ${stamp}.pdf`, { type: 'application/pdf' })
       const saved = await onPdf(file)
       if (saved) closeAll()
       else setNote("Couldn't upload the scan. Check your signal and tap Upload again. Your pages are still here.")
@@ -284,9 +284,9 @@ export default function PackageScanner({ onPdf, disabled, onError, label = 'Scan
       <input ref={inputRef} data-testid="scan-input" type="file" accept="image/*" capture="environment" onChange={handlePhoto} style={{ display: 'none' }} />
 
       {open && (
-        <div role="dialog" aria-modal="true" aria-label="Scan the package" data-testid="scanner" style={{ position: 'fixed', inset: 0, zIndex: 1100, background: '#f4f2ec', display: 'flex', flexDirection: 'column' }}>
+        <div role="dialog" aria-modal="true" aria-label={title} data-testid="scanner" style={{ position: 'fixed', inset: 0, zIndex: 1100, background: '#f4f2ec', display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #e4e1d8', background: '#fff' }}>
-            <div style={{ fontSize: '15px', fontWeight: 600, color: '#2b2b26' }}>Scan the package{pages.length ? ` · ${pages.length} page${pages.length === 1 ? '' : 's'}` : ''}</div>
+            <div style={{ fontSize: '15px', fontWeight: 600, color: '#2b2b26' }}>{title}{pages.length ? ` · ${pages.length} page${pages.length === 1 ? '' : 's'}` : ''}</div>
             <button onClick={closeAll} disabled={uploading} style={btn({ padding: '6px 12px', fontSize: '13px' })}>Cancel</button>
           </div>
 
