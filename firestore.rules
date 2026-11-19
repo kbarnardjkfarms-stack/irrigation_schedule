@@ -48,7 +48,7 @@ service cloud.firestore {
     // can use at all. A profile with NO `modules` field keeps exactly what
     // its role already allowed, so deploying this changes nothing for
     // anyone until an Admin actually sets a list. Admin/Owner always have
-    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts', 'yields', 'harvest', 'seed', 'map', 'spray'.
+    // every module. Module ids: 'irrigation', 'potato-storage', 'agronomy', 'contracts', 'yields', 'harvest', 'seed', 'map', 'spray', 'ground'.
     // This is the real enforcement — hiding a tile in the UI is only
     // cosmetic, since anyone could still query Firestore directly.
     // Potato planting staff only ever get the seed module.
@@ -363,9 +363,10 @@ service cloud.firestore {
     // written only by the satelliteRotation Cloud Functions (Admin key).
     // fieldBoundaries (field outlines from the Agworld sync) are written only
     // by the Cloud Functions; Contracts > Storage plan reads them to measure
-    // field-to-cellar distance (the same outlines the public map feed shows).
+    // field-to-cellar distance and Ground work numbers fields southwest →
+    // northeast from them (the same outlines the public map feed shows).
     match /fieldBoundaries/{fieldId} {
-      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow read: if signedIn() && canViewContracts() && (hasModule('contracts') || hasModule('ground'));
     }
     // Field history links (Contracts > Rotation, Yields > Field history):
     // which old field names a current field takes history from. Same
@@ -394,6 +395,15 @@ service cloud.firestore {
     match /yieldSettings/{settingId} {
       allow read: if signedIn() && canViewContracts() && hasModule('yields');
       allow write: if signedIn() && isAdminOrOwner();
+    }
+    // Ground work module (GroundWork.jsx): groundSettings/{seasonId} (start
+    // date, equipment, crop recipes) and groundJobs/{id} (one field × one
+    // pass, or a rain/move/down block). Admin, Owner and Farm manager.
+    match /groundSettings/{seasonId} {
+      allow read, write: if signedIn() && canViewContracts() && hasModule('ground');
+    }
+    match /groundJobs/{jobId} {
+      allow read, write: if signedIn() && canViewContracts() && hasModule('ground');
     }
     // Harvest Schedule module (Harvest.jsx). harvestPlans/{seasonId} holds
     // the settings, harvestFields/{seasonId}__{key} one doc per field on the
