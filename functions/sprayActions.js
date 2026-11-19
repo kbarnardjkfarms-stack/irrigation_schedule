@@ -3,7 +3,7 @@
 // =============================================================================
 // Every change to the spray schedule goes through here so the role checks live
 // on the server: assign an operator, mark done / undo, move a job's date, remove
-// a job from the schedule / restore it. The crew list comes from the Google Sheet. The browser only reads
+// a job from the schedule / restore it, and the crew list. The browser only reads
 // (firestore.rules allow no writes to the spray collections).
 //
 // Who can do what (AIO logins; crew links come in a later step and reuse act()):
@@ -12,12 +12,14 @@
 //
 // Firestore:
 //   sprayJobState/{jobKey}  assign {operator, rig}, done {...}, move {date}, hidden {...}
-//   sprayOperators/{id}     name, crew ('drone' | 'ground'), rig, phone, active (from the Google Sheet)
+//   sprayOperators/{id}     name, crew ('drone' | 'ground'), rig, phone, active (Spray > Crew tab)
 
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
 const { _internal: S } = require('./spraySync');
 const alerts = require('./sprayAlerts');
+const contacts = require('./sprayContacts');
+const OPS = 'sprayOperators';
 
 /** What a role may do in the Spray module. */
 function permsFor(role, sprayAdmin) {
@@ -58,9 +60,44 @@ function quickDoneRow(job, me, operator) {
 async function act(db, me, data) {
   const action = clean(data && data.action, 20);
 
-  // ---- crew list: kept on the spray Google Sheet's Operators tab now (functions/sprayContacts.js) ----
+  // ---- crew list (Spray admin): Spray > Crew tab ----
   if (action === 'saveOperator' || action === 'deleteOperator') {
-    throw new HttpsError('failed-precondition', 'Operators come from the Operators tab of the spray Google Sheet. Change them there, then Refresh in Spray > Crew.');
+    if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can change the crew list.');
+    if (action === 'deleteOperator') {
+      const id = clean(data.id, 80);
+      if (!id) throw new HttpsError('invalid-argument', 'Which operator?');
+      await db.collection(OPS).doc(id).delete();
+      return { ok: true };
+    }
+    const name = clean(data.name, 60);
+    const crew = data.crew === 'drone' ? 'drone' : 'ground';
+    if (!name) throw new HttpsError('invalid-argument', 'Enter a name.');
+    const ref = data.id ? db.collection(OPS).doc(clean(data.id, 80)) : db.collection(OPS).doc();
+    await ref.set({
+      name, crew, rig: clean(data.rig, 60), phone: clean(data.phone, 30), active: data.active !== false,
+      aliases: clean(data.aliases, 200), from_sheet: admin.firestore.FieldValue.delete(), updated_by: me.name, updated_at: nowIso()
+    }, { merge: true });
+    return { ok: true, id: ref.id };
+  }
+
+  // ---- farm managers (Spray admin): Spray > Managers tab ----
+  if (action === 'listManagers' || action === 'saveManager' || action === 'deleteManager') {
+    if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can see or change the managers list.');
+    const MGRS = db.collection('sprayContacts');
+    if (action === 'saveManager') {
+      const m = contacts.cleanManager(data);
+      const id = clean(data.id, 80) || contacts._internal.personKey(m.name).slice(0, 80);
+      if (!data.id && (await MGRS.doc(id).get()).data()) throw new HttpsError('already-exists', 'There\'s already a manager named ' + m.name + '. Edit that one instead.');
+      await MGRS.doc(id).set(Object.assign(m, { updated_by: me.name, updated_at: nowIso() }));
+    } else if (action === 'deleteManager') {
+      const id = clean(data.id, 80);
+      if (!id) throw new HttpsError('invalid-argument', 'Which manager?');
+      await MGRS.doc(id).delete();
+    }
+    const list = [];
+    (await MGRS.get()).forEach((d) => { const c = d.data() || {}; list.push({ id: d.id, name: c.name || '', phone: c.phone || '', email: c.email || '', farms: c.farms || [], notify: c.notify || '' }); });
+    list.sort((a, b) => a.name.localeCompare(b.name));
+    return { ok: true, managers: list };
   }
 
   // ---- one job ----

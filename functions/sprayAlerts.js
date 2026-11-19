@@ -1,11 +1,11 @@
 // =============================================================================
 // Spray schedule — "field is done" alerts on phones (Firebase Cloud Messaging, web push)
 // =============================================================================
-// Who: the Managers-tab people of the spray Google Sheet (functions/sprayContacts.js donePeople):
+// Who: the people on the Spray module's Managers tab (functions/sprayContacts.js donePeople):
 //   notify "all" (the person running the spray operation), the job's farm manager, and notify
 //   "spreads" on Ag Rows spread jobs. A phone gets it only if that person turned alerts on in
-//   AIO (Spray screen) and their AIO login matches their sheet row by email (or by name).
-//   AIO logins not on the sheet never get alerts.
+//   AIO (Spray screen) and their AIO login matches their Managers-tab row by email (or by name).
+//   AIO logins not on the Managers tab never get alerts.
 //
 // When: Done in the app (sprayAct) or the job closed in AgWorld (spraySync). The alert waits
 //   SEND_DELAY_SEC so the app's Undo can take it back; sprayAlerter (every 2 minutes) sends
@@ -143,7 +143,7 @@ async function pushSetup(db, messaging, auth, data) {
   if (token && data.on === false) { await db.collection(TOKENS).doc(token).delete(); return { ok: true, on: false }; }
   if (token) await db.collection(TOKENS).doc(token).set({ uid: me.uid, name: me.name, email: me.email, ua: String(data.ua || '').slice(0, 200), at: Date.now() });
   const out = { ok: true, on: !!token };
-  // Is this person on the sheet's Managers tab? (otherwise they won't get Done alerts)
+  // Is this person on the Spray Managers tab? (otherwise they won't get Done alerts)
   const contacts = await readAll(db, 'sprayContacts');
   out.onSheet = Object.values(contacts).some((c) => (me.email && String(c.email || '').toLowerCase() === me.email) || personKey(c.name) === personKey(me.name));
   if (data && data.test) {
@@ -155,7 +155,7 @@ async function pushSetup(db, messaging, auth, data) {
   return out;
 }
 
-/** For the Crew tab: when the sender last ran, and the latest alerts with their status. */
+/** For the Alerts tab: when the sender last ran, and the latest alerts with their status. */
 async function alertLog(db) {
   const meta = (await db.collection('sprayMeta').doc('alerts').get()).data() || {};
   const tokens = await readAll(db, TOKENS);

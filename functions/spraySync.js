@@ -610,15 +610,15 @@ async function loadPins(db) {
 }
 
 // ---------------------------------------------------------------------------
-// Farm managers from the spray Google Sheet's Managers tab (functions/sprayContacts.js).
+// Farm managers from the Spray module's Managers tab (functions/sprayContacts.js).
 // AIO's Users list isn't used, so outside AIO logins never become a job's manager.
 // ---------------------------------------------------------------------------
 const personKey = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
 const { loadPeopleFromContacts: loadPeople } = require('./sprayContacts');
 const alerts = require('./sprayAlerts');
 
-/** The job's farm manager: the AgWorld comment first, otherwise the Managers tab row whose farms
- *  include the job's farm. Adds manager_phone (Managers tab) so everyone gets the Call button. */
+/** The job's farm manager: the AgWorld comment first, otherwise the Spray Managers-tab person whose
+ *  farms include the job's farm. Adds manager_phone (Managers tab) so everyone gets the Call button. */
 function withManager(r, people) {
   const fromAg = r.manager_agworld !== undefined ? String(r.manager_agworld || '') : String(r.manager || '');
   let m = fromAg;
