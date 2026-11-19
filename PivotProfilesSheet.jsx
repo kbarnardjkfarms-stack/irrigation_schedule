@@ -4,7 +4,7 @@ import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'fi
 import { auth, db, storage } from './firebase.js'
 import GpmChangeDialog from './GpmChangeDialog.jsx'
 import PackageScanner from './PackageScanner.jsx'
-import { nextGpm } from './gpmHistory.js'
+import { nextGpm, clearedGpmFields, liveGpm } from './gpmHistory.js'
 import { acresUnderSteel, travelDegrees } from './appliedMath.js'
 
 // "Pivot Profiles" spreadsheet view (Irrigation views dropdown): every pivot on one farm in a grid, with the
@@ -304,7 +304,9 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
       if (pkg.storagePath) {
         try { await deleteObject(storageRef(storage, pkg.storagePath)) } catch (err) { if (!(err && err.code === 'storage/object-not-found')) throw err }
       }
-      await save(guid, { sprinklerPackage: null })
+      // The profile as it is now, so the GPM that goes with this package can be cleared along with it.
+      const prof = (rows.find((x) => x.guid === guid) || {}).profile
+      await save(guid, { sprinklerPackage: null, ...clearedGpmFields(prof, { by: whoAmI(), now: new Date().toISOString() }) })
     } catch (e) {
       setPkgError((m) => ({ ...m, [guid]: e.message || 'Could not delete the package.' }))
     } finally {
@@ -508,7 +510,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
             <div style={{ fontSize: 13, fontWeight: 600, wordBreak: 'break-all' }}>{deleteTarget.pkg.fileName}</div>
             <div style={{ fontSize: 12, color: '#888', marginBottom: 10 }}>{deleteTarget.name}{deleteTarget.pkg.uploadedAt ? ` \u00b7 uploaded ${new Date(deleteTarget.pkg.uploadedAt).toLocaleDateString()}` : ''}</div>
             <div style={{ fontSize: 13, color: '#555', lineHeight: 1.5, marginBottom: 8 }}>This deletes the PDF for good. You won&rsquo;t be able to get it back.</div>
-            <div style={{ fontSize: 12, color: '#555', lineHeight: 1.5, marginBottom: 16 }}>The GPM already confirmed stays in use until a new package is uploaded and confirmed.</div>
+            <div style={{ fontSize: 12, color: '#555', lineHeight: 1.5, marginBottom: 16 }}>{(() => { const g = liveGpm((rows.find((x) => x.guid === deleteTarget.guid) || {}).profile); return g != null ? `Deleting it also clears this pivot\u2019s GPM (${g}). It will have no GPM until you tick \u201cNo printout\u201d and type one, or upload a new package and confirm its GPM.` : '' })()}</div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button type="button" onClick={() => setDeleteTarget(null)} disabled={deleting} style={{ fontSize: 13 }}>Cancel</button>
               <button type="button" onClick={confirmDelete} disabled={deleting} style={{ fontSize: 13, background: '#FBEAEA', border: '1px solid #E8B4B4', color: BAD }}>{deleting ? 'Deleting\u2026' : 'Delete package'}</button>
