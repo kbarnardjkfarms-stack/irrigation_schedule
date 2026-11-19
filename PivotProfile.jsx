@@ -166,7 +166,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     // PDFs. A photo is turned away here, before anything is saved.
     const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')
     if (!isPdf) {
-      setUploadError('That file needs to be a PDF. Tap Scan with camera to scan the printout, or use your phone\u2019s scanner (steps below) and upload the PDF it saves.')
+      setUploadError('That file needs to be a PDF. Tap Scan with camera to scan the printout, or upload a PDF you already have.')
       e.target.value = ''
       return
     }
@@ -556,25 +556,6 @@ export default function PivotProfile({ pivotGuid, onBack }) {
         <div style={{ fontSize: '11px', color: '#555', marginTop: '8px', lineHeight: 1.45 }}>
           Tap <b>Scan with camera</b>: take a picture of each page, cover page first. AIO straightens and cleans each page and tells you if one is blurry. Lay the page flat in good light and fill the screen with it. Or upload a PDF you already have.
         </div>
-        <details data-testid="scan-howto" style={{ marginTop: '8px', background: '#f4f2ec', borderRadius: '8px', padding: '8px 12px' }}>
-          <summary style={{ fontSize: '12px', fontWeight: 600, color: '#2b2b26', cursor: 'pointer' }}>Other way: make a PDF with your phone&rsquo;s own scanner</summary>
-          <div style={{ fontSize: '12px', color: '#2b2b26', lineHeight: 1.5, marginTop: '8px' }}>
-            <div style={{ fontWeight: 600 }}>iPhone</div>
-            <ol style={{ margin: '2px 0 8px', paddingLeft: '18px' }}>
-              <li>Open the <b>Files</b> app and tap the <b>&hellip;</b> button at the top right.</li>
-              <li>Tap <b>Scan Documents</b>.</li>
-              <li>Hold the phone over the first page (the cover page). It takes the picture by itself. Scan every page, then tap <b>Save</b>.</li>
-              <li>Name it and save it to Files.</li>
-            </ol>
-            <div style={{ fontWeight: 600 }}>Android</div>
-            <ol style={{ margin: '2px 0 8px', paddingLeft: '18px' }}>
-              <li>Open the <b>Google Drive</b> app and tap the <b>+</b> button.</li>
-              <li>Tap <b>Scan</b>.</li>
-              <li>Take a picture of each page, cover page first, then tap <b>Save</b>. It saves as a PDF in Drive.</li>
-            </ol>
-            <div>Then tap <b>{pkg ? 'Replace' : 'Upload package PDF'}</b> above and pick the file you just saved. Lay the printout flat in good light and keep each whole page in view so the numbers are sharp.</div>
-          </div>
-        </details>
         {uploadError && (
           <div style={{ background: '#FBEAEA', border: '1px solid #E8B4B4', borderRadius: '8px', padding: '8px 12px', marginTop: '8px', fontSize: '12px', color: '#A32D2D' }}>{uploadError}</div>
         )}
