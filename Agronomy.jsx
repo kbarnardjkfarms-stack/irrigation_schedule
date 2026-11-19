@@ -8,6 +8,7 @@ import AgronomyCompostSources from './AgronomyCompostSources.jsx'
 import AgronomyTargets from './AgronomyTargets.jsx'
 import AgronomyScouting from './AgronomyScouting.jsx'
 import AgronomyMapping from './AgronomyMapping.jsx'
+import AgronomyNematodes from './AgronomyNematodes.jsx'
 import AgronomyCompare from './AgronomyCompare.jsx'
 
 // Targets tab (editing the agronomyCriteria/agronomyCurves config that used
@@ -164,6 +165,9 @@ export default function Agronomy({ userRole }) {
         <button className={view === 'database' ? 'active' : ''} onClick={() => setView('database')}>
           All samples
         </button>
+        <button className={view === 'nematodes' ? 'active' : ''} onClick={() => setView('nematodes')}>
+          Nematodes
+        </button>
         <button className={view === 'compost' ? 'active' : ''} onClick={() => setView('compost')}>
           Compost sources
         </button>
@@ -184,6 +188,7 @@ export default function Agronomy({ userRole }) {
       {view === 'criteria' && <AgronomyByCriteria fields={fields} />}
       {view === 'compare' && <AgronomyCompare fields={fields} />}
       {view === 'database' && <AgronomySampleDatabase fields={fields} />}
+      {view === 'nematodes' && <AgronomyNematodes fields={fields} />}
       {view === 'compost' && <AgronomyCompostSources />}
       {view === 'mapping' && <AgronomyMapping fields={allFields} />}
       {view === 'scouting' && <AgronomyScouting fields={allFields} />}
