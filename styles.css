@@ -1223,6 +1223,12 @@ thead th.sticky-col { top: 0; z-index: 4; }
 @font-face { font-family: 'Barlow Condensed'; font-style: normal; font-weight: 600; font-display: swap; src: url('./barlow-condensed-latin-600-normal.woff2') format('woff2'); }
 @font-face { font-family: 'Barlow Condensed'; font-style: normal; font-weight: 700; font-display: swap; src: url('./barlow-condensed-latin-700-normal.woff2') format('woff2'); }
 body.spray-dark { background: #0c0f11; }
+/* Inside AIO (Operations), the page behind Spray is AIO's own page colour, like the other sections:
+   in dark mode theme.css flips the whole page, and a black body would flip into a big white
+   background around Spray. Only the no-login crew link page (no Operations around it) stays black. */
+body.spray-dark:has(.ops-hub) { background: #f7f5f0; }
+@media (prefers-color-scheme: dark) { html:not([data-theme="light"]) body.spray-dark { background: #f7f5f0; } }
+.ops-hub .spray { border-radius: 14px; }
 .spray {
   /* the old Google spray app's colors */
   --sp-bg: #0c0f11; --sp-card: #161a1e; --sp-card2: #1d2329; --sp-line: #252b31; --sp-line2: #323a42; --sp-tx: #e8e8e3; --sp-tx2: #9aa1a7; --sp-tx3: #6b737a;
