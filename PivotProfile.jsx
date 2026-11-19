@@ -4,7 +4,7 @@ import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage
 import { db, storage, auth } from './firebase.js'
 import PivotIcon from './PivotIcon.jsx'
 import GpmChangeDialog from './GpmChangeDialog.jsx'
-import { nextGpm, describeHistory } from './gpmHistory.js'
+import { nextGpm, describeHistory, clearedGpmFields, liveGpm } from './gpmHistory.js'
 import { travelDegrees } from './appliedMath.js'
 import PackageScanner from './PackageScanner.jsx'
 
@@ -269,8 +269,9 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   }
 
   // Deletes a package for good: the PDF file itself, then its entry on the
-  // profile. Deleting the current package leaves the GPM already confirmed
-  // in use (shown as "from the previous package").
+  // profile. Deleting the current package also clears the pivot's GPM: with no
+  // package there is no GPM until "No package printout" is ticked and one is
+  // typed, or a new package is uploaded and confirmed.
   async function handleConfirmDelete() {
     if (!deleteTarget) return
     const { kind, entry } = deleteTarget
@@ -287,7 +288,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
       }
       const keyOf = (h) => h.storagePath || h.downloadUrl
       const update = kind === 'current'
-        ? { sprinklerPackage: null }
+        ? { sprinklerPackage: null, ...clearedGpmFields(profile, { by: (auth.currentUser && auth.currentUser.email) || 'unknown', now: new Date().toISOString() }) }
         : { sprinklerPackageHistory: ((profile && profile.sprinklerPackageHistory) || []).filter((h) => keyOf(h) !== keyOf(entry)) }
       await setDoc(doc(db, 'pivotProfiles', pivotGuid), update, { merge: true })
     } catch (err) {
@@ -863,7 +864,9 @@ export default function PivotProfile({ pivotGuid, onBack }) {
             </div>
             {deleteTarget.kind === 'current' && (
               <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.5, marginBottom: '16px' }}>
-                This is the current package. The GPM already confirmed stays in use until a new package is uploaded and confirmed.
+                {liveGpm(profile) != null
+                  ? `This is the current package. Deleting it also clears this pivot\u2019s GPM (${liveGpm(profile)}). The pivot will have no GPM until you tick \u201cNo package printout available\u201d and type one, or upload a new package and confirm its GPM.`
+                  : 'This is the current package.'}
               </div>
             )}
             <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
