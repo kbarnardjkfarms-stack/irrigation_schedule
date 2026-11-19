@@ -3279,6 +3279,12 @@ exports.archiveAgrimetNow = agrimet.archiveAgrimetNow;
 const openMeteo = require('./openMeteo');
 exports.archiveOpenMeteoNightly = openMeteo.archiveOpenMeteoNightly;
 exports.archiveOpenMeteoNow = openMeteo.archiveOpenMeteoNow;
+// Grass-to-alfalfa ratio per station, worked out every morning from the two
+// archives above. Changes nothing on screen. Own file, see etRatio.js.
+const etRatio = require('./etRatio');
+exports.computeEtRatiosNightly = etRatio.computeEtRatiosNightly;
+exports.computeEtRatiosNow = etRatio.computeEtRatiosNow;
+exports.backfillEtHistoryNow = etRatio.backfillEtHistoryNow;
 
 // Field history links by location (old Agworld field outlines overlapped
 // with today's). Lives in its own file — see fieldLineage.js.
