@@ -287,6 +287,11 @@ service cloud.firestore {
       allow read: if signedIn() && hasModule('irrigation');
       allow write: if false;
     }
+    // Grass-to-alfalfa ratio per station, written only by computeEtRatiosNightly.
+    match /etRatio/{stationId} {
+      allow read: if signedIn() && hasModule('irrigation');
+      allow write: if false;
+    }
     match /fieldSettings/{fieldId} {
       allow read: if signedIn() && hasModule('irrigation');
       allow write: if signedIn() && hasModule('irrigation') && canEditFarmData(fieldId);
