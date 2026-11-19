@@ -142,3 +142,22 @@ Done from a link sends the same field-done phone alert.
 | `Spray.jsx` | `SprayCrew` page; Make / Send / New / Turn off link buttons in the Crew tab; Done on cards for crew links. |
 
 When every crew member has an AIO link, the Google app can be switched off; its old links stop working with it.
+
+## Operators and Managers tabs (no more Google Sheet)
+
+The spray Google Sheet isn't read any more. Everything lives in the Spray module (Spray admins only):
+
+- **Operators** (was Crew): add / edit / delete operators: name, Ag Rows or Drone, phone, other spellings,
+  Active, and their no-login link (Make / Send / New / Turn off). Drone pilots also carry the **drone (and
+  trailer)** they run; it rides onto drone jobs they're put on. Ag Rows jobs carry just the operator (no rig).
+- **Managers**: farm managers for the spray schedule, separate from AIO's Users list: name, phone, email
+  (the one they sign into AIO with, so alerts find their phone), farms (AIO's farm list), and field-done
+  alerts: Their farms / All jobs / Spreads. A manager's farms make them the manager on those jobs when the
+  AgWorld comment names nobody (name + Call button). The managers already in AIO from the sheet carry over.
+
+| File | What |
+|---|---|
+| `Spray.jsx`, `styles.css` | Operators tab (form back, no rig except a pilot's drone), Managers tab, job details pick just the operator. |
+| `functions/sprayActions.js` | `saveOperator` / `deleteOperator` back; `listManagers` / `saveManager` / `deleteManager` (Spray admins). |
+| `functions/sprayContacts.js` | Sheet reader switched off (its two functions stay exported but do nothing); manager checks for saving. |
+| `functions/sprayAlerts.js`, `functions/spraySync.js` | Comments only: managers come from the Managers tab. |

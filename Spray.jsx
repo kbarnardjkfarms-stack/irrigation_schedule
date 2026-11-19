@@ -16,11 +16,10 @@ import { pushState, turnOn, turnOff, refresh as refreshPush, sendTest } from './
 //
 //   sprayJobs/{jobKey}       the job from AgWorld
 //   sprayJobState/{jobKey}   assign / done / move / hidden
-//   sprayOperators/{id}      the crew list, from the Operators tab of the spray Google Sheet
+//   sprayOperators/{id}      the operators (Operators tab, Spray admins)
 
 const sprayAct = httpsCallable(functions, 'sprayAct')
 const syncNow = httpsCallable(functions, 'syncSprayJobsNow', { timeout: 1800000 })
-const contactsNow = httpsCallable(functions, 'syncSprayContactsNow', { timeout: 130000 })
 const crewCall = httpsCallable(functions, 'sprayCrew', { timeout: 60000 })
 const linkAdmin = httpsCallable(functions, 'sprayLinkAdmin', { timeout: 60000 })
 const alertLogCall = httpsCallable(functions, 'sprayAlertLog', { timeout: 130000 })
@@ -84,12 +83,14 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
       </div>
       <div className="spray-tabs">
         <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
-        {isAdmin && <button className={view === 'crew' ? 'active' : ''} onClick={() => setView('crew')}>Crew</button>}
+        {isAdmin && <button className={view === 'crew' ? 'active' : ''} onClick={() => setView('crew')}>Operators</button>}
+        {isAdmin && <button className={view === 'managers' ? 'active' : ''} onClick={() => setView('managers')}>Managers</button>}
         {isAdmin && <button className={view === 'alerts' ? 'active' : ''} onClick={() => setView('alerts')}>Alerts</button>}
       </div>
       {view === 'schedule' && <Schedule jobs={jobs} ops={ops} isAdmin={isAdmin} run={run} say={say}
         mine={mineFirst ? (j) => isMine(j, myName, myFarmKeys) : null} />}
-      {view === 'crew' && isAdmin && <Crew ops={ops} say={say} />}
+      {view === 'crew' && isAdmin && <Crew ops={ops} run={run} say={say} />}
+      {view === 'managers' && isAdmin && <Managers farms={farms} run={run} say={say} />}
       {view === 'alerts' && isAdmin && <AlertLog say={say} />}
       {toast && (
         <div className="spray-toast">
@@ -247,7 +248,7 @@ function Schedule({ jobs, ops, isAdmin, run, say, mine }) {
 function JobCard({ j, today, wx, ops, isAdmin, canDone, open, onToggle, actions }) {
   const kind = kindOf(j)
   const mayDone = canDone === undefined ? isAdmin : canDone   // crew links: Done without the admin details
-  const phone = j.manager_phone   // from the Managers tab of the spray Google Sheet
+  const phone = j.manager_phone   // from the Spray Managers tab
   const [busy, setBusy] = useState(false)
   const guard = (fn) => async (e) => {
     if (e) e.stopPropagation()
@@ -266,7 +267,7 @@ function JobCard({ j, today, wx, ops, isAdmin, canDone, open, onToggle, actions 
         </div>
         <div className="spray-field">{cropEmoji(j.crop)} {j.field}</div>
         <div className="spray-meta">{[j.crop, (Number(j.acres) || 0).toLocaleString() + ' ac', j.manager].filter(Boolean).join(' · ')}</div>
-        <div className={'spray-op' + (j.operator ? '' : ' none')}>{j.operator ? j.operator + (j.rig ? ' · ' + j.rig : '') : 'No operator yet'}</div>
+        <div className={'spray-op' + (j.operator ? '' : ' none')}>{j.operator ? j.operator + (j.source === 'drone' && j.rig ? ' · ' + j.rig : '') : 'No operator yet'}</div>
         {wx && <Weather w={wx} />}
       </div>
       <div className="spray-actions">
@@ -295,9 +296,9 @@ function Weather({ w }) {
 function Details({ j, ops, isAdmin, actions, busy, guard }) {
   const crewOps = ops.filter((o) => o.active !== false && (o.crew === 'drone') === (j.source === 'drone'))
   const [op, setOp] = useState(j.operator)
-  const [rig, setRig] = useState(j.rig)
-  useEffect(() => { setOp(j.operator); setRig(j.rig) }, [j.operator, j.rig])
-  const pick = (name) => { setOp(name); const o = crewOps.find((x) => x.name === name); if (o && o.rig) setRig(o.rig) }
+  useEffect(() => { setOp(j.operator) }, [j.operator])
+  // Drone jobs carry the pilot's drone (Operators tab); Ag Rows jobs carry just the operator.
+  const droneOf = (name) => { const o = ops.find((x) => x.name === name); return j.source === 'drone' && o ? (o.rig || '') : '' }
   const products = Array.isArray(j.product_detail) && j.product_detail.length ? j.product_detail : String(j.products || '').split(',').filter(Boolean).map((n) => ({ name: n.trim() }))
   return (
     <div className="spray-details">
@@ -319,13 +320,13 @@ function Details({ j, ops, isAdmin, actions, busy, guard }) {
       {isAdmin && (
         <>
           <div className="spray-row">
-            <select value={op} onChange={(e) => pick(e.target.value)}>
+            <select value={op} onChange={(e) => setOp(e.target.value)}>
               <option value="">No operator</option>
               {op && !crewOps.some((o) => o.name === op) && <option value={op}>{op}</option>}
               {crewOps.map((o) => <option key={o.id} value={o.name}>{o.name}</option>)}
             </select>
-            <input value={rig} onChange={(e) => setRig(e.target.value)} placeholder={j.source === 'drone' ? 'Drone' : 'Rig'} />
-            <button className="save" disabled={busy || (op === j.operator && rig === j.rig)} onClick={guard(() => actions.assign(j, op, rig))}>Save</button>
+            {j.source === 'drone' && op && droneOf(op) && <span className="spray-muted">{droneOf(op)}</span>}
+            <button className="save" disabled={busy || op === j.operator} onClick={guard(() => actions.assign(j, op, droneOf(op)))}>Save</button>
           </div>
           {!j.done && (
             <div className="spray-row">
@@ -383,20 +384,27 @@ function useWeather(jobs) {
 }
 
 // ---------------------------------------------------------------------------
-// Crew list (Spray admin) — read from the spray Google Sheet (Operators + Managers tabs).
-// Change people on the sheet; AIO re-reads it every hour, or now with Refresh.
+// Operators tab (Spray admin): add / edit / delete operators, and their no-login links.
+// Drone pilots carry the drone (and trailer) they run; it rides onto the drone jobs they're put on.
 // ---------------------------------------------------------------------------
-function Crew({ ops, say }) {
-  const [link, setLink] = useState('')
+function Crew({ ops, run, say }) {
+  const blank = { id: '', name: '', crew: 'ground', rig: '', phone: '', aliases: '', active: true }
+  const [form, setForm] = useState(blank)
   const [busy, setBusy] = useState(false)
-  const [res, setRes] = useState(null)
-  const refresh = async (sheet) => {
+  const set = (k) => (e) => setForm((f) => Object.assign({}, f, { [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
+  const save = async () => {
+    if (!form.name.trim()) { say('Enter a name.'); return }
+    setBusy(true)
+    try { await run(Object.assign({ action: 'saveOperator' }, form, { rig: form.crew === 'drone' ? form.rig : '' })); say((form.id ? 'Saved ' : 'Added ') + form.name); setForm(blank) } catch (e) { /* shown */ }
+    setBusy(false)
+  }
+  const del = async (o) => {
+    if (!window.confirm('Delete ' + o.name + ' from the crew list? Their link stops working too. Jobs already assigned keep the name.')) return
     setBusy(true)
     try {
-      const r = (await contactsNow(sheet ? { sheet } : {})).data
-      setRes(r)
-      if (r.ok) { say('Read ' + r.operators + ' operators and ' + r.managers + ' managers from the sheet'); setLink('') }
-    } catch (e) { setRes({ ok: false, error: e.message || String(e) }) }
+      if (links[normName(o.name)]) await linkAdmin({ action: 'off', name: o.name })
+      await run({ action: 'deleteOperator', id: o.id }); await loadLinks(); say('Deleted ' + o.name)
+    } catch (e) { /* shown */ }
     setBusy(false)
   }
   // No-login crew links (functions/sprayCrewLinks.js): one per person, replace or turn off any time.
@@ -435,22 +443,23 @@ function Crew({ ops, say }) {
   return (
     <div>
       <div className="spray-box">
-        <b>Spray Google Sheet</b>
-        <div className="spray-muted" style={{ margin: '4px 0 8px' }}>
-          Operators come from its <b>Operators</b> tab, farm managers (Call buttons and field-done alerts) from its <b>Managers</b> tab.
-          Edit people on the sheet; AIO reads it every hour. On the Managers tab, a <b>notify</b> column of <b>all</b> gets every Done alert, <b>spreads</b> gets Ag Rows spread Done alerts.
-          Make a link for each operator below and text it to them: no sign-in, Ag Rows see Ag Rows jobs, drone pilots see drone jobs.
+        <b>{form.id ? 'Edit ' + form.name : 'Add an operator'}</b>
+        <div className="spray-form">
+          <label>Name<input value={form.name} onChange={set('name')} placeholder="As it should show on jobs" /></label>
+          <label>Crew<select value={form.crew} onChange={set('crew')}><option value="ground">Ag Rows</option><option value="drone">Drone</option></select></label>
+          {form.crew === 'drone' && <label>Drone <span className="spray-muted">(and trailer they run)</span><input value={form.rig} onChange={set('rig')} placeholder="e.g. Bluebird, trailer 2" /></label>}
+          <label>Phone<input value={form.phone} onChange={set('phone')} inputMode="tel" placeholder="(208) 555-0123" /></label>
+          <label className="wide">Other spellings <span className="spray-muted">(how AgWorld or Paycom writes the name, comma-separated)</span><input value={form.aliases} onChange={set('aliases')} placeholder="e.g. Greg Burton" /></label>
+          <label className="check"><input type="checkbox" checked={form.active !== false} onChange={set('active')} /> Active</label>
         </div>
         <div className="spray-row">
-          <button className="save" disabled={busy} onClick={() => refresh()}>{busy ? 'Reading…' : 'Refresh from sheet'}</button>
+          <button className="save" disabled={busy} onClick={save}>{form.id ? 'Save' : 'Add'}</button>
+          {form.id && <button disabled={busy} onClick={() => setForm(blank)}>Cancel</button>}
         </div>
-        <div className="spray-row" style={{ marginTop: 8 }}>
-          <input style={{ flex: 1, minWidth: 220 }} value={link} onChange={(e) => setLink(e.target.value)} placeholder="Paste the spray Google Sheet link" />
-          <button disabled={busy || !link.trim()} onClick={() => refresh(link.trim())}>Link + read</button>
+        <div className="spray-muted" style={{ marginTop: 6 }}>
+          Make a link for each operator below and text it to them: no sign-in, Ag Rows see Ag Rows jobs, drone pilots see drone jobs.
+          Farm managers and who gets field-done alerts are on the Managers tab.
         </div>
-        {res && !res.ok && <div className="spray-error" style={{ marginTop: 8 }}>{res.error}</div>}
-        {res && res.ok && <div className="spray-muted" style={{ marginTop: 8 }}>Read {res.operators} operators and {res.managers} managers just now.</div>}
-        {res && res.account && <div className="spray-muted" style={{ marginTop: 6 }}>AIO reads the sheet as <b style={{ userSelect: 'all' }}>{res.account}</b>. Share the sheet with that address as Viewer.</div>}
       </div>
       {[['drone', 'Drone crew'], ['ground', 'Ag Rows']].map(([c, label]) => (
         <div key={c}>
@@ -459,10 +468,11 @@ function Crew({ ops, say }) {
             <div className={'spray-hidden' + (o.active === false ? ' off' : '')} key={o.id}>
               <div>
                 <b>{o.name}</b>{o.active === false && <span className="spray-muted"> · inactive</span>}
-                <div className="spray-muted">{[o.rig, o.phone, o.aliases && 'also: ' + o.aliases].filter(Boolean).join(' · ')}</div>
+                <div className="spray-muted">{[o.crew === 'drone' && o.rig && '🛸 ' + o.rig, o.phone, o.aliases && 'also: ' + o.aliases].filter(Boolean).join(' · ')}</div>
                 {links[normName(o.name)] && <div className="spray-muted">Link {links[normName(o.name)].lastUsed ? 'last opened ' + new Date(links[normName(o.name)].lastUsed).toLocaleDateString() : 'not opened yet'}</div>}
               </div>
               <div className="spray-row" style={{ margin: 0 }}>
+                <button disabled={busy} onClick={() => setForm(Object.assign({}, blank, o))}>Edit</button>
                 {links[normName(o.name)]
                   ? <>
                     <button disabled={busy} onClick={() => send(o, links[normName(o.name)].code)}>Send link</button>
@@ -470,9 +480,10 @@ function Crew({ ops, say }) {
                     <button className="spray-danger" disabled={busy} onClick={() => linkOff(o)}>Turn off</button>
                   </>
                   : o.active !== false && <button className="save" disabled={busy} onClick={() => makeLink(o)}>Make link</button>}
+                <button className="spray-danger" disabled={busy} onClick={() => del(o)}>Delete</button>
               </div>
             </div>
-          )) : <div className="spray-empty">Nobody yet. Press Refresh from sheet.</div>}
+          )) : <div className="spray-empty">Nobody yet. Add them above.</div>}
         </div>
       ))}
     </div>
@@ -495,7 +506,7 @@ function Alerts({ say }) {
       const r = await turnOn()
       if (r.ok) {
         setSt('on'); setOpenBell(!!(r.onSheet === false))
-        setNote(r.onSheet === false ? 'Alerts are on, but your name or email isn\'t on the spray sheet\'s Managers tab yet, so Done alerts won\'t come.' : '')
+        setNote(r.onSheet === false ? 'Alerts are on for this phone, but your name or email isn\'t on the Spray Managers tab yet, so Done alerts won\'t come.' : '')
         say('Alerts on for this phone')
       } else setSt(r.error === 'blocked' ? 'blocked' : 'off')
     } catch (e) { setNote(e.message || String(e)) }
@@ -635,8 +646,8 @@ export function SprayCrew({ code }) {
 // Alerts tab (Spray admins): did the field-done alerts go out, and if not, why
 // ---------------------------------------------------------------------------
 const ALERT_STATUS = {
-  sent: 'Sent', queued: 'Waiting (Undo window / next send)', no_phones: 'No phone: nobody on it has alerts turned on, or their AIO email isn\'t on the sheet',
-  no_one: 'Nobody to send to (no farm manager, no "all" on the sheet)', stale: 'Too old, skipped', error: 'Failed'
+  sent: 'Sent', queued: 'Waiting (Undo window / next send)', no_phones: 'No phone: nobody on it has turned on alerts in AIO, or their AIO email doesn\'t match the Managers tab',
+  no_one: 'Nobody to send to (no farm manager on the job, nobody on All jobs)', stale: 'Too old, skipped', error: 'Failed'
 }
 function AlertLog({ say }) {
   const [log, setLog] = useState(null)
@@ -678,6 +689,84 @@ function AlertLog({ say }) {
           )) : <div className="spray-empty">No alerts yet.</div>}
         </div>
       )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Managers tab (Spray admin): farm managers for the spray schedule, separate from AIO's Users list.
+// Their farms make them the manager on those jobs (name + Call button); "alerts" picks which
+// field-done alerts they get. Kept in sprayContacts through sprayAct (no browser access).
+// ---------------------------------------------------------------------------
+const NOTIFY_CHOICES = [['', 'Their farms'], ['all', 'All jobs'], ['spreads', 'Spreads']]
+const NOTIFY_NOTES = {
+  '': 'Alerts for jobs on their farms.',
+  all: 'Every field-done alert (drone + Ag Rows). Farms checked still make them the manager on those jobs.',
+  spreads: 'Alerts for Ag Rows spread jobs, plus any farms checked.'
+}
+function Managers({ farms, run, say }) {
+  const blank = { id: '', name: '', phone: '', email: '', farms: [], notify: '' }
+  const [list, setList] = useState(null)
+  const [form, setForm] = useState(blank)
+  const [busy, setBusy] = useState(false)
+  const load = async (data) => {
+    setBusy(true)
+    try { const r = await run(data || { action: 'listManagers' }); setList(r.managers || []); return true }
+    catch (e) { return false }
+    finally { setBusy(false) }
+  }
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const farmNames = Object.values(farms || {}).map((f) => f && f.name).filter(Boolean).sort((a, b) => a.localeCompare(b))
+  const has = (name) => form.farms.some((f) => mapKey(f) === mapKey(name))
+  const toggleFarm = (name) => setForm((f) => Object.assign({}, f, { farms: has(name) ? f.farms.filter((x) => mapKey(x) !== mapKey(name)) : f.farms.concat([name]) }))
+  const extra = form.farms.filter((f) => !farmNames.some((n) => mapKey(n) === mapKey(f)))   // saved names AIO's farm list doesn't have
+  const set = (k) => (e) => setForm((f) => Object.assign({}, f, { [k]: e.target.value }))
+  const save = async () => {
+    if (!form.name.trim()) { say('Enter a name.'); return }
+    if (await load(Object.assign({ action: 'saveManager' }, form))) { say((form.id ? 'Saved ' : 'Added ') + form.name); setForm(blank) }
+  }
+  const del = async (m) => {
+    if (!window.confirm('Remove ' + m.name + ' from the managers list? Their jobs lose the name and Call button, and they stop getting alerts.')) return
+    if (await load({ action: 'deleteManager', id: m.id })) say('Removed ' + m.name)
+  }
+  const label = (n) => (NOTIFY_CHOICES.find((c) => c[0] === (n || '')) || NOTIFY_CHOICES[0])[1]
+  return (
+    <div>
+      <div className="spray-box">
+        <b>{form.id ? 'Edit ' + form.name : 'Add a manager'}</b>
+        <div className="spray-form">
+          <label>Name<input value={form.name} onChange={set('name')} placeholder="As AgWorld comments name them" /></label>
+          <label>Phone<input value={form.phone} onChange={set('phone')} inputMode="tel" placeholder="(208) 555-0123" /></label>
+          <label className="wide">Email <span className="spray-muted">(the one they sign into AIO with, so alerts find their phone)</span><input value={form.email} onChange={set('email')} inputMode="email" /></label>
+        </div>
+        <div className="spray-muted" style={{ margin: '8px 0 4px' }}>Farms</div>
+        <div className="spray-farms">
+          {farmNames.map((n) => <label key={n}><input type="checkbox" checked={has(n)} onChange={() => toggleFarm(n)} /> {n}</label>)}
+          {extra.map((n) => <label key={'x' + n} title="Not in AIO's farm list"><input type="checkbox" checked onChange={() => toggleFarm(n)} /> {n} <span className="spray-muted">(typed)</span></label>)}
+        </div>
+        <div className="spray-muted" style={{ margin: '10px 0 4px' }}>Field-done alerts</div>
+        <div className="spray-seg">
+          {NOTIFY_CHOICES.map(([v, l]) => <button key={v} type="button" className={(form.notify || '') === v ? 'active' : ''} onClick={() => setForm((f) => Object.assign({}, f, { notify: v }))}>{l}</button>)}
+        </div>
+        <div className="spray-muted" style={{ marginTop: 4 }}>{NOTIFY_NOTES[form.notify || '']}</div>
+        <div className="spray-row" style={{ marginTop: 10 }}>
+          <button className="save" disabled={busy} onClick={save}>{form.id ? 'Save' : 'Add'}</button>
+          {form.id && <button disabled={busy} onClick={() => setForm(blank)}>Cancel</button>}
+        </div>
+      </div>
+      <div className="spray-day">Managers ({list ? list.length : '…'})</div>
+      {list && (list.length ? list.map((m) => (
+        <div className="spray-hidden" key={m.id}>
+          <div>
+            <b>{m.name}</b> <span className="spray-muted">· {label(m.notify)}</span>
+            <div className="spray-muted">{[m.farms.join(', '), m.phone, m.email].filter(Boolean).join(' · ') || 'No farms, phone or email yet'}</div>
+          </div>
+          <div className="spray-row" style={{ margin: 0 }}>
+            <button disabled={busy} onClick={() => setForm(Object.assign({}, blank, m))}>Edit</button>
+            <button className="spray-danger" disabled={busy} onClick={() => del(m)}>Remove</button>
+          </div>
+        </div>
+      )) : <div className="spray-empty">Nobody yet. Add your farm managers above.</div>)}
     </div>
   )
 }

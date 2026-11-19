@@ -1245,6 +1245,8 @@ body.spray-dark { background: #0c0f11; }
 .spray-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .spray-alerts { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; background: var(--sp-blueBg); border: 1px solid var(--sp-line); border-radius: 10px; padding: 9px 12px; margin-bottom: 12px; font-size: 13.5px; color: var(--sp-tx); }
 .spray-alerts button { font-size: 13px; padding: 6px 11px; border-radius: 7px; }
+.spray-farms { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13.5px; }
+.spray-farms label { display: flex; align-items: center; gap: 5px; }
 .spray-brand .spray-alerts { flex-basis: 100%; margin-bottom: 0; }
 .spray .spray-bell { margin-left: auto; width: 40px; height: 40px; border-radius: 50%; padding: 0; font-size: 18px; line-height: 1; background: var(--sp-card); border: 1px solid var(--sp-line); }
 .spray-tabs button { font-size: 14px; padding: 8px 14px; }
