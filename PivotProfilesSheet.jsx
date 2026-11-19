@@ -311,7 +311,7 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
       </div>
       {!canEdit && <p style={{ ...small, color: WARN }}>You can look at these but not change them.</p>}
       <p style={{ ...small, margin: '0 0 8px', maxWidth: '90ch' }}>
-        Click a box and type. It saves when you leave the box or press Enter. You can upload, replace or delete a package PDF here. No PDF? Open the pivot&rsquo;s own profile (click the pivot name) to see how to scan the printout with your phone. A GPM can only be typed when &ldquo;No printout&rdquo; is ticked, or when the package couldn&rsquo;t be read; otherwise confirm the number read from the package.
+        Click a box and type. It saves when you leave the box or press Enter. You can upload, replace or delete a package PDF here. No PDF? Open the pivot&rsquo;s own profile (click the pivot name) and tap Scan with camera to scan the printout with your phone. A GPM can only be typed when &ldquo;No printout&rdquo; is ticked, or when the package couldn&rsquo;t be read; otherwise confirm the number read from the package.
       </p>
 
       <div style={{ width: 'fit-content', maxWidth: '100%', overflowX: 'auto', border: `0.5px solid ${LINE}`, borderRadius: 10, background: '#fff', maxHeight: 'calc(100vh - 230px)', overflowY: 'auto' }}>
