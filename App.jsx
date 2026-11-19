@@ -25,6 +25,7 @@ import CustomerPortal from './CustomerPortal.jsx'
 import Contracts from './Contracts.jsx'
 import Yields from './Yields.jsx'
 import Harvest from './Harvest.jsx'
+import GroundWork from './GroundWork.jsx'
 import Seed from './Seed.jsx'
 import FarmMap from './FarmMap.jsx'
 import Spray from './Spray.jsx'
@@ -723,6 +724,11 @@ export default function App() {
   // Owner and Farm manager — all three can build the schedule and log progress.
   const harvestModuleOn = !userProfile || !Array.isArray(userProfile.modules) || userProfile.modules.includes('harvest')
   const canSeeHarvest = (userRole === 'admin' || userRole === 'owner') || (userRole === 'farm_manager' && harvestModuleOn)
+
+  // Ground work (spring field work by machine). Same audience as the
+  // Operations schedule: Admin, Owner and Farm manager with the 'ground' module.
+  const groundModuleOn = !userProfile || !Array.isArray(userProfile.modules) || userProfile.modules.includes('ground')
+  const canSeeGround = (userRole === 'admin' || userRole === 'owner') || (userRole === 'farm_manager' && groundModuleOn)
 
   // Mirrors firestore.rules' canSeed(): any staff login with the 'seed'
   // module. Potato planting staff get nothing else (see their layout below).
@@ -1470,6 +1476,25 @@ export default function App() {
               <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Operations</div>
             </div>
           )}
+          {canSeeGround && (
+            <div
+              onClick={() => setPage('ground')}
+              style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
+            >
+              <div style={{ width: '90px', height: '90px', borderRadius: '16px', background: '#EFE6D8', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <svg width="58" height="58" viewBox="0 0 48 48">
+                  <path d="M4 36c6-3 10-3 16 0s10 3 16 0 6-2 8-1" fill="none" stroke="#8a6a3c" strokeWidth="2.2" strokeLinecap="round" />
+                  <path d="M4 42c6-3 10-3 16 0s10 3 16 0 6-2 8-1" fill="none" stroke="#b08d5c" strokeWidth="2" strokeLinecap="round" />
+                  <rect x="9" y="15" width="20" height="11" rx="2" fill="#7B4FC9" />
+                  <rect x="25" y="10" width="9" height="9" rx="1.5" fill="#fff" stroke="#3c3c3a" strokeWidth="1.6" />
+                  <circle cx="14" cy="29" r="4.5" fill="#3c3c3a" /><circle cx="14" cy="29" r="1.6" fill="#fff" />
+                  <circle cx="29" cy="28" r="6" fill="#3c3c3a" /><circle cx="29" cy="28" r="2.2" fill="#fff" />
+                  <path d="M35 24h6M37 24v6M40 24v6" stroke="#3c3c3a" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+              </div>
+              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Ground work</div>
+            </div>
+          )}
           {canSeeSeed && (
             <div
               onClick={() => setPage('seed')}
@@ -1528,6 +1553,7 @@ export default function App() {
       {page === 'contracts' && canSeeContracts && <Contracts userRole={userRole} />}
       {page === 'yields' && canSeeYields && <Yields userRole={userRole} />}
       {page === 'harvest' && canSeeHarvest && <Harvest userRole={userRole} />}
+      {page === 'ground' && canSeeGround && <GroundWork userRole={userRole} />}
       {page === 'seed' && canSeeSeed && <Seed userRole={userRole} />}
       {page === 'map' && canSeeMap && <FarmMap userRole={userRole} />}
       {page === 'spray' && canSeeSpray && <Spray userRole={userRole} sprayAdmin={sprayAdmin} userProfile={userProfile} />}
