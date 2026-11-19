@@ -416,6 +416,19 @@ service cloud.firestore {
     match /plantJobs/{jobId} {
       allow read, write: if canFieldOps();
     }
+    // Operations > Planting (Harvest.jsx mode="planting"): same shapes as
+    // the harvest collections below — plantPlans/{seasonId} settings,
+    // plantFields/{seasonId}__{key} one doc per field on the plan,
+    // plantLogs/{seasonId}__{crew}__{date}__{AM|PM} half-day progress logs.
+    match /plantPlans/{planId} {
+      allow read, write: if canFieldOps();
+    }
+    match /plantFields/{docId} {
+      allow read, write: if canFieldOps();
+    }
+    match /plantLogs/{docId} {
+      allow read, write: if canFieldOps();
+    }
     // Harvest Schedule module (Harvest.jsx). harvestPlans/{seasonId} holds
     // the settings, harvestFields/{seasonId}__{key} one doc per field on the
     // plan, harvestLogs/{seasonId}__{team}__{date}__{AM|PM} the half-day
