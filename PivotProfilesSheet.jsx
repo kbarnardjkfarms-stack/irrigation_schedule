@@ -132,6 +132,9 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
   const [status, setStatusMap] = useState({})
   const [busy, setBusy] = useState({})
   const [deleteTarget, setDeleteTarget] = useState(null) // { guid, name, pkg }
+  const [clearTarget, setClearTarget] = useState(null) // { guid, name, gpm }: remove a GPM that has no package behind it
+  const [clearing, setClearing] = useState(false)
+  const [editGpm, setEditGpm] = useState({}) // guid -> the hand-entered GPM being changed; a saved hand-entered GPM shows as plain text until Change is tapped
   const [deleting, setDeleting] = useState(false)
   const [pending, setPending] = useState(null) // { r, n, source, extra, key }: a GPM change waiting for "mistake or real change?"
   const [pendingBusy, setPendingBusy] = useState(false)
@@ -294,6 +297,24 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
     }
   }
 
+  // Clear GPM: for a GPM with no package behind it (typed by hand, or left over from a package that was deleted).
+  // The rules only allow clearing once there is no package on file. The number that was in use is kept in gpmCleared.
+  async function confirmClear() {
+    if (!clearTarget) return
+    const { guid } = clearTarget
+    setClearing(true)
+    setPkgError((m) => { const n = { ...m }; delete n[guid]; return n })
+    try {
+      const prof = (rows.find((x) => x.guid === guid) || {}).profile
+      await save(guid, clearedGpmFields(prof, { by: whoAmI(), now: new Date().toISOString() }))
+      setGpmEpoch((x) => x + 1)
+    } catch (e) {
+      setPkgError((m) => ({ ...m, [guid]: e.message || 'Could not clear the GPM.' }))
+    } finally {
+      setClearing(false); setClearTarget(null)
+    }
+  }
+
   // Delete: removes the PDF itself, then its entry on the profile. The GPM already confirmed stays in use.
   async function confirmDelete() {
     if (!deleteTarget) return
@@ -447,24 +468,44 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
                           // Typed (or earlier) number vs what the package says: flag a big gap before confirming.
                           const diff = r.gpm > 0 ? (r.scan.gpm - r.gpm) / r.gpm : 0
                           const far = Math.abs(diff) > 0.1
-                          const text = r.scan.gpm === r.gpm ? `${r.gpm} in use, same as package` : `${r.gpm} in use, package says ${r.scan.gpm} (${Math.round(Math.abs(diff) * 100)}% ${diff > 0 ? 'higher' : 'lower'})`
+                          const by = r.profile.gpmSource === 'manual' ? 'entered by hand' : 'in use'
+                          const text = r.scan.gpm === r.gpm
+                            ? `${r.gpm} ${by}, same as package`
+                            : `${r.gpm} ${by} \u00b7 package says ${r.scan.gpm} (${Math.round(Math.abs(diff) * 100)}% ${diff > 0 ? 'higher' : 'lower'}) \u00b7 confirm to switch`
                           return <span data-testid="gpm-compare" style={{ ...small, color: far ? BAD : MUTED, fontWeight: far ? 600 : 400 }}>{text}</span>
                         })()}
                         <button type="button" disabled={lockEdit || !!busy[k('GPM')]} onClick={() => confirmGpm(r)} style={{ fontSize: 12, padding: '4px 10px', background: INK, color: '#fff', border: 'none', borderRadius: 5 }}>{busy[k('GPM')] ? 'Confirming…' : `Confirm ${r.scan.gpm}`}</button>
                         <span style={{ width: 14, fontSize: 12, color: status[k('GPM')] && status[k('GPM')].error ? BAD : GOOD }} title={(status[k('GPM')] && status[k('GPM')].error) || ''}>{status[k('GPM')] && status[k('GPM')].error ? '!' : status[k('GPM')] && status[k('GPM')].saved ? '✓' : ''}</span>
                       </div>
                     )}
-                    {(r.gpmMode === 'typeFromPackage' || r.gpmMode === 'manual') && (
+                    {r.gpmMode === 'manual' && r.gpm != null && !r.pkg && editGpm[r.guid] !== r.gpm && (
+                      <div data-testid="gpm-saved">
+                        <div><b>{r.gpm}</b> <span style={{ fontSize: 11, color: GOOD }}>{'\u2713'} entered by hand</span></div>
+                        <div style={{ display: 'flex', gap: 6, marginTop: 3 }}>
+                          <button type="button" aria-label={k('Change GPM')} disabled={lockEdit || !!busy[k('GPM')]} onClick={() => setEditGpm((m) => ({ ...m, [r.guid]: r.gpm }))}
+                            style={{ fontSize: 11, padding: '1px 7px', background: '#fff', border: '1px solid #ccc', color: INK, borderRadius: 5 }}>Change</button>
+                          <button type="button" aria-label={k('Clear GPM')} disabled={lockEdit || !!busy[k('GPM')]} onClick={() => setClearTarget({ guid: r.guid, name: r.name, gpm: r.gpm })}
+                            style={{ fontSize: 11, padding: '1px 7px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: BAD, borderRadius: 5 }}>Clear GPM</button>
+                        </div>
+                      </div>
+                    )}
+                    {(r.gpmMode === 'typeFromPackage' || (r.gpmMode === 'manual' && !(r.gpm != null && !r.pkg && editGpm[r.guid] !== r.gpm))) && (
                       <div>
                         <NumberCell key={`gpm-${r.guid}-${gpmEpoch}`} cellKey={k('GPM')} colKey="gpm" value={r.gpm} min={5} max={5000} disabled={lockEdit} status={status} setStatus={setStatus}
                           onSave={(n) => saveGpm(r, r.gpmMode === 'manual' ? 'manual' : 'typedFromPackage', n)} />
-                        <div style={small}>{r.gpmMode === 'manual' ? 'entered by hand' : 'typed from the package'}</div>
+                        <div style={small}>{r.gpmMode === 'manual' ? (r.gpm != null ? 'type a new number, then click away' : 'type the GPM, then click away') : 'typed from the package'}</div>
+                        {r.gpmMode === 'manual' && r.gpm != null && !r.pkg && (
+                          <button type="button" aria-label={k('Cancel change')} onClick={() => setEditGpm((m) => { const n = { ...m }; delete n[r.guid]; return n })}
+                            style={{ fontSize: 11, padding: '1px 7px', marginTop: 3, background: '#fff', border: '1px solid #ccc', color: INK, borderRadius: 5 }}>Cancel</button>
+                        )}
                       </div>
                     )}
                     {r.gpmMode === 'locked' && (
                       <div>
                         {r.gpm != null ? <span><b>{r.gpm}</b> <span style={small}>in use, not from a package</span></span> : <span style={{ color: MUTED }}>{'—'}</span>}
                         <div style={small}>Tick No printout to type a GPM</div>
+                        {r.gpm != null && !r.pkg && <button type="button" aria-label={k('Clear GPM')} disabled={lockEdit || !!busy[k('GPM')]} onClick={() => setClearTarget({ guid: r.guid, name: r.name, gpm: r.gpm })}
+                          style={{ fontSize: 11, padding: '1px 7px', marginTop: 3, background: '#FBEAEA', border: '1px solid #E8B4B4', color: BAD, borderRadius: 5 }}>Clear GPM</button>}
                       </div>
                     )}
                   </td>
@@ -501,6 +542,20 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
 
       {pending && (
         <GpmChangeDialog profile={pending.r.profile} newGpm={pending.n} busy={pendingBusy} onCancel={() => { setPending(null); setGpmEpoch((x) => x + 1) }} onChoose={chooseGpmChange} />
+      )}
+
+      {clearTarget && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div role="dialog" aria-label="Clear GPM" style={{ background: '#fff', borderRadius: 10, padding: 20, width: 320, maxWidth: '92vw', boxShadow: '0 4px 20px rgba(0,0,0,0.2)' }}>
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Clear this GPM?</div>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>{clearTarget.name} &middot; {clearTarget.gpm} GPM</div>
+            <div style={{ fontSize: 12, color: '#555', lineHeight: 1.5, margin: '8px 0 16px' }}>This pivot will have no GPM until you tick &ldquo;No printout&rdquo; and type one, or upload a package and confirm its GPM.</div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => setClearTarget(null)} disabled={clearing} style={{ fontSize: 13 }}>Cancel</button>
+              <button type="button" onClick={confirmClear} disabled={clearing} style={{ fontSize: 13, background: '#FBEAEA', border: '1px solid #E8B4B4', color: BAD }}>{clearing ? 'Clearing\u2026' : 'Clear GPM'}</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {deleteTarget && (
