@@ -26,8 +26,7 @@ const MODULES = [
   { id: 'agronomy', label: 'Agronomy', note: 'Only Admin, Owner and Farm manager roles can ever see this one.' },
   { id: 'contracts', label: 'Contracts', note: 'Farm managers can view; only Admin and Owner can edit.' },
   { id: 'yields', label: 'Yield history', note: 'Farm managers can view; only Admin and Owner can import.' },
-  { id: 'harvest', label: 'Operations schedule', note: 'Admin, Owner and Farm manager can build the schedule and log progress.' },
-  { id: 'ground', label: 'Ground work', note: 'Spring field work by machine. Admin, Owner and Farm manager can plan it and log progress.' },
+  { id: 'harvest', label: 'Operations', note: 'Planting, ground work and harvest schedules. Admin, Owner and Farm manager can build them and log progress.' },
   { id: 'seed', label: 'Potato seed', note: 'Ticket portals for anyone with it; contracts, edits and reports for Admin, Owner and Farm manager.' },
   { id: 'map', label: 'Farm map', note: 'Anyone with it can view; only Admin and Owner import and edit.' },
   { id: 'spray', label: 'Spray schedule', note: 'Drone + Ag Rows spray and spread jobs from AgWorld. Admin, Owner and Farm manager only; crews use their own links.' }

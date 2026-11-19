@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { fmtAc, fmtDate, fmtSlot, recipeJobs } from './groundMath.js'
 
-// Ground work: the Fields & passes table (build passes from the crop
+// Operations > Ground work / Planting: the Fields & passes table (build passes from the crop
 // recipes, add or drop a pass on one field) and Setup (start date, days off,
 // equipment and machines with their target acres/day, crop recipes).
 
@@ -99,7 +99,7 @@ export function GroundJobs({ fields, jobs, settings, sweepNo, g, canEdit, api, s
 }
 
 // ---------------------------------------------------------------------------
-export function GroundSetup({ settings, fields, saveSettings }) {
+export function GroundSetup({ settings, fields, saveSettings, kind = 'ground' }) {
   const [d, setD] = useState(() => JSON.parse(JSON.stringify({
     startDate: settings.startDate || '', sundaysOff: !!settings.sundaysOff, daysOff: settings.daysOff || [], gapDays: settings.gapDays ?? 0,
     sweepAngle: settings.sweepAngle ?? 45, categories: settings.categories || [], recipes: settings.recipes || {}
@@ -128,7 +128,7 @@ export function GroundSetup({ settings, fields, saveSettings }) {
         </div>
         <div className="hd-grid">
           <label className="hd-field"><span>Start date</span><input type="date" value={d.startDate} onChange={(e) => set({ startDate: e.target.value })} /></label>
-          <label className="hd-field"><span>Days between passes on a field</span><input inputMode="decimal" value={d.gapDays} onChange={(e) => set({ gapDays: e.target.value })} /></label>
+          <label className="hd-field"><span>{kind === 'planting' ? 'Days after ground work is done' : 'Days between passes on a field'}</span><input inputMode="decimal" value={d.gapDays} onChange={(e) => set({ gapDays: e.target.value })} /></label>
           <label className="hd-field"><span>Field order</span>
             <select value={String(d.sweepAngle)} onChange={(e) => set({ sweepAngle: Number(e.target.value) })}>
               <option value="45">Southwest → northeast</option><option value="0">West → east</option><option value="90">South → north</option><option value="-45">Northwest → southeast</option>
@@ -178,7 +178,7 @@ export function GroundSetup({ settings, fields, saveSettings }) {
 
       <div className="yields-card">
         <div className="yields-card-title">Crop recipes</div>
-        <div className="contracts-sub">The passes each crop gets, in order. A pass waits for the one before it on the same field. Crops come from this season’s fields in Agworld.</div>
+        <div className="contracts-sub">{kind === 'planting' ? 'Which planter each crop takes. A field’s planting waits for its ground work to be finished.' : 'The passes each crop gets, in order. A pass waits for the one before it on the same field.'} Crops come from this season’s fields in Agworld.</div>
         <table className="contracts-table contracts-table-auto" style={{ marginTop: 8 }}>
           <tbody>
             {crops.map((crop) => {

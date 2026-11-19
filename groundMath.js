@@ -1,4 +1,5 @@
-// Pure math for the Ground work module (GroundWork.jsx) — no React or Firebase.
+// Pure math for Operations > Ground work and Operations > Planting
+// (GroundWork.jsx runs both) — no React or Firebase.
 //
 // Model
 //   categories  kinds of equipment (Dominator, Karat, Wilcox, Roller Harrow),
@@ -33,11 +34,23 @@ export const DEFAULT_CATEGORIES = [
 ]
 export const DEFAULT_RECIPES = { POTATO: ['dominator', 'karat', 'roller-harrow'], BEETS: ['karat', 'roller-harrow'] }
 
-export function defaultSettings(startDate) {
+// Planting: the planters, and which planter each crop takes. A field's
+// planting waits for its ground work to be finished.
+const units = (id, name, n) => Array.from({ length: n }, (_, i) => ({ id: `${id}-${i + 1}`, name: n > 1 ? `${name} ${i + 1}` : name }))
+export const DEFAULT_PLANT_CATEGORIES = [
+  { id: 'potato-planter', name: 'Potato planting crew', color: '#8D5A2B', rate: 60, units: units('potato-planter', 'Potato crew', 4) },
+  { id: 'beet-planter', name: 'Beet planter', color: '#7B4FC9', rate: 70, units: units('beet-planter', 'Beet planter', 6) },
+  { id: 'corn-planter', name: 'Corn planter', color: '#D9A300', rate: 150, units: units('corn-planter', 'Corn planter', 1) },
+  { id: 'grain-drill', name: 'Grain drill', color: '#2E9B4F', rate: 150, units: units('grain-drill', 'Grain drill', 1) }
+]
+export const DEFAULT_PLANT_RECIPES = { POTATO: ['potato-planter'], BEETS: ['beet-planter'], CORN: ['corn-planter'], WHEAT: ['grain-drill'], BARLEY: ['grain-drill'] }
+
+export function defaultSettings(startDate, kind = 'ground') {
+  const cats = kind === 'planting' ? DEFAULT_PLANT_CATEGORIES : DEFAULT_CATEGORIES
   return {
     startDate: startDate || null, sundaysOff: true, daysOff: [], gapDays: 0, sweepAngle: 45,
-    categories: DEFAULT_CATEGORIES.map((c) => ({ ...c, units: c.units.map((u) => ({ ...u })) })),
-    recipes: JSON.parse(JSON.stringify(DEFAULT_RECIPES))
+    categories: cats.map((c) => ({ ...c, units: c.units.map((u) => ({ ...u })) })),
+    recipes: JSON.parse(JSON.stringify(kind === 'planting' ? DEFAULT_PLANT_RECIPES : DEFAULT_RECIPES))
   }
 }
 
@@ -68,6 +81,14 @@ export function fmtDate(iso, withDow = false) {
   return d.toLocaleDateString(undefined, { timeZone: 'UTC', month: 'short', day: 'numeric', ...(withDow ? { weekday: 'short' } : {}) })
 }
 export const fmtSlot = (startIso, slot, withDow = false) => { const i = slotInfo(startIso, slot); return `${fmtDate(i.date, withDow)} ${i.half}` }
+// A slot back to a clock time (the inverse of nowSlot: 6am–6pm workday).
+export function slotToMs(startIso, slot) {
+  const day = Math.floor(slot / 2)
+  const hours = 6 + ((slot - day * 2) / 2) * 12
+  const iso = addDaysIso(startIso, day)
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(y, m - 1, d, Math.floor(hours), Math.round((hours % 1) * 60)).getTime()
+}
 
 // Working calendar: prefix counts of working half-days so "how much work fits
 // between two moments" is a subtraction.
@@ -182,7 +203,10 @@ export function unitsOf(settings) {
 }
 
 // jobs: groundJobs docs; liveAcres: fieldId → current Agworld acres (else the job's own)
-export function buildGround({ jobs, settings, liveAcres = {}, now = new Date() }) {
+// readyAt (planting): fieldId → { ms } when the field's ground work is finished,
+// or { unplanned: true } when some of it isn't in a machine's line yet. A
+// field's first pass waits for it.
+export function buildGround({ jobs, settings, liveAcres = {}, readyAt = {}, now = new Date() }) {
   const start = settings.startDate
   const cal = makeCalendar(settings)
   const units = unitsOf(settings)
@@ -225,14 +249,19 @@ export function buildGround({ jobs, settings, liveAcres = {}, now = new Date() }
           if (p > s) s = p; else if (p < s - 0.01) pinLate = true
         }
         const prev = prevOf[j.id]
+        let waitFor = null
         if (prev) {
           const pe = prev.done ? doneSlot(prev) : finish[prev.id]
           if (pe == null) dep = prev.unitId ? 'later' : 'unassigned'
-          else if (pe + gap > s + 0.01) { waited = s; s = pe + gap }
+          else if (pe + gap > s + 0.01) { waited = s; s = pe + gap; waitFor = 'pass' }
+        } else if (readyAt[j.fieldId] && start) {
+          const ra = readyAt[j.fieldId]
+          if (ra.unplanned) dep = 'ground'
+          else if (ra.ms != null) { const rs = nowSlot(start, new Date(ra.ms)) + gap; if (rs > s + 0.01) { waited = s; s = rs; waitFor = 'ground' } }
         }
         s = cal.skipOff(s)
         const e = perSlot > 0 ? cal.consume(s, left / perSlot) : cal.horizon
-        out[j.id] = { id: j.id, start: s, end: e, unitId: u.id, acres, left, waited, pinLate, dep, prevId: prev ? prev.id : null }
+        out[j.id] = { id: j.id, start: s, end: e, unitId: u.id, acres, left, waited, waitFor, pinLate, dep, prevId: prev ? prev.id : null }
         next[j.id] = e
         t = e
       })
@@ -327,6 +356,27 @@ export function fmtDiff(days) {
   if (a < 0.25) return 'on pace'
   const s = a < 10 ? a.toFixed(1) : Math.round(a)
   return `${s} day${s === '1.0' || s === 1 ? '' : 's'} ${days > 0 ? 'ahead' : 'behind'}`
+}
+
+// When each field's ground work is finished (for Planting): all passes done →
+// the last done time; otherwise the schedule's end for its last pass;
+// { unplanned } when a pass isn't in any machine's line.
+export function groundReadyTimes(g, jobs, settings) {
+  const by = {}
+  jobs.filter((j) => j.kind !== 'block').forEach((j) => { (by[j.fieldId] = by[j.fieldId] || []).push(j) })
+  const out = {}
+  Object.entries(by).forEach(([fid, list]) => {
+    let ms = 0, unplanned = false, allDone = true
+    list.forEach((j) => {
+      if (j.done) { ms = Math.max(ms, j.doneAt || 0); return }
+      allDone = false
+      const r = g && g.res[j.id]
+      if (!j.unitId || !r || r.end == null) { unplanned = true; return }
+      ms = Math.max(ms, slotToMs(settings.startDate, r.end))
+    })
+    out[fid] = unplanned ? { unplanned: true } : { ms: ms || null, done: allDone }
+  })
+  return out
 }
 
 // What other modules need: each field's ground-work state for the season.

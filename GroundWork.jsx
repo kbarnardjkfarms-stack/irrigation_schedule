@@ -4,11 +4,16 @@ import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip,
 import { auth, db } from './firebase.js'
 import { canonCrop } from './yieldMath.js'
 import {
-  autoAssign, buildGround, burnUp, defaultSettings, fmtAc, fmtDate, fmtDiff, fmtSlot, isoToday, orderBetween, sweepNumbers
+  autoAssign, buildGround, burnUp, defaultSettings, fmtAc, groundReadyTimes, fmtDate, fmtDiff, fmtSlot, isoToday, orderBetween, sweepNumbers
 } from './groundMath.js'
 import { GroundJobs, GroundSetup } from './GroundSetup.jsx'
 
-// Ground work module — spring field work by machine: Dominators, Karats, the
+// Operations > Ground work and Operations > Planting (kind 'ground' |
+// 'planting'; Operations.jsx shows them beside Harvest). Same engine, own
+// data: Planting keeps its planters and jobs in plantSettings / plantJobs and
+// each field's planting waits for its ground work to be finished.
+//
+// Ground work — spring field work by machine: Dominators, Karats, the
 // Wilcox, Roller Harrows. Crop recipes turn each Agworld field's crop into
 // passes (jobs); each pass belongs to a category of equipment and is put in
 // one machine's line, in order. The schedule runs in half days and keeps each
@@ -36,9 +41,15 @@ function ringCentroid(ring) {
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) { const f = ring[j][0] * ring[i][1] - ring[i][0] * ring[j][1]; a += f; x += (ring[j][0] + ring[i][0]) * f; y += (ring[j][1] + ring[i][1]) * f }
   return a ? { lng: x / (3 * a), lat: y / (3 * a) } : { lng: ring[0][0], lat: ring[0][1] }
 }
+// What differs between the two kinds.
+const KINDS = {
+  ground: { settingsCol: 'groundSettings', jobsCol: 'groundJobs', title: 'Ground work', lower: 'ground work', all: 'All ground work', defaultStart: '03-15' },
+  planting: { settingsCol: 'plantSettings', jobsCol: 'plantJobs', title: 'Planting', lower: 'planting', all: 'All planting', defaultStart: '04-10' }
+}
 const paceClass = (d) => (d == null ? 'idle' : Math.abs(d) < 0.25 ? 'even' : d > 0 ? 'ahead' : 'behind')
 
-export default function GroundWork({ userRole }) {
+export default function GroundWork({ userRole, kind = 'ground' }) {
+  const K = KINDS[kind] || KINDS.ground
   const canEdit = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager'
   const [view, setView] = useState('dashboard')
   const [seasons, setSeasons] = useState([])
@@ -49,6 +60,8 @@ export default function GroundWork({ userRole }) {
   const [farmFields, setFarmFields] = useState([])
   const [settingsDoc, setSettingsDoc] = useState(undefined)
   const [jobs, setJobs] = useState([])
+  const [groundDoc, setGroundDoc] = useState(null)
+  const [groundJobs, setGroundJobs] = useState([])
   const [error, setError] = useState(null)
   const [msg, setMsg] = useState(null)
   const [now, setNow] = useState(() => new Date())
@@ -60,7 +73,7 @@ export default function GroundWork({ userRole }) {
     setSeasons(list)
     setSeasonId((prev) => {
       if (prev) return prev
-      const y = new Date().getFullYear() + (new Date().getMonth() >= 8 ? 1 : 0) // ground work is spring: look ahead after harvest
+      const y = new Date().getFullYear() + (new Date().getMonth() >= 8 ? 1 : 0) // spring work: look ahead after harvest
       const pick = list.find((s) => String(s.name).includes(String(y))) || list[0]
       return pick ? pick.id : null
     })
@@ -71,21 +84,26 @@ export default function GroundWork({ userRole }) {
   useEffect(() => {
     if (!seasonId) return undefined
     const sid = String(seasonId)
-    const onErr = (e) => setError(e.code === 'permission-denied' ? 'No permission to read ground work. If the module was just added, the new firestore.rules may not be deployed yet.' : e.message)
+    const onErr = (e) => setError(e.code === 'permission-denied' ? `No permission to read ${K.lower}. If it was just added, the new firestore.rules may not be deployed yet.` : e.message)
     const unsubs = [
       onSnapshot(query(collectionGroup(db, 'seasons'), where('seasonId', '==', seasonId)), (snap) => { const o = {}; snap.forEach((d) => { o[d.ref.parent.parent.id] = d.data() }); setSeasonData(o) }, () => {}),
-      onSnapshot(doc(db, 'groundSettings', sid), (d) => { setSettingsDoc(d.exists() ? d.data() : null); setError(null) }, onErr),
-      onSnapshot(query(collection(db, 'groundJobs'), where('seasonId', '==', sid)), (snap) => { const o = []; snap.forEach((d) => o.push({ id: d.id, ...d.data() })); setJobs(o) }, onErr)
+      onSnapshot(doc(db, K.settingsCol, sid), (d) => { setSettingsDoc(d.exists() ? d.data() : null); setError(null) }, onErr),
+      onSnapshot(query(collection(db, K.jobsCol), where('seasonId', '==', sid)), (snap) => { const o = []; snap.forEach((d) => o.push({ id: d.id, ...d.data() })); setJobs(o) }, onErr),
+      // Planting waits for ground work: read its schedule too.
+      ...(kind === 'planting' ? [
+        onSnapshot(doc(db, 'groundSettings', sid), (d) => setGroundDoc(d.exists() ? d.data() : null), () => setGroundDoc(null)),
+        onSnapshot(query(collection(db, 'groundJobs'), where('seasonId', '==', sid)), (snap) => { const o = []; snap.forEach((d) => o.push({ id: d.id, ...d.data() })); setGroundJobs(o) }, () => setGroundJobs([]))
+      ] : [])
     ]
     return () => unsubs.forEach((u) => u())
-  }, [seasonId])
+  }, [seasonId, kind])
 
   const season = seasons.find((s) => String(s.id) === String(seasonId))
   const settings = useMemo(() => {
     const yr = season && (String(season.name).match(/\b(19|20)\d{2}\b/) || [])[0]
-    const base = defaultSettings(yr ? `${yr}-03-15` : null)
+    const base = defaultSettings(yr ? `${yr}-${K.defaultStart}` : null, kind)
     return { ...base, ...(settingsDoc || {}) }
-  }, [settingsDoc, season])
+  }, [settingsDoc, season, kind])
 
   // The season's Agworld fields with a position (outline middle) and a number
   // along the southwest → northeast sweep.
@@ -101,31 +119,37 @@ export default function GroundWork({ userRole }) {
   }, [seasonData, baseFields, bounds, farmFields])
   const sweepNo = useMemo(() => sweepNumbers(fields, Number(settings.sweepAngle) || 45), [fields, settings.sweepAngle])
   const liveAcres = useMemo(() => Object.fromEntries(fields.map((f) => [f.id, f.acres])), [fields])
-  const g = useMemo(() => (settings.startDate ? buildGround({ jobs, settings, liveAcres, now }) : null), [jobs, settings, liveAcres, now])
+  // Planting: when each field's ground work is finished (done, or scheduled).
+  const readyAt = useMemo(() => {
+    if (kind !== 'planting' || !groundDoc || !groundDoc.startDate || !groundJobs.length) return {}
+    const gs = { ...defaultSettings(groundDoc.startDate, 'ground'), ...groundDoc }
+    return groundReadyTimes(buildGround({ jobs: groundJobs, settings: gs, liveAcres, now }), groundJobs, gs)
+  }, [kind, groundDoc, groundJobs, liveAcres, now])
+  const g = useMemo(() => (settings.startDate ? buildGround({ jobs, settings, liveAcres, readyAt, now }) : null), [jobs, settings, liveAcres, readyAt, now])
 
   // ---- writes -----------------------------------------------------------------
   const run = (p, ok) => {
     setMsg(null)
-    Promise.resolve(p).then(() => ok && setMsg({ ok: true, text: ok })).catch((e) => setMsg({ ok: false, text: e.code === 'permission-denied' ? 'Only Admin, Owner or Farm manager can change ground work.' : e.message }))
+    Promise.resolve(p).then(() => ok && setMsg({ ok: true, text: ok })).catch((e) => setMsg({ ok: false, text: e.code === 'permission-denied' ? `Only Admin, Owner or Farm manager can change ${K.lower}.` : e.message }))
   }
-  const saveSettings = (patch, ok) => run(setDoc(doc(db, 'groundSettings', String(seasonId)), { ...patch, seasonId: String(seasonId), updatedBy: who(), updatedAt: Date.now() }, { merge: true }), ok)
+  const saveSettings = (patch, ok) => run(setDoc(doc(db, K.settingsCol, String(seasonId)), { ...patch, seasonId: String(seasonId), updatedBy: who(), updatedAt: Date.now() }, { merge: true }), ok)
   async function batchWrite(ops) {
     for (let i = 0; i < ops.length; i += 400) {
       const b = writeBatch(db)
-      ops.slice(i, i + 400).forEach(([kind, id, data]) => (kind === 'del' ? b.delete(doc(db, 'groundJobs', id)) : kind === 'set' ? b.set(doc(db, 'groundJobs', id), data) : b.update(doc(db, 'groundJobs', id), data)))
+      ops.slice(i, i + 400).forEach(([kind, id, data]) => (kind === 'del' ? b.delete(doc(db, K.jobsCol, id)) : kind === 'set' ? b.set(doc(db, K.jobsCol, id), data) : b.update(doc(db, K.jobsCol, id), data)))
       await b.commit()
     }
   }
   const api = {
     run, saveSettings, batchWrite,
-    patchJob: (id, patch, ok) => run(updateDoc(doc(db, 'groundJobs', id), { ...patch, updatedBy: who(), updatedAt: Date.now() }), ok),
-    addJob: (data, ok) => run(setDoc(doc(db, 'groundJobs', data.id), { ...data, seasonId: String(seasonId), createdBy: who(), updatedAt: Date.now() }), ok),
-    deleteJob: (id, ok) => run(deleteDoc(doc(db, 'groundJobs', id)), ok),
+    patchJob: (id, patch, ok) => run(updateDoc(doc(db, K.jobsCol, id), { ...patch, updatedBy: who(), updatedAt: Date.now() }), ok),
+    addJob: (data, ok) => run(setDoc(doc(db, K.jobsCol, data.id), { ...data, seasonId: String(seasonId), createdBy: who(), updatedAt: Date.now() }), ok),
+    deleteJob: (id, ok) => run(deleteDoc(doc(db, K.jobsCol, id)), ok),
     // Mark a pass done (all its acres, today) or not done again.
     setDone: (j, done) => {
       const cat = (settings.categories || []).find((c) => c.id === j.catId)
       const acres = Number(liveAcres[j.fieldId]) > 0 ? Number(liveAcres[j.fieldId]) : Number(j.acres) || 0
-      run(updateDoc(doc(db, 'groundJobs', j.id), done ? { done: true, doneAcres: acres, doneAt: Date.now(), updatedBy: who(), updatedAt: Date.now() } : { done: false, doneAcres: 0, doneAt: null, updatedBy: who(), updatedAt: Date.now() }),
+      run(updateDoc(doc(db, K.jobsCol, j.id), done ? { done: true, doneAcres: acres, doneAt: Date.now(), updatedBy: who(), updatedAt: Date.now() } : { done: false, doneAcres: 0, doneAt: null, updatedBy: who(), updatedAt: Date.now() }),
         done ? `${j.fieldName} — ${cat ? cat.name : 'pass'} done.` : `${j.fieldName} — ${cat ? cat.name : 'pass'} marked not done.`)
     },
     autoAssignCat: (cat, onlyUnassigned) => {
@@ -137,10 +161,10 @@ export default function GroundWork({ userRole }) {
 
   const tabs = [['dashboard', 'Dashboard'], ['schedule', 'Schedule'], ['jobs', 'Fields & passes'], ...(canEdit ? [['setup', 'Setup']] : [])]
   return (
-    <div className="agronomy ground">
+    <div className={`agronomy ground ${kind}`}>
       <div className="agronomy-filter-bar">
         {seasons.length > 0 && <select value={seasonId || ''} onChange={(e) => setSeasonId(e.target.value)}>{seasons.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>}
-        <span className="contracts-sub" style={{ marginTop: 0 }}>Ground work · {settings.startDate ? `starts ${fmtDate(settings.startDate, true)}` : 'no start date yet'} · {jobs.filter((j) => j.kind !== 'block').length} passes on {new Set(jobs.filter((j) => j.kind !== 'block').map((j) => j.fieldId)).size} fields</span>
+        <span className="contracts-sub" style={{ marginTop: 0 }}>{K.title} · {settings.startDate ? `starts ${fmtDate(settings.startDate, true)}` : 'no start date yet'} · {jobs.filter((j) => j.kind !== 'block').length} passes on {new Set(jobs.filter((j) => j.kind !== 'block').map((j) => j.fieldId)).size} fields</span>
       </div>
       {error && <div className="agronomy-error-banner">{error}</div>}
       <div className="agronomy-view-toggle harvest-tabs">
@@ -151,10 +175,10 @@ export default function GroundWork({ userRole }) {
         <div className="yields-card"><div className="yields-card-title">No passes yet</div>
           <div className="contracts-sub">{canEdit ? 'Check the machines and crop recipes on Setup, then use “Build passes from recipes” on Fields & passes.' : 'An Admin, Owner or Farm manager sets up the machines and crop recipes first.'}</div></div>
       )}
-      {g && view === 'dashboard' && <GroundDashboard g={g} jobs={jobs} settings={settings} sweepNo={sweepNo} now={now} canEdit={canEdit} api={api} onOpenSchedule={() => setView('schedule')} />}
+      {g && view === 'dashboard' && <GroundDashboard K={K} g={g} jobs={jobs} settings={settings} sweepNo={sweepNo} now={now} canEdit={canEdit} api={api} onOpenSchedule={() => setView('schedule')} />}
       {g && view === 'schedule' && <GroundSchedule g={g} jobs={jobs} settings={settings} sweepNo={sweepNo} canEdit={canEdit} api={api} />}
       {view === 'jobs' && <GroundJobs fields={fields} jobs={jobs} settings={settings} sweepNo={sweepNo} g={g} canEdit={canEdit} api={api} seasonId={String(seasonId)} />}
-      {view === 'setup' && canEdit && <GroundSetup settings={settings} fields={fields} saveSettings={saveSettings} />}
+      {view === 'setup' && canEdit && <GroundSetup settings={settings} fields={fields} saveSettings={saveSettings} kind={kind} />}
       {!g && view !== 'setup' && view !== 'jobs' && settingsDoc !== undefined && <div className="yields-card"><div className="contracts-sub">Set a start date on Setup to build the schedule.</div></div>}
     </div>
   )
@@ -163,7 +187,7 @@ export default function GroundWork({ userRole }) {
 // ---------------------------------------------------------------------------
 // Dashboard: whole schedule → category → machine, each level a click deeper.
 // ---------------------------------------------------------------------------
-function GroundDashboard({ g, jobs, settings, sweepNo, now, canEdit, api, onOpenSchedule }) {
+function GroundDashboard({ K, g, jobs, settings, sweepNo, now, canEdit, api, onOpenSchedule }) {
   const [path, setPath] = useState({ cat: null, unit: null })
   const cat = path.cat ? g.catStats.find((c) => c.id === path.cat) : null
   const unit = path.unit ? g.unitStats.find((u) => u.id === path.unit) : null
@@ -171,7 +195,7 @@ function GroundDashboard({ g, jobs, settings, sweepNo, now, canEdit, api, onOpen
   const S = level === 'unit' ? unit : level === 'cat' ? cat : g.all
   const unitIds = level === 'unit' ? [unit.id] : level === 'cat' ? cat.units.map((u) => u.id) : g.units.map((u) => u.id)
   const series = useMemo(() => burnUp({ g, jobs, unitIds, settings, now }), [g, jobs, unitIds.join(','), settings, now])
-  const title = level === 'unit' ? unit.name : level === 'cat' ? cat.name : 'All ground work'
+  const title = level === 'unit' ? unit.name : level === 'cat' ? cat.name : K.all
   const color = level === 'unit' ? unit.color : level === 'cat' ? cat.color : '#3c5a3f'
   const rows = level === 'all' ? g.catStats.filter((c) => c.total > 0 || c.unassigned > 0).map((c) => ({ ...c, key: c.id, sub: `${c.units.length} machine${c.units.length === 1 ? '' : 's'} · ${fmtAc(c.rate)} ac/day`, onClick: () => setPath({ cat: c.id, unit: null }) }))
     : level === 'cat' ? cat.units.map((u) => ({ ...u, key: u.id, pct: u.total ? u.done / u.total : 0, sub: `${fmtAc(u.rate)} ac/day · ${u.jobs} field${u.jobs === 1 ? '' : 's'}`, onClick: () => setPath({ cat: cat.id, unit: u.id }) }))
@@ -179,7 +203,7 @@ function GroundDashboard({ g, jobs, settings, sweepNo, now, canEdit, api, onOpen
   return (
     <div className="gw-dash">
       <div className="gw-crumbs">
-        <button className={level === 'all' ? 'on' : ''} onClick={() => setPath({ cat: null, unit: null })}>All ground work</button>
+        <button className={level === 'all' ? 'on' : ''} onClick={() => setPath({ cat: null, unit: null })}>{K.all}</button>
         {cat && <><span>›</span><button className={level === 'cat' ? 'on' : ''} onClick={() => setPath({ cat: cat.id, unit: null })}>{cat.name}</button></>}
         {unit && <><span>›</span><button className="on">{unit.name}</button></>}
       </div>
@@ -271,7 +295,7 @@ function UnitTimeline({ g, unit, settings, sweepNo, canEdit, api, onOpenSchedule
             <div className="gw-g-track">
               {!r.done && r.start != null && (
                 <>
-                  {r.waited != null && <div className="gw-g-wait" style={{ left: pct(r.waited), width: `calc(${pct(r.start)} - ${pct(r.waited)})` }} title="Waiting for the pass before" />}
+                  {r.waited != null && <div className="gw-g-wait" style={{ left: pct(r.waited), width: `calc(${pct(r.start)} - ${pct(r.waited)})` }} title={r.waitFor === 'ground' ? 'Waiting for ground work' : 'Waiting for the pass before'} />}
                   <div className={`gw-g-bar${r.block ? ' block' : ''}${r.dep ? ' warn' : ''}`} style={{ left: pct(r.start), width: `max(3px, calc(${pct(r.end)} - ${pct(r.start)}))`, background: r.block ? undefined : unit.color }} title={`${fmtSlot(settings.startDate, r.start, true)} → ${fmtSlot(settings.startDate, r.end, true)}`} />
                 </>
               )}
@@ -389,8 +413,9 @@ function JobCard({ j, g, settings, sweepNo, cat, canEdit, api, drag, setDrag, op
           </div>
           {!r.done && r.start != null && <div className="gw-card-when">{fmtSlot(settings.startDate, r.start, true)} → {fmtSlot(settings.startDate, r.end)}{j.startOn ? ' · 📌' : ''}</div>}
           {(j.doneAcres > 0 && !r.done) && <div className="hb-mini-bar"><div style={{ width: `${Math.min(100, (j.doneAcres / g.acresOf(j)) * 100)}%`, background: cat.color }} /></div>}
-          {r.waited != null && <div className="gw-flag">Waits for the pass before (from {fmtSlot(settings.startDate, r.waited)})</div>}
+          {r.waited != null && <div className="gw-flag">{r.waitFor === 'ground' ? 'Waits for ground work to finish' : `Waits for the pass before (from ${fmtSlot(settings.startDate, r.waited)})`}</div>}
           {r.dep === 'unassigned' && <div className="gw-flag">The pass before isn’t in any machine’s line</div>}
+          {r.dep === 'ground' && <div className="gw-flag">Ground work on this field isn’t scheduled yet</div>}
           {r.dep === 'after' && <div className="gw-flag">The pass before is scheduled later</div>}
           {r.pinLate && <div className="gw-flag">Pinned date has passed</div>}
           {isOpen && canEdit && <CardEdit j={j} r={r} cat={cat} api={api} settings={settings} close={() => setOpen(null)} acres={g.acresOf(j)} />}
