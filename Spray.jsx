@@ -83,12 +83,14 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
       </div>
       <div className="spray-tabs">
         <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
+        <button className={view === 'calendar' ? 'active' : ''} onClick={() => setView('calendar')}>Calendar</button>
         {isAdmin && <button className={view === 'crew' ? 'active' : ''} onClick={() => setView('crew')}>Operators</button>}
         {isAdmin && <button className={view === 'managers' ? 'active' : ''} onClick={() => setView('managers')}>Managers</button>}
         {isAdmin && <button className={view === 'alerts' ? 'active' : ''} onClick={() => setView('alerts')}>Alerts</button>}
       </div>
       {view === 'schedule' && <Schedule jobs={jobs} ops={ops} isAdmin={isAdmin} run={run} say={say}
         mine={mineFirst ? (j) => isMine(j, myName, myFarmKeys) : null} />}
+      {view === 'calendar' && <Calendar jobs={jobs} ops={ops} isAdmin={isAdmin} run={run} say={say} />}
       {view === 'crew' && isAdmin && <Crew ops={ops} run={run} say={say} />}
       {view === 'managers' && isAdmin && <Managers farms={farms} run={run} say={say} />}
       {view === 'alerts' && isAdmin && <AlertLog say={say} />}
@@ -105,6 +107,28 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
 // ---------------------------------------------------------------------------
 // Schedule
 // ---------------------------------------------------------------------------
+// What the job buttons do (Schedule and Calendar share these).
+function jobActions(run, say) {
+  return {
+    done: async (j) => {
+      const r = await run({ action: 'done', jobKey: j.job_key })
+      say('Done: ' + j.field + (r && r.alerted ? ' · alert to ' + r.alerted : ''), async () => { await run({ action: 'undo', jobKey: j.job_key }); say('Back on the schedule, alert cancelled') })
+    },
+    undo: async (j) => { await run({ action: 'undo', jobKey: j.job_key }); say('Back on the schedule') },
+    assign: async (j, operator, rig) => { await run({ action: 'assign', jobKey: j.job_key, operator, rig }); say(operator ? operator + ' on ' + j.field : 'Operator cleared') },
+    move: async (j, date) => {
+      const r = await run({ action: 'move', jobKey: j.job_key, date })
+      say(r.moved ? 'Moved to ' + fmtDay(r.planned_date) : 'Back to the AgWorld date')
+    },
+    hide: async (j) => {
+      if (!window.confirm('Remove ' + j.field + ' from the schedule?\n\nIt stays in AgWorld. If the job changes in AgWorld it comes back by itself, or restore it under Removed jobs.')) return
+      await run({ action: 'hide', jobKey: j.job_key })
+      say('Removed ' + j.field, async () => { await run({ action: 'restore', jobKey: j.job_key }); say('Back on the schedule') })
+    },
+    restore: async (j) => { await run({ action: 'restore', jobKey: j.job_key }); say('Back on the schedule') }
+  }
+}
+
 function Schedule({ jobs, ops, isAdmin, run, say, mine }) {
   const today = todayYmd()
   const [crew, setCrew] = useState('all')
@@ -130,24 +154,7 @@ function Schedule({ jobs, ops, isAdmin, run, say, mine }) {
   }
 
   const toggle = (k) => setOpen((o) => Object.assign({}, o, { [k]: !o[k] }))
-  const actions = {
-    done: async (j) => {
-      const r = await run({ action: 'done', jobKey: j.job_key })
-      say('Done: ' + j.field + (r && r.alerted ? ' · alert to ' + r.alerted : ''), async () => { await run({ action: 'undo', jobKey: j.job_key }); say('Back on the schedule, alert cancelled') })
-    },
-    undo: async (j) => { await run({ action: 'undo', jobKey: j.job_key }); say('Back on the schedule') },
-    assign: async (j, operator, rig) => { await run({ action: 'assign', jobKey: j.job_key, operator, rig }); say(operator ? operator + ' on ' + j.field : 'Operator cleared') },
-    move: async (j, date) => {
-      const r = await run({ action: 'move', jobKey: j.job_key, date })
-      say(r.moved ? 'Moved to ' + fmtDay(r.planned_date) : 'Back to the AgWorld date')
-    },
-    hide: async (j) => {
-      if (!window.confirm('Remove ' + j.field + ' from the schedule?\n\nIt stays in AgWorld. If the job changes in AgWorld it comes back by itself, or restore it under Removed jobs.')) return
-      await run({ action: 'hide', jobKey: j.job_key })
-      say('Removed ' + j.field, async () => { await run({ action: 'restore', jobKey: j.job_key }); say('Back on the schedule') })
-    },
-    restore: async (j) => { await run({ action: 'restore', jobKey: j.job_key }); say('Back on the schedule') }
-  }
+  const actions = jobActions(run, say)
   const doSync = async (mode) => {
     setSyncing(true)
     try {
@@ -830,6 +837,104 @@ function Managers({ farms, run, say }) {
           </div>
         </div>
       )) : <div className="spray-empty">Nobody yet. Add your farm managers above.</div>)}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Calendar tab: a month of jobs, like the Google app. Done jobs sit on the day they were done,
+// open ones on their (moved) date. Tap a day for its cards; tap a job to open its card.
+// Spray admins can drag a job to another day to move it (schedule only; AgWorld keeps its date).
+// ---------------------------------------------------------------------------
+const monthStart = (ymd) => ymd.slice(0, 8) + '01'
+function shiftMonth(m, n) {
+  const d = new Date(m + 'T12:00:00Z'); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + n)
+  return d.toISOString().slice(0, 10)
+}
+const mondayOf = (ymd) => { const wd = new Date(ymd + 'T12:00:00Z').getUTCDay(); return addDays(ymd, -((wd + 6) % 7)) }
+
+function Calendar({ jobs, ops, isAdmin, run, say }) {
+  const today = todayYmd()
+  const [month, setMonth] = useState(monthStart(today))
+  const [sel, setSel] = useState(today)
+  const [crew, setCrew] = useState('all')
+  const [open, setOpen] = useState({})
+  const [over, setOver] = useState('')
+  const actions = jobActions(run, say)
+  const dateOf = (j) => (j.done ? (j.done.completed_date || j.planned_date) : j.planned_date)
+  const live = jobs.filter((j) => !j.hidden && (crew === 'all' || j.source === crew))
+  const by = {}
+  live.forEach((j) => { const d = dateOf(j); if (d) (by[d] = by[d] || []).push(j) })
+  const order = (a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || kindOf(a).localeCompare(kindOf(b)) || String(a.field).localeCompare(String(b.field))
+  const start = mondayOf(month)
+  const end = addDays(mondayOf(addDays(shiftMonth(month, 1), -1)), 6)
+  const days = []
+  for (let d = start; d <= end; d = addDays(d, 1)) days.push(d)
+  const selJobs = (by[sel] || []).slice().sort(order)
+  const wx = useWeather(selJobs.filter((j) => !j.done))
+  const name = new Date(month + 'T12:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', month: 'long', year: 'numeric' })
+  const go = (n) => { const m = shiftMonth(month, n); setMonth(m); setSel(m.slice(0, 7) === today.slice(0, 7) ? today : m) }
+  const pick = (d, k) => {
+    setSel(d)
+    if (k) setOpen((o) => Object.assign({}, o, { [k]: true }))
+    setTimeout(() => {
+      const el = k ? document.querySelector('[data-cal-job="' + k + '"]') : document.getElementById('spray-cal-day')
+      if (el) el.scrollIntoView({ block: k ? 'center' : 'start', behavior: 'smooth' })
+    }, 40)
+  }
+  const canMove = (j) => isAdmin && !j.done
+  const drop = async (e, d) => {
+    e.preventDefault(); setOver('')
+    const k = e.dataTransfer.getData('text/plain'), j = live.find((x) => x.job_key === k)
+    if (!j || !canMove(j) || d === j.planned_date) return
+    try { await actions.move(j, d); setSel(d) } catch (err) { /* message already shown */ }
+  }
+  const toggle = (k) => setOpen((o) => Object.assign({}, o, { [k]: !o[k] }))
+  return (
+    <div>
+      <div className="spray-bar">
+        <button onClick={() => go(-1)} aria-label="Previous month">‹</button>
+        <b className="spray-cal-month">{name}</b>
+        <button onClick={() => go(1)} aria-label="Next month">›</button>
+        {month !== monthStart(today) && <button onClick={() => { setMonth(monthStart(today)); setSel(today) }}>This month</button>}
+        <div className="spray-seg">
+          {[['all', 'All'], ['drone', 'Drone'], ['ground', 'Ag Rows']].map(([v, l]) => (
+            <button key={v} className={crew === v ? 'active' : ''} onClick={() => setCrew(v)}>{l}</button>
+          ))}
+        </div>
+        <span className="spray-cal-legend"><span><i className="k-drone" />Drone</span><span><i className="k-spray" />Spray</span><span><i className="k-spread" />Spread</span></span>
+      </div>
+      <div className="spray-cal">
+        {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((x) => <div className="hd" key={x}>{x}</div>)}
+        {days.map((d) => {
+          const js = (by[d] || []).slice().sort(order)
+          const cls = ['cd', d.slice(0, 7) !== month.slice(0, 7) ? 'out' : '', d === today ? 'today' : '', d === sel ? 'sel' : '', d === over ? 'over' : ''].filter(Boolean).join(' ')
+          return (
+            <div key={d} className={cls} onClick={() => pick(d)}
+              onDragOver={(e) => { e.preventDefault(); if (over !== d) setOver(d) }} onDragLeave={() => setOver('')} onDrop={(e) => drop(e, d)}>
+              <div className="n">{Number(d.slice(8))}</div>
+              {js.slice(0, 4).map((j) => (
+                <span key={j.job_key} className={'mc k-' + kindOf(j) + (j.done ? ' done' : '')} draggable={canMove(j)}
+                  onDragStart={(e) => e.dataTransfer.setData('text/plain', j.job_key)}
+                  onClick={(e) => { e.stopPropagation(); pick(d, j.job_key) }}
+                  title={j.field + ' · ' + (Number(j.acres) || 0).toLocaleString() + ' ac · ' + (j.operator || 'no operator')}>
+                  {cropEmoji(j.crop)} {j.field}
+                </span>
+              ))}
+              {js.length > 4 && <div className="more">+{js.length - 4} more</div>}
+              <div className="dots">{js.slice(0, 6).map((j) => <i key={j.job_key} className={'k-' + kindOf(j) + (j.done ? ' done' : '')} />)}{js.length > 6 && <b>+</b>}</div>
+            </div>
+          )
+        })}
+      </div>
+      {isAdmin && <div className="spray-muted spray-cal-tip">Drag a job to another day to move it (on a computer). AgWorld keeps its date.</div>}
+      <div className="spray-day" id="spray-cal-day">{fmtDay(sel)} · {selJobs.length} job{selJobs.length === 1 ? '' : 's'}</div>
+      {selJobs.length ? selJobs.map((j) => (
+        <div key={j.job_key} data-cal-job={j.job_key}>
+          <JobCard j={j} today={today} wx={wx[j.job_key]} ops={ops} isAdmin={isAdmin}
+            open={!!open[j.job_key]} onToggle={() => toggle(j.job_key)} actions={actions} />
+        </div>
+      )) : <div className="spray-empty">No jobs this day.</div>}
     </div>
   )
 }

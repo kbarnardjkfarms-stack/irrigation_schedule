@@ -161,3 +161,18 @@ The spray Google Sheet isn't read any more. Everything lives in the Spray module
 | `functions/sprayActions.js` | `saveOperator` / `deleteOperator` back; `listManagers` / `saveManager` / `deleteManager` (Spray admins). |
 | `functions/sprayContacts.js` | Sheet reader switched off (its two functions stay exported but do nothing); manager checks for saving. |
 | `functions/sprayAlerts.js`, `functions/spraySync.js` | Comments only: managers come from the Managers tab. |
+
+## Job card like the old app, and the Calendar tab
+
+- **Card** (`Spray.jsx`, `sprayMath.js`, `styles.css`): crop emoji + field, crop · acres · farm manager, amber
+  "No operator yet", trash icon (Spray admins) and the crew tag top right. Weather boxes: NOW (today), the day's
+  MAX wind with its main direction and gusts ("THU MAX 21 E · G37"), and RAIN from 30%. Tiles: PDF, Directions,
+  Call [farm manager], Call [operator], Done.
+- **Opened card**: panels like the old app: Date (+1 / +2 days, back to AgWorld's date), Weather at the field
+  (right now, wind + main direction + gusts, rain chance, temperature range), Job (work order PDF, each field with
+  acres + Pin, products), Farm manager (Call with the number), Operator (saves as soon as it's picked; Call with the
+  number), Done / Applied, and Not supposed to be here? (Remove from schedule).
+- **Weather** now also asks Open-Meteo for wind direction, rain chance and temperature by the hour.
+- **Calendar tab** (everyone who can see Spray): a month of jobs, Mon–Sun. Open jobs on their date, done jobs on the
+  day they were done. All / Drone / Ag Rows. Tap a day for its cards, tap a job to open its card. Spray admins can drag
+  a job to another day on a computer to move it (AgWorld keeps its date). Phones show colored dots per job.

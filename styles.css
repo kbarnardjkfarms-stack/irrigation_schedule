@@ -1242,7 +1242,7 @@ body.spray-dark { background: #0c0f11; }
 .spray-logo { width: 50px; height: 44px; border-radius: 10px; background: #fff; display: flex; align-items: center; justify-content: center; flex: none; padding: 3px; box-sizing: border-box; box-shadow: 0 0 0 1px var(--sp-line); }
 .spray-logo img { max-width: 100%; max-height: 100%; display: block; }
 .spray-brand h1 { margin: 0; font-family: var(--sp-cond); font-weight: 700; font-size: 24px; letter-spacing: 1px; text-transform: uppercase; color: var(--sp-tx); }
-.spray-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.spray-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .spray-alerts { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; background: var(--sp-blueBg); border: 1px solid var(--sp-line); border-radius: 10px; padding: 9px 12px; margin-bottom: 12px; font-size: 13.5px; color: var(--sp-tx); }
 .spray-alerts button { font-size: 13px; padding: 6px 11px; border-radius: 7px; }
 .spray-farms { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13.5px; }
@@ -1316,6 +1316,39 @@ body.spray-dark { background: #0c0f11; }
 .spray-fieldrow a { display: inline-flex; align-items: center; gap: 3px; color: var(--sp-accent); }
 .spray-panel .spray-products { margin-top: 8px; }
 .spray-panel .spray-danger { display: inline-flex; align-items: center; gap: 6px; }
+/* Calendar tab (month view, like the old Google spray app) */
+.spray-cal-month { min-width: 130px; text-align: center; }
+.spray-cal-legend { display: inline-flex; gap: 10px; font-size: 12.5px; color: var(--sp-tx2); }
+.spray-cal-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.spray-cal-legend i, .spray-cal .dots i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--sp-spray); }
+.spray-cal-legend i.k-drone, .spray-cal .dots i.k-drone { background: var(--sp-drone); }
+.spray-cal-legend i.k-spread, .spray-cal .dots i.k-spread { background: var(--sp-spread); }
+.spray-cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-top: 6px; }
+.spray-cal .hd { font-size: 12px; color: var(--sp-tx2); text-align: center; padding: 2px 0; font-weight: 600; }
+.spray-cal .cd { min-height: 104px; border: 1px solid var(--sp-line); border-radius: 8px; padding: 4px; background: var(--sp-card); cursor: pointer; overflow: hidden; }
+.spray-cal .cd.out { opacity: .4; }
+.spray-cal .cd.today { border-color: var(--sp-accent); }
+.spray-cal .cd.sel { outline: 2px solid var(--sp-accent); outline-offset: -1px; }
+.spray-cal .cd.over { background: var(--sp-blueBg); }
+.spray-cal .cd .n { font-size: 12px; font-weight: 700; color: var(--sp-tx2); }
+.spray-cal .cd.today .n { color: var(--sp-accent); }
+.spray-cal .mc { display: block; font-size: 11px; line-height: 1.3; padding: 2px 4px; margin-top: 3px; border-radius: 4px; background: var(--sp-bg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 3px solid var(--sp-spray); }
+.spray-cal .mc.k-drone { border-left-color: var(--sp-drone); }
+.spray-cal .mc.k-spread { border-left-color: var(--sp-spread); }
+.spray-cal .mc.done { text-decoration: line-through; color: var(--sp-tx3); }
+.spray-cal .mc[draggable=true] { cursor: grab; }
+.spray-cal .more { font-size: 11px; color: var(--sp-tx2); margin-top: 2px; }
+.spray-cal .dots { display: none; }
+.spray-cal .dots i.done { opacity: .35; }
+.spray-cal-tip { margin-top: 6px; }
+@media (max-width: 600px) {
+  .spray-cal { gap: 2px; } .spray-cal .hd { font-size: 11px; }
+  .spray-cal .cd { min-height: 50px; padding: 3px; border-radius: 6px; }
+  .spray-cal .mc, .spray-cal .more, .spray-cal-tip { display: none; }
+  .spray-cal .dots { display: flex; gap: 2px; flex-wrap: wrap; margin-top: 3px; }
+  .spray-cal .dots i { width: 7px; height: 7px; }
+  .spray-cal .dots b { font-size: 9px; line-height: 7px; }
+}
 .spray-products div { padding: 1px 0; }
 .spray-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .spray-box { background: var(--sp-card); border: 1px solid var(--sp-line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px; }
