@@ -54,6 +54,19 @@ export function gpmForWeek(profile, weekId) {
   return gpmOnDate(profile, weekId ? addDaysIso(weekId, 6) : null)
 }
 
+// What to save when a pivot's package is deleted: with no package there is no GPM until a manager ticks
+// "No printout" and types one, or uploads a new package and confirms it. The number that was in use (and its history)
+// is kept in gpmCleared for the record. Returns {} when there is no GPM to clear.
+export function clearedGpmFields(profile, info) {
+  const live = liveGpm(profile)
+  if (live == null) return {}
+  const keep = JSON.parse(JSON.stringify(historyOf(profile)))
+  return {
+    currentGpm: null, gpmSource: null, gpmConfirmedPath: null, gpmConfirmedBy: null, gpmConfirmedAt: null,
+    gpmCleared: { gpm: live, source: (profile && profile.gpmSource) || null, at: (info && info.now) || new Date().toISOString(), by: (info && info.by) || null, history: keep }
+  }
+}
+
 // What to save when the GPM changes. Returns { currentGpm, gpmHistory } to merge into the profile.
 //   no GPM yet                 -> first entry, applies to all time
 //   mode 'correction'          -> the latest entry was a mistake: its number is replaced, its date stays
