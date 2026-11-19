@@ -221,6 +221,8 @@ service cloud.firestore {
     function gpmWriteOk() {
       let n = request.resource.data;
       return n.get('currentGpm', null) == (resource == null ? null : resource.data.get('currentGpm', null))
+        // Deleting a pivot's package clears its GPM: clearing is fine once there is no current package.
+        || (n.get('currentGpm', null) == null && n.get('sprinklerPackage', null) == null)
         || (
           n.get('currentGpm', null) is number && n.currentGpm > 0 && (
             (
