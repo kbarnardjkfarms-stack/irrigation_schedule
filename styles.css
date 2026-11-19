@@ -1512,3 +1512,9 @@ body.spray-dark { background: #0c0f11; }
   .gw-lanes { grid-auto-columns: minmax(230px, 85vw); }
   .gw-banners .harvest-banner-total { grid-column: 1 / -1; }
 }
+.gw-done-btn { border: 1.5px solid #b9b2a2; background: #fff; color: #b9b2a2; border-radius: 6px; width: 26px; height: 22px; padding: 0; font-size: 13px; font-weight: 700; line-height: 1; cursor: pointer; flex: none; }
+.gw-done-btn:hover { border-color: #3B6D11; color: #3B6D11; }
+.gw-done-btn.on { background: #3B6D11; border-color: #3B6D11; color: #fff; }
+.gw-card-top { align-items: center; }
+.gw-done-box { width: 15px; height: 15px; margin: 0 5px 0 0; vertical-align: -2px; cursor: pointer; accent-color: #3B6D11; }
+.gw-card-top b { flex: 1; min-width: 0; }

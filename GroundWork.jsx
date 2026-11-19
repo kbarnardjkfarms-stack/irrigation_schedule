@@ -121,6 +121,13 @@ export default function GroundWork({ userRole }) {
     patchJob: (id, patch, ok) => run(updateDoc(doc(db, 'groundJobs', id), { ...patch, updatedBy: who(), updatedAt: Date.now() }), ok),
     addJob: (data, ok) => run(setDoc(doc(db, 'groundJobs', data.id), { ...data, seasonId: String(seasonId), createdBy: who(), updatedAt: Date.now() }), ok),
     deleteJob: (id, ok) => run(deleteDoc(doc(db, 'groundJobs', id)), ok),
+    // Mark a pass done (all its acres, today) or not done again.
+    setDone: (j, done) => {
+      const cat = (settings.categories || []).find((c) => c.id === j.catId)
+      const acres = Number(liveAcres[j.fieldId]) > 0 ? Number(liveAcres[j.fieldId]) : Number(j.acres) || 0
+      run(updateDoc(doc(db, 'groundJobs', j.id), done ? { done: true, doneAcres: acres, doneAt: Date.now(), updatedBy: who(), updatedAt: Date.now() } : { done: false, doneAcres: 0, doneAt: null, updatedBy: who(), updatedAt: Date.now() }),
+        done ? `${j.fieldName} — ${cat ? cat.name : 'pass'} done.` : `${j.fieldName} — ${cat ? cat.name : 'pass'} marked not done.`)
+    },
     autoAssignCat: (cat, onlyUnassigned) => {
       const a = autoAssign({ jobs, category: cat, sweepNo, onlyUnassigned })
       if (!a.length) { setMsg({ ok: false, text: `Nothing ${onlyUnassigned ? 'unassigned ' : ''}to assign in ${cat.name}.` }); return }
@@ -144,7 +151,7 @@ export default function GroundWork({ userRole }) {
         <div className="yields-card"><div className="yields-card-title">No passes yet</div>
           <div className="contracts-sub">{canEdit ? 'Check the machines and crop recipes on Setup, then use “Build passes from recipes” on Fields & passes.' : 'An Admin, Owner or Farm manager sets up the machines and crop recipes first.'}</div></div>
       )}
-      {g && view === 'dashboard' && <GroundDashboard g={g} jobs={jobs} settings={settings} sweepNo={sweepNo} now={now} onOpenSchedule={() => setView('schedule')} />}
+      {g && view === 'dashboard' && <GroundDashboard g={g} jobs={jobs} settings={settings} sweepNo={sweepNo} now={now} canEdit={canEdit} api={api} onOpenSchedule={() => setView('schedule')} />}
       {g && view === 'schedule' && <GroundSchedule g={g} jobs={jobs} settings={settings} sweepNo={sweepNo} canEdit={canEdit} api={api} />}
       {view === 'jobs' && <GroundJobs fields={fields} jobs={jobs} settings={settings} sweepNo={sweepNo} g={g} canEdit={canEdit} api={api} seasonId={String(seasonId)} />}
       {view === 'setup' && canEdit && <GroundSetup settings={settings} fields={fields} saveSettings={saveSettings} />}
@@ -156,7 +163,7 @@ export default function GroundWork({ userRole }) {
 // ---------------------------------------------------------------------------
 // Dashboard: whole schedule → category → machine, each level a click deeper.
 // ---------------------------------------------------------------------------
-function GroundDashboard({ g, jobs, settings, sweepNo, now, onOpenSchedule }) {
+function GroundDashboard({ g, jobs, settings, sweepNo, now, canEdit, api, onOpenSchedule }) {
   const [path, setPath] = useState({ cat: null, unit: null })
   const cat = path.cat ? g.catStats.find((c) => c.id === path.cat) : null
   const unit = path.unit ? g.unitStats.find((u) => u.id === path.unit) : null
@@ -234,12 +241,12 @@ function GroundDashboard({ g, jobs, settings, sweepNo, now, onOpenSchedule }) {
         </div>
       </div>
 
-      {level === 'unit' && <UnitTimeline g={g} unit={unit} settings={settings} sweepNo={sweepNo} onOpenSchedule={onOpenSchedule} />}
+      {level === 'unit' && <UnitTimeline g={g} unit={unit} settings={settings} sweepNo={sweepNo} canEdit={canEdit} api={api} onOpenSchedule={onOpenSchedule} />}
     </div>
   )
 }
 
-function UnitTimeline({ g, unit, settings, sweepNo, onOpenSchedule }) {
+function UnitTimeline({ g, unit, settings, sweepNo, canEdit, api, onOpenSchedule }) {
   const lane = g.lanes[unit.id] || []
   const items = lane.map((j) => ({ j, r: g.res[j.id] })).filter((x) => x.r)
   const live = items.filter((x) => !x.r.done && x.r.start != null)
@@ -251,13 +258,16 @@ function UnitTimeline({ g, unit, settings, sweepNo, onOpenSchedule }) {
   return (
     <div className="yields-card">
       <div className="yields-card-head">
-        <div><div className="yields-card-title">{unit.name} — fields in order</div><div className="contracts-sub">{fmtAc(unit.left)} ac left at {fmtAc(unit.rate)} ac/day. Drag to change the order on the Schedule tab.</div></div>
+        <div><div className="yields-card-title">{unit.name} — fields in order</div><div className="contracts-sub">{fmtAc(unit.left)} ac left at {fmtAc(unit.rate)} ac/day.{canEdit ? ' Tick a field when it’s done.' : ''} Drag to change the order on the Schedule tab.</div></div>
         <button onClick={onOpenSchedule}>Open schedule</button>
       </div>
       <div className="gw-gantt">
         {items.map(({ j, r }) => (
           <div key={j.id} className={`gw-g-row${r.done ? ' done' : ''}`}>
-            <div className="gw-g-name">{r.block ? <i>{j.label || 'Block'}</i> : <><b>#{sweepNo[j.fieldId] || '–'}</b> {j.fieldName}</>}</div>
+            <div className="gw-g-name">
+              {canEdit && !r.block && <input type="checkbox" className="gw-done-box" checked={!!j.done} onChange={(e) => api.setDone(j, e.target.checked)} title={j.done ? 'Mark not done' : 'Mark done'} />}
+              {r.block ? <i>{j.label || 'Block'}</i> : <><b>#{sweepNo[j.fieldId] || '–'}</b> {j.fieldName}</>}
+            </div>
             <div className="gw-g-track">
               {!r.done && r.start != null && (
                 <>
@@ -324,9 +334,9 @@ function GroundSchedule({ g, jobs, settings, sweepNo, canEdit, api }) {
       </div>
       {canEdit && (
         <div className="agronomy-filter-bar">
-          <button className="save" disabled={!unassigned.length} onClick={() => api.autoAssignCat(cat, true)}>Assign the {unassigned.length} unassigned by field order</button>
+          <button className="save" disabled={!unassigned.length} onClick={() => api.autoAssignCat(cat, true)}>{unassigned.length ? `Assign the ${unassigned.length} unassigned by field order` : 'All assigned'}</button>
           <button onClick={() => { if (window.confirm(`Re-split every ${cat.name} job that isn’t done across the ${cat.units.length} machines by field order? Hand-made order and pins in ${cat.name} are replaced.`)) api.autoAssignCat(cat, false) }}>Re-split all {cat.name} jobs</button>
-          <span className="contracts-sub" style={{ marginTop: 0 }}>Drag a field to move it; drop on a field to go before it. Tap a field to mark it done or pin a start date.</span>
+          <span className="contracts-sub" style={{ marginTop: 0 }}>Tap ✓ on a field when it’s done. Drag a field to move it; drop on a field to go before it. Tap a field’s name for acres done so far, a start date or another machine.</span>
         </div>
       )}
       <div className="gw-lanes">
@@ -375,6 +385,7 @@ function JobCard({ j, g, settings, sweepNo, cat, canEdit, api, drag, setDrag, op
           <div className="gw-card-top" onClick={() => setOpen(isOpen ? null : j.id)}>
             <b><span className="gw-no">#{sweepNo[j.fieldId] || '–'}</span>{j.fieldName}</b>
             <span>{r.done ? '✓ done' : `${fmtAc(left)} ac`}</span>
+            {canEdit && <button className={`gw-done-btn${r.done ? ' on' : ''}`} title={r.done ? 'Mark not done' : 'Mark done'} onClick={(e) => { e.stopPropagation(); api.setDone(j, !r.done) }}>✓</button>}
           </div>
           {!r.done && r.start != null && <div className="gw-card-when">{fmtSlot(settings.startDate, r.start, true)} → {fmtSlot(settings.startDate, r.end)}{j.startOn ? ' · 📌' : ''}</div>}
           {(j.doneAcres > 0 && !r.done) && <div className="hb-mini-bar"><div style={{ width: `${Math.min(100, (j.doneAcres / g.acresOf(j)) * 100)}%`, background: cat.color }} /></div>}

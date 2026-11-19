@@ -48,7 +48,7 @@ export function GroundJobs({ fields, jobs, settings, sweepNo, g, canEdit, api, s
       <div className="yields-card-head">
         <div>
           <div className="yields-card-title">Fields &amp; passes</div>
-          <div className="contracts-sub">Every field this season from Agworld, numbered along the southwest → northeast sweep (#1 is the most south-western). Each crop’s recipe (Setup) decides its passes; add or drop a pass on one field here.</div>
+          <div className="contracts-sub">Every field this season from Agworld, numbered along the southwest → northeast sweep (#1 is the most south-western). Each crop’s recipe (Setup) decides its passes; tick a pass when it’s done, or add or drop a pass on one field here.</div>
         </div>
         <div className="agronomy-filter-bar" style={{ margin: 0 }}>
           <select value={crop} onChange={(e) => setCrop(e.target.value)}>
@@ -79,6 +79,7 @@ export function GroundJobs({ fields, jobs, settings, sweepNo, g, canEdit, api, s
                   const pct = j.done ? 1 : (Number(j.doneAcres) || 0) / (g ? g.acresOf(j) || 1 : 1)
                   return (
                     <td key={c.id}>
+                      {canEdit && <input type="checkbox" className="gw-done-box" checked={!!j.done} onChange={(e) => api.setDone(j, e.target.checked)} title={j.done ? 'Mark not done' : 'Mark done'} />}
                       <span className={`gw-chip${j.done ? ' done' : !j.unitId ? ' open' : ''}`} style={{ '--c': c.color }} title={r && r.start != null && !r.done && g ? `${fmtSlot(settings.startDate, r.start, true)} → ${fmtSlot(settings.startDate, r.end)}` : ''}>
                         {j.done ? '✓ done' : j.unitId ? `${unitName[j.unitId] || '?'}${pct > 0 ? ` · ${Math.round(pct * 100)}%` : ''}` : 'not assigned'}
                       </span>
