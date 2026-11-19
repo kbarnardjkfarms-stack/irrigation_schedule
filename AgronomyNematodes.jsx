@@ -37,6 +37,9 @@ const num = (v) => {
   const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[^0-9.\-]/g, ''))
   return Number.isFinite(n) ? n : 0
 }
+const acresOf = (f) => Number(f && f.acres) || 0
+const sumAcres = (list) => list.reduce((t, f) => t + acresOf(f), 0)
+const fmtAc = (n) => Math.round(n).toLocaleString()
 const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '—')
 
 const box = { border: '1px solid #ddd8cc', borderRadius: 8, background: '#fff', padding: 10, marginBottom: 12 }
@@ -109,11 +112,17 @@ export default function AgronomyNematodes({ fields }) {
     const rows = keys.map((k) => {
       const counts = tested.map((f) => num(latestByField[f.id].values[k]))
       const hits = counts.filter(found)
-      return { key: k, label: LABELS[k] || k, tested: tested.length, found: hits.length, max: counts.length ? Math.max(...counts) : 0, avg: hits.length ? Math.round(hits.reduce((a, b) => a + b, 0) / hits.length) : 0 }
+      const hitAcres = sumAcres(tested.filter((f) => found(num(latestByField[f.id].values[k]))))
+      return { key: k, label: LABELS[k] || k, tested: tested.length, found: hits.length, acres: hitAcres, max: counts.length ? Math.max(...counts) : 0, avg: hits.length ? Math.round(hits.reduce((a, b) => a + b, 0) / hits.length) : 0 }
     })
     const anyKeys = focus ? focus.keys : keys
-    const anyFound = tested.filter((f) => anyKeys.some((k) => found(num(latestByField[f.id].values[k])))).length
-    return { crop: c, focus, total: cropFields.length, tested: tested.length, untested: cropFields.length - tested.length, anyFound, rows, anyKeys, cropFields }
+    const foundFields = tested.filter((f) => anyKeys.some((k) => found(num(latestByField[f.id].values[k]))))
+    const anyFound = foundFields.length
+    return {
+      crop: c, focus, total: cropFields.length, tested: tested.length, untested: cropFields.length - tested.length, anyFound, rows, anyKeys, cropFields,
+      acresTotal: sumAcres(cropFields), acresTested: sumAcres(tested), acresFound: sumAcres(foundFields),
+      noAcres: cropFields.filter((f) => !acresOf(f)).length
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [crops.join('|'), fields, latestByField, thr, allSpecies])
 
@@ -141,10 +150,10 @@ export default function AgronomyNematodes({ fields }) {
   function downloadCsv() {
     if (!detail) return
     const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`
-    const head = ['Field', 'Crop', 'Variety', 'Farm', 'Sample date', 'Found', ...columns.map((k) => LABELS[k] || k)]
+    const head = ['Field', 'Acres', 'Crop', 'Variety', 'Farm', 'Sample date', 'Found', ...columns.map((k) => LABELS[k] || k)]
     const lines = [head.map(esc).join(',')]
     tableRows.forEach((r) => lines.push([
-      r.f.name, r.f.cropName, r.f.varietyName, r.f.farmName, r.s ? fmtDay(r.s.ms) : 'not tested',
+      r.f.name, acresOf(r.f) || '', r.f.cropName, r.f.varietyName, r.f.farmName, r.s ? fmtDay(r.s.ms) : 'not tested',
       r.s ? (r.isFound ? 'yes' : 'no') : '', ...(r.counts || columns.map(() => ''))
     ].map(esc).join(',')))
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' })
@@ -199,21 +208,29 @@ export default function AgronomyNematodes({ fields }) {
               {s.tested ? `${s.anyFound} of ${s.tested} tested fields` : 'No tested fields'}
               {s.tested ? ` (${pct(s.anyFound, s.tested)})` : ''}
             </strong>
+            {s.tested > 0 && (
+              <strong style={{ fontSize: 15, color: '#a85a00' }}>
+                {'\u00b7'} {fmtAc(s.acresFound)} of {fmtAc(s.acresTested)} tested acres ({pct(s.acresFound, s.acresTested)})
+              </strong>
+            )}
             <span style={{ fontSize: 12, color: '#555' }}>
               {s.focus ? s.focus.anyLabel : 'with any nematode found'}
             </span>
           </div>
           <p style={{ fontSize: 11, color: '#777', margin: '0 0 8px' }}>
-            {s.total} {s.crop.toLowerCase()} fields this season - {s.tested} tested, {s.untested} with no nematode sample
+            {s.total} {s.crop.toLowerCase()} fields / {fmtAc(s.acresTotal)} acres this season - {s.tested} fields ({fmtAc(s.acresTested)} acres) tested,
+            {' '}{s.untested} ({fmtAc(s.acresTotal - s.acresTested)} acres) with no nematode sample
+            {s.noAcres > 0 ? ` - ${s.noAcres} field${s.noAcres === 1 ? ' has' : 's have'} no acres in Agworld, counted as 0` : ''}
           </p>
           {s.rows.length > 0 ? (
             <table style={{ borderCollapse: 'collapse', minWidth: 420 }}>
-              <thead><tr><th style={th}>Species</th><th style={th}>Fields found</th><th style={th}>% of tested</th><th style={th}>Highest count</th><th style={th}>Avg where found</th></tr></thead>
+              <thead><tr><th style={th}>Species</th><th style={th}>Fields found</th><th style={th}>Acres found</th><th style={th}>% of tested</th><th style={th}>Highest count</th><th style={th}>Avg where found</th></tr></thead>
               <tbody>
                 {s.rows.map((r) => (
                   <tr key={r.key}>
                     <td style={td}>{r.label}</td>
                     <td style={{ ...td, fontWeight: 700 }}>{r.found} <span style={{ color: '#888', fontWeight: 400 }}>of {r.tested}</span></td>
+                    <td style={{ ...td, fontWeight: 700 }}>{fmtAc(r.acres)}</td>
                     <td style={td}>{pct(r.found, r.tested)}</td>
                     <td style={td}>{r.max || '—'}</td>
                     <td style={td}>{r.avg || '—'}</td>
@@ -234,7 +251,7 @@ export default function AgronomyNematodes({ fields }) {
         <>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 6px' }}>
             <p className="agronomy-section-label" style={{ margin: 0 }}>Fields</p>
-            {[['all', `All (${detail.total})`], ['found', `Found (${detail.anyFound})`], ['clean', `Tested, none found (${detail.tested - detail.anyFound})`], ['untested', `Not tested (${detail.untested})`]].map(([id, label]) => (
+            {[['all', `All (${detail.total})`], ['found', `Found (${detail.anyFound} \u00b7 ${fmtAc(detail.acresFound)} ac)`], ['clean', `Tested, none found (${detail.tested - detail.anyFound})`], ['untested', `Not tested (${detail.untested})`]].map(([id, label]) => (
               <button key={id} onClick={() => setShow(id)}
                 style={{ ...smallBtn, ...(show === id ? { background: '#3c5a3f', color: '#fff', border: '1px solid #3c5a3f' } : {}) }}>
                 {label}
@@ -251,15 +268,16 @@ export default function AgronomyNematodes({ fields }) {
             <table style={{ borderCollapse: 'collapse', width: '100%' }}>
               <thead>
                 <tr>
-                  <th style={th}>Field</th><th style={th}>Variety</th><th style={th}>Sampled</th>
+                  <th style={th}>Field</th><th style={th}>Acres</th><th style={th}>Variety</th><th style={th}>Sampled</th>
                   {columns.map((k) => <th key={k} style={th}>{LABELS[k] || k}</th>)}
                 </tr>
               </thead>
               <tbody>
-                {tableRows.length === 0 && <tr><td colSpan={columns.length + 3} style={{ ...td, color: '#888', padding: 12 }}>No fields match.</td></tr>}
+                {tableRows.length === 0 && <tr><td colSpan={columns.length + 4} style={{ ...td, color: '#888', padding: 12 }}>No fields match.</td></tr>}
                 {tableRows.map((r) => (
                   <tr key={r.f.id}>
                     <td style={{ ...td, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.f.name}{r.f.farmName ? <span style={{ fontWeight: 400, color: '#999', fontSize: 11 }}> {'·'} {r.f.farmName}</span> : null}</td>
+                    <td style={{ ...td, textAlign: 'right' }}>{acresOf(r.f) ? fmtAc(acresOf(r.f)) : ''}</td>
                     <td style={{ ...td, color: '#666' }}>{r.f.varietyName || ''}</td>
                     <td style={{ ...td, whiteSpace: 'nowrap', color: r.s ? 'inherit' : '#a0651a' }}>{r.s ? fmtDay(r.s.ms) : 'not tested'}</td>
                     {columns.map((k, i) => (
