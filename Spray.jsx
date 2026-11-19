@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { collection, onSnapshot } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { db, functions } from './firebase.js'
@@ -36,6 +37,8 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
   const [farms, setFarms] = useState({})
   const [error, setError] = useState(null)
   const [toast, setToast] = useState(null)
+  const [drones, setDrones] = useState([])
+  const [flightFor, setFlightFor] = useState(null)   // { job, save } while the flight log is open
 
   useEffect(() => onSnapshot(collection(db, 'sprayJobs'), (snap) => {
     const m = {}; snap.forEach((d) => { m[d.id] = d.data() }); setJobsDoc(m)
@@ -61,6 +64,11 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
     catch (e) { say(e.message || String(e)); throw e }
   }
 
+  // Drones list (Operators tab) for the flight log; only Spray admins mark drone jobs done here.
+  useEffect(() => { if (isAdmin) sprayAct({ action: 'listDrones' }).then((r) => setDrones(r.data.drones || [])).catch(() => {}) }, [isAdmin])
+  const openFlight = (job, save) => setFlightFor({ job, save })
+  const pilots = ops.filter((o) => o.crew === 'drone' && o.active !== false).map((o) => ({ name: o.name, license_exp: o.license_exp || '' }))
+
   // Dark page while the Spray module is open (the rest of AIO stays as it is).
   useEffect(() => { document.body.classList.add('spray-dark'); return () => document.body.classList.remove('spray-dark') }, [])
 
@@ -85,13 +93,19 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
         <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
         <button className={view === 'calendar' ? 'active' : ''} onClick={() => setView('calendar')}>Calendar</button>
         {isAdmin && <button className={view === 'crew' ? 'active' : ''} onClick={() => setView('crew')}>Operators</button>}
+        {isAdmin && <button className={view === 'drones' ? 'active' : ''} onClick={() => setView('drones')}>Drones</button>}
+        {isAdmin && <button className={view === 'reports' ? 'active' : ''} onClick={() => setView('reports')}>Reports</button>}
         {isAdmin && <button className={view === 'managers' ? 'active' : ''} onClick={() => setView('managers')}>Managers</button>}
         {isAdmin && <button className={view === 'alerts' ? 'active' : ''} onClick={() => setView('alerts')}>Alerts</button>}
       </div>
-      {view === 'schedule' && <Schedule jobs={jobs} ops={ops} isAdmin={isAdmin} run={run} say={say}
+      {view === 'schedule' && <Schedule jobs={jobs} ops={ops} isAdmin={isAdmin} run={run} say={say} openFlight={openFlight}
         mine={mineFirst ? (j) => isMine(j, myName, myFarmKeys) : null} />}
-      {view === 'calendar' && <Calendar jobs={jobs} ops={ops} isAdmin={isAdmin} run={run} say={say} />}
+      {view === 'calendar' && <Calendar jobs={jobs} ops={ops} isAdmin={isAdmin} run={run} say={say} openFlight={openFlight} />}
       {view === 'crew' && isAdmin && <Crew ops={ops} run={run} say={say} />}
+      {view === 'drones' && isAdmin && <Drones drones={drones} setDrones={setDrones} run={run} say={say} />}
+      {view === 'reports' && isAdmin && <Reports run={run} say={say} pilots={pilots} drones={drones} />}
+      {flightFor && <FlightForm job={flightFor.job} pilots={pilots} drones={drones.filter((d) => d.active !== false)}
+        onSave={flightFor.save} onClose={() => setFlightFor(null)} />}
       {view === 'managers' && isAdmin && <Managers farms={farms} run={run} say={say} />}
       {view === 'alerts' && isAdmin && <AlertLog say={say} />}
       {toast && (
@@ -108,12 +122,18 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
 // Schedule
 // ---------------------------------------------------------------------------
 // What the job buttons do (Schedule and Calendar share these).
-function jobActions(run, say) {
+function doneMessage(j, r) {
+  return 'Done: ' + j.field + (r && r.alerted ? ' · alert to ' + r.alerted : '') +
+    (r && r.missing && r.missing.length ? ' · record is missing: ' + r.missing.join(', ') : '')
+}
+function jobActions(run, say, openFlight) {
+  const finish = async (j, flight) => {
+    const r = await run({ action: 'done', jobKey: j.job_key, flight })
+    say(doneMessage(j, r), async () => { await run({ action: 'undo', jobKey: j.job_key }); say('Back on the schedule' + (flight ? ', flight record voided' : '') + ', alert cancelled') })
+  }
   return {
-    done: async (j) => {
-      const r = await run({ action: 'done', jobKey: j.job_key })
-      say('Done: ' + j.field + (r && r.alerted ? ' · alert to ' + r.alerted : ''), async () => { await run({ action: 'undo', jobKey: j.job_key }); say('Back on the schedule, alert cancelled') })
-    },
+    // Drone jobs: Done opens the flight log (records + logbooks); Ag Rows jobs: one tap.
+    done: async (j) => { if (j.source === 'drone' && openFlight) openFlight(j, (flight) => finish(j, flight)); else await finish(j) },
     undo: async (j) => { await run({ action: 'undo', jobKey: j.job_key }); say('Back on the schedule') },
     assign: async (j, operator, rig) => { await run({ action: 'assign', jobKey: j.job_key, operator, rig }); say(operator ? operator + ' on ' + j.field : 'Operator cleared') },
     move: async (j, date) => {
@@ -129,7 +149,7 @@ function jobActions(run, say) {
   }
 }
 
-function Schedule({ jobs, ops, isAdmin, run, say, mine }) {
+function Schedule({ jobs, ops, isAdmin, run, say, mine, openFlight }) {
   const today = todayYmd()
   const [crew, setCrew] = useState('all')
   const [manager, setManager] = useState('')
@@ -154,7 +174,7 @@ function Schedule({ jobs, ops, isAdmin, run, say, mine }) {
   }
 
   const toggle = (k) => setOpen((o) => Object.assign({}, o, { [k]: !o[k] }))
-  const actions = jobActions(run, say)
+  const actions = jobActions(run, say, openFlight)
   const doSync = async (mode) => {
     setSyncing(true)
     try {
@@ -257,8 +277,7 @@ function JobCard({ j, today, wx, ops, isAdmin, canDone, open, onToggle, actions 
   const mayDone = canDone === undefined ? isAdmin : canDone   // crew links: Done without the admin details
   const phone = j.manager_phone   // from the Spray Managers tab
   // The operator's phone (Operators tab), so a farm manager can call whoever is on the job
-  const opRow = j.operator ? (ops || []).find((o) => normName(o.name) === normName(j.operator) ||
-    String(o.aliases || '').split(',').some((a) => normName(a) && normName(a) === normName(j.operator))) : null
+  const opRow = j.operator ? (ops || []).find((o) => normName(o.name) === normName(j.operator)) : null
   const opPhone = opRow && opRow.phone ? String(opRow.phone) : ''
   const [busy, setBusy] = useState(false)
   const guard = (fn) => async (e) => {
@@ -457,15 +476,20 @@ function useWeather(jobs) {
 // Operators tab (Spray admin): add / edit / delete operators, and their no-login links.
 // Drone pilots carry the drone (and trailer) they run; it rides onto the drone jobs they're put on.
 // ---------------------------------------------------------------------------
+const LICENSE_TYPES = [['professional', 'Professional Applicator'], ['private', 'Private Applicator'], ['apprentice', 'Commercial Apprentice']]
 function Crew({ ops, run, say }) {
-  const blank = { id: '', name: '', crew: 'ground', rig: '', phone: '', aliases: '', active: true }
+  const [tab, setTab] = useState('drone')   // inner tabs: Drone pilots | Ag Rows
+  const blankFor = (crew) => ({ id: '', name: '', crew, phone: '', active: true,
+    license_no: '', license_type: '', license_cats: '', license_exp: '', supervisor: '', faa_cert: '', part137_date: '', address: '' })
+  const blank = blankFor(tab)
   const [form, setForm] = useState(blank)
+  const pickTab = (t) => { setTab(t); setForm(blankFor(t)) }
   const [busy, setBusy] = useState(false)
   const set = (k) => (e) => setForm((f) => Object.assign({}, f, { [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
   const save = async () => {
     if (!form.name.trim()) { say('Enter a name.'); return }
     setBusy(true)
-    try { await run(Object.assign({ action: 'saveOperator' }, form, { rig: form.crew === 'drone' ? form.rig : '' })); say((form.id ? 'Saved ' : 'Added ') + form.name); setForm(blank) } catch (e) { /* shown */ }
+    try { await run(Object.assign({ action: 'saveOperator' }, form, { crew: tab })); say((form.id ? 'Saved ' : 'Added ') + form.name); setForm(blank) } catch (e) { /* shown */ }
     setBusy(false)
   }
   const del = async (o) => {
@@ -509,17 +533,40 @@ function Crew({ ops, run, say }) {
     catch (e) { say(e.message || String(e)) }
     setBusy(false)
   }
-  const group = (c) => ops.filter((o) => o.crew === c)
+  const list = ops.filter((o) => o.crew === tab)
+  const drone = tab === 'drone'
+  const papers = (o) => [
+    o.license_no ? (LICENSE_TYPES.find((t) => t[0] === o.license_type) || [0, 'Idaho license'])[1] + ' ' + o.license_no : 'No Idaho license # yet',
+    o.license_cats ? 'cat. ' + o.license_cats : '', drone && o.license_no && !/\bAU\b/.test(o.license_cats || '') ? '⚠ no AU category' : '',
+    o.license_exp ? (o.license_exp < todayYmd() ? '⚠ expired ' : 'exp. ') + fmtDay(o.license_exp) : '',
+    drone && (o.faa_cert ? 'FAA ' + o.faa_cert : 'no FAA cert #'), drone && (o.part137_date ? 'Part 137 ' + fmtDay(o.part137_date) : 'no Part 137 date')
+  ].filter(Boolean).join(' · ')
   return (
     <div>
+      <div className="spray-subtabs">
+        <button className={drone ? 'active' : ''} onClick={() => pickTab('drone')}>Drone pilots ({ops.filter((o) => o.crew === 'drone').length})</button>
+        <button className={!drone ? 'active' : ''} onClick={() => pickTab('ground')}>Ag Rows ({ops.filter((o) => o.crew === 'ground').length})</button>
+      </div>
       <div className="spray-box">
-        <b>{form.id ? 'Edit ' + form.name : 'Add an operator'}</b>
+        <b>{form.id ? 'Edit ' + form.name : drone ? 'Add a drone pilot' : 'Add an Ag Rows operator'}</b>
         <div className="spray-form">
           <label>Name<input value={form.name} onChange={set('name')} placeholder="As it should show on jobs" /></label>
-          <label>Crew<select value={form.crew} onChange={set('crew')}><option value="ground">Ag Rows</option><option value="drone">Drone</option></select></label>
-          {form.crew === 'drone' && <label>Drone <span className="spray-muted">(and trailer they run)</span><input value={form.rig} onChange={set('rig')} placeholder="e.g. Bluebird, trailer 2" /></label>}
           <label>Phone<input value={form.phone} onChange={set('phone')} inputMode="tel" placeholder="(208) 555-0123" /></label>
-          <label className="wide">Other spellings <span className="spray-muted">(how AgWorld or Paycom writes the name, comma-separated)</span><input value={form.aliases} onChange={set('aliases')} placeholder="e.g. Greg Burton" /></label>
+          <div className="spray-formhead">Idaho applicator license</div>
+          <label>License type<select value={form.license_type || ''} onChange={set('license_type')}>
+            <option value="">Pick</option>
+            {LICENSE_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </select></label>
+          <label>License #<input value={form.license_no || ''} onChange={set('license_no')} /></label>
+          <label>Categories <span className="spray-muted">{drone ? '(drones need AU)' : '(e.g. CO, AC)'}</span><input value={form.license_cats || ''} onChange={set('license_cats')} placeholder={drone ? 'e.g. CO, AU, AC' : 'e.g. CO, AC'} /></label>
+          <label>Expires <span className="spray-muted">(alert 30 and 7 days before)</span><input type="date" value={form.license_exp || ''} onChange={set('license_exp')} /></label>
+          {form.license_type === 'apprentice' && <label className="wide">Supervising Professional Applicator <span className="spray-muted">(name + license #)</span><input value={form.supervisor || ''} onChange={set('supervisor')} /></label>}
+          {drone && <>
+            <div className="spray-formhead">FAA</div>
+            <label>Certificate #<input value={form.faa_cert || ''} onChange={set('faa_cert')} /></label>
+            <label>Part 137 knowledge/skill date <span className="spray-muted">(137.19(e))</span><input type="date" value={form.part137_date || ''} onChange={set('part137_date')} /></label>
+            <label className="wide">Address on records <span className="spray-muted">(blank = company: 20511 F Street, Rupert, ID 83350)</span><input value={form.address || ''} onChange={set('address')} /></label>
+          </>}
           <label className="check"><input type="checkbox" checked={form.active !== false} onChange={set('active')} /> Active</label>
         </div>
         <div className="spray-row">
@@ -527,35 +574,142 @@ function Crew({ ops, run, say }) {
           {form.id && <button disabled={busy} onClick={() => setForm(blank)}>Cancel</button>}
         </div>
         <div className="spray-muted" style={{ marginTop: 6 }}>
-          Make a link for each operator below and text it to them: no sign-in, Ag Rows see Ag Rows jobs, drone pilots see drone jobs.
+          {drone ? 'Drone pilots pick the drone they flew on each job\'s Done form. Their license and FAA numbers are copied into every flight record.'
+            : 'Ag Rows operators mark jobs done with one tap; their license is copied into each Ag Rows record.'} Make a link for each person below and text it to them (no sign-in).
           Farm managers and who gets field-done alerts are on the Managers tab.
         </div>
       </div>
-      {[['drone', 'Drone crew'], ['ground', 'Ag Rows']].map(([c, label]) => (
-        <div key={c}>
-          <div className="spray-day">{label} ({group(c).length})</div>
-          {group(c).length ? group(c).map((o) => (
-            <div className={'spray-hidden' + (o.active === false ? ' off' : '')} key={o.id}>
-              <div>
-                <b>{o.name}</b>{o.active === false && <span className="spray-muted"> · inactive</span>}
-                <div className="spray-muted">{[o.crew === 'drone' && o.rig && '🛸 ' + o.rig, o.phone, o.aliases && 'also: ' + o.aliases].filter(Boolean).join(' · ')}</div>
-                {links[normName(o.name)] && <div className="spray-muted">Link {links[normName(o.name)].lastUsed ? 'last opened ' + new Date(links[normName(o.name)].lastUsed).toLocaleDateString() : 'not opened yet'}</div>}
-              </div>
-              <div className="spray-row" style={{ margin: 0 }}>
-                <button disabled={busy} onClick={() => setForm(Object.assign({}, blank, o))}>Edit</button>
-                {links[normName(o.name)]
-                  ? <>
-                    <button disabled={busy} onClick={() => send(o, links[normName(o.name)].code)}>Send link</button>
-                    <button disabled={busy} onClick={() => makeLink(o)}>New link</button>
-                    <button className="spray-danger" disabled={busy} onClick={() => linkOff(o)}>Turn off</button>
-                  </>
-                  : o.active !== false && <button className="save" disabled={busy} onClick={() => makeLink(o)}>Make link</button>}
-                <button className="spray-danger" disabled={busy} onClick={() => del(o)}>Delete</button>
-              </div>
-            </div>
-          )) : <div className="spray-empty">Nobody yet. Add them above.</div>}
+      {list.length ? list.map((o) => (
+        <div className={'spray-hidden' + (o.active === false ? ' off' : '')} key={o.id}>
+          <div>
+            <b>{o.name}</b>{o.active === false && <span className="spray-muted"> · inactive</span>}
+            {o.phone && <div className="spray-muted">{o.phone}</div>}
+            <div className="spray-muted">{papers(o)}</div>
+            {links[normName(o.name)] && <div className="spray-muted">Link {links[normName(o.name)].lastUsed ? 'last opened ' + new Date(links[normName(o.name)].lastUsed).toLocaleDateString() : 'not opened yet'}</div>}
+          </div>
+          <div className="spray-row" style={{ margin: 0 }}>
+            <button disabled={busy} onClick={() => setForm(Object.assign({}, blank, o))}>Edit</button>
+            {links[normName(o.name)]
+              ? <>
+                <button disabled={busy} onClick={() => send(o, links[normName(o.name)].code)}>Send link</button>
+                <button disabled={busy} onClick={() => makeLink(o)}>New link</button>
+                <button className="spray-danger" disabled={busy} onClick={() => linkOff(o)}>Turn off</button>
+              </>
+              : o.active !== false && <button className="save" disabled={busy} onClick={() => makeLink(o)}>Make link</button>}
+            <button className="spray-danger" disabled={busy} onClick={() => del(o)}>Delete</button>
+          </div>
         </div>
-      ))}
+      )) : <div className="spray-empty">Nobody yet. Add them above.</div>}
+    </div>
+  )
+}
+
+// Drones tab: name + FAA registration for the records and logbooks; battery numbers for the Costs tab.
+function Drones({ drones, setDrones, run, say }) {
+  const blank = { id: '', name: '', make: '', model: '', faa_reg: '', serial: '', battery_cost: '', battery_cycles: '', batteries_per_flight: '', acres_before: '', purchase_price: '', activated: '', active: true, notes: '' }
+  const [form, setForm] = useState(blank)
+  const [busy, setBusy] = useState(false)
+  const set = (k) => (e) => setForm((f) => Object.assign({}, f, { [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
+  const go = async (data, msg) => {
+    setBusy(true)
+    try { const r = await run(data); setDrones(r.drones || []); say(msg); setForm(blank) } catch (e) { /* shown */ }
+    setBusy(false)
+  }
+  const v = (x) => (x == null ? '' : String(x))
+  // maintenance log (shows in each drone's logbook on Reports)
+  const [maint, setMaint] = useState([])
+  const [kinds, setKinds] = useState([])
+  const [openLog, setOpenLog] = useState('')
+  useEffect(() => { run({ action: 'listMaint' }).then((r) => { setMaint(r.maint || []); setKinds(r.kinds || []) }).catch(() => {}) }, [])
+  return (
+    <div>
+      <div className="spray-box">
+        <b>{form.id ? 'Edit ' + form.name : 'Add a drone'}</b>
+        <div className="spray-form">
+          <label>Nickname <span className="spray-muted">(what pilots pick on Done)</span><input value={form.name} onChange={set('name')} placeholder="e.g. Bluebird" /></label>
+          <label>Make<select value={form.make} onChange={set('make')}><option value="">Pick</option><option>DJI</option><option>EAVision</option><option>Other</option></select></label>
+          <label>Model<input value={form.model} onChange={set('model')} placeholder="e.g. Agras T50" /></label>
+          <label>FAA registration #<input value={form.faa_reg} onChange={set('faa_reg')} placeholder="FA3…" /></label>
+          <label>Serial #<input value={form.serial} onChange={set('serial')} /></label>
+          <label>Battery cost ($ each)<input type="number" min="0" step="1" inputMode="decimal" value={v(form.battery_cost)} onChange={set('battery_cost')} /></label>
+          <label>Battery life (cycles)<input type="number" min="0" step="1" inputMode="numeric" value={v(form.battery_cycles)} onChange={set('battery_cycles')} /></label>
+          <label>Batteries per flight<input type="number" min="0" step="1" inputMode="numeric" value={v(form.batteries_per_flight)} onChange={set('batteries_per_flight')} /></label>
+          <div className="spray-formhead">Purchase</div>
+          <label>Purchase price ($) <span className="spray-muted">(drone + 3 batteries + charging station)</span><input type="number" min="0" step="1" inputMode="decimal" value={v(form.purchase_price)} onChange={set('purchase_price')} /></label>
+          <label>Activated <span className="spray-muted">(warranty runs 1 year from this day)</span><input type="date" max={todayYmd()} value={form.activated || ''} onChange={set('activated')} /></label>
+          <div className="spray-formhead">Acres</div>
+          <label>Acres flown before the app <span className="spray-muted">(starting total; flights logged here add on)</span><input type="number" min="0" step="1" inputMode="decimal" value={v(form.acres_before)} onChange={set('acres_before')} /></label>
+          <label className="wide">Notes<input value={form.notes} onChange={set('notes')} placeholder="e.g. trailer 2" /></label>
+          <label className="check"><input type="checkbox" checked={form.active !== false} onChange={set('active')} /> In service</label>
+        </div>
+        <div className="spray-row">
+          <button className="save" disabled={busy} onClick={() => go(Object.assign({ action: 'saveDrone' }, form), (form.id ? 'Saved ' : 'Added ') + form.name)}>{form.id ? 'Save' : 'Add'}</button>
+          {form.id && <button disabled={busy} onClick={() => setForm(blank)}>Cancel</button>}
+        </div>
+      </div>
+      {drones.length ? drones.map((d) => (
+        <div className={'spray-hidden spray-wrap' + (d.active === false ? ' off' : '')} key={d.id}>
+          <div>
+            <b>🛸 {d.name}</b> <span className="spray-muted">{[d.make, d.model].filter(Boolean).join(' ')}{d.active === false ? ' · out of service' : ''}</span>
+            <div className="spray-droneac"><b>{Math.round(Number(d.acres_total) || 0).toLocaleString()}</b> acres total
+              <span className="spray-muted"> · {Math.round(Number(d.acres_before) || 0).toLocaleString()} before the app + {Math.round(Number(d.acres_logged) || 0).toLocaleString()} logged ({d.flights_logged || 0} flights, {hrs(d.minutes_logged)} hrs)</span></div>
+            <div className="spray-muted">{[d.faa_reg ? 'FAA ' + d.faa_reg : 'No FAA registration yet', d.serial && 'S/N ' + d.serial,
+              d.battery_cost != null && '$' + d.battery_cost + '/battery', d.battery_cycles != null && d.battery_cycles + ' cycles', d.batteries_per_flight != null && d.batteries_per_flight + '/flight'].filter(Boolean).join(' · ')}</div>
+            {d.purchase_price != null && <div className="spray-muted">Paid {money(d.purchase_price)} with 3 batteries + charging station</div>}
+            {d.warranty_end && (() => {
+              const days = Math.round((Date.parse(d.warranty_end + 'T12:00:00Z') - Date.parse(todayYmd() + 'T12:00:00Z')) / 86400000)
+              return <div className={days < 0 ? 'spray-muted' : days <= 30 ? 'spray-warnline' : 'spray-okline'}>
+                {days < 0 ? 'Warranty ended ' + longDay(d.warranty_end) : 'Warranty until ' + longDay(d.warranty_end) + ' · ' + days + ' day' + (days === 1 ? '' : 's') + ' left'}
+                <span className="spray-muted"> (activated {longDay(d.activated)})</span></div>
+            })()}
+          </div>
+          <div className="spray-row" style={{ margin: 0 }}>
+            <button className={openLog === d.id ? 'active' : ''} onClick={() => setOpenLog(openLog === d.id ? '' : d.id)}>
+              Maintenance ({maint.filter((m) => m.drone_id === d.id && m.status !== 'void').length})</button>
+            <button disabled={busy} onClick={() => setForm(Object.assign({}, blank, d))}>Edit</button>
+            <button className="spray-danger" disabled={busy} onClick={() => window.confirm('Delete ' + d.name + '? Flight records already saved keep its details.') && go({ action: 'deleteDrone', id: d.id }, 'Deleted ' + d.name)}>Delete</button>
+          </div>
+          {openLog === d.id && <MaintLog drone={d} list={maint.filter((m) => m.drone_id === d.id)} kinds={kinds} run={run} say={say} setMaint={setMaint} />}
+        </div>
+      )) : <div className="spray-empty">No drones yet. Add them above so pilots can pick the one they flew on the Done form.</div>}
+    </div>
+  )
+}
+
+// One drone's maintenance log: add an entry, void one (kept on file with the reason).
+function MaintLog({ drone, list, kinds, run, say, setMaint }) {
+  const blank = { date: todayYmd(), kind: 'Repair', what: '', by: '', cost: '' }
+  const [f, setF] = useState(blank)
+  const [busy, setBusy] = useState(false)
+  const set = (k) => (e) => { const v = e.target.value; setF((x) => Object.assign({}, x, { [k]: v })) }
+  const add = async () => {
+    setBusy(true)
+    try { const r = await run(Object.assign({ action: 'addMaint', droneId: drone.id }, f)); setMaint(r.maint || []); setF(blank); say('Added to ' + drone.name + '\'s log') } catch (e) { /* shown */ }
+    setBusy(false)
+  }
+  const voidIt = async (m) => {
+    const why = window.prompt('Void this entry? It stays on file, marked void. Why?')
+    if (!why) return
+    try { const r = await run({ action: 'voidMaint', id: m.id, reason: why }); setMaint(r.maint || []); say('Entry voided') } catch (e) { /* shown */ }
+  }
+  return (
+    <div className="spray-maint">
+      <div className="spray-form">
+        <label>Date<input type="date" value={f.date} max={todayYmd()} onChange={set('date')} /></label>
+        <label>Type<select value={f.kind} onChange={set('kind')}>{(kinds.length ? kinds : ['Repair', 'Other']).map((k) => <option key={k}>{k}</option>)}</select></label>
+        <label>Done by<input value={f.by} onChange={set('by')} placeholder="name or shop" /></label>
+        <label>Cost ($)<input type="number" min="0" step="0.01" inputMode="decimal" value={f.cost} onChange={set('cost')} /></label>
+        <label className="wide">What was done<input value={f.what} onChange={set('what')} maxLength={500} placeholder="e.g. replaced arm 3 after a hard landing, firmware 02.01.0400" /></label>
+      </div>
+      <div className="spray-row"><button className="save" disabled={busy} onClick={add}>Add to log</button></div>
+      {list.length ? list.map((m) => (
+        <div className={'spray-maintrow' + (m.status === 'void' ? ' void' : '')} key={m.id}>
+          <div><b>{fmtDay(m.date)}</b> · {m.kind}{m.cost != null ? ' · ' + money(m.cost) : ''}{m.by ? ' · ' + m.by : ''}
+            <div>{m.what}</div>
+            {m.status === 'void' && <div className="spray-muted">Void: {(m.void && m.void.reason) || ''}</div>}</div>
+          {m.status !== 'void' && <button className="spray-danger" onClick={() => voidIt(m)}>Void</button>}
+        </div>
+      )) : <div className="spray-muted">Nothing logged yet.</div>}
     </div>
   )
 }
@@ -622,6 +776,7 @@ export function SprayCrew({ code }) {
   const [error, setError] = useState(null)
   const [open, setOpen] = useState({})
   const [showDone, setShowDone] = useState(false)
+  const [tab, setTab] = useState('schedule')   // Ag Rows links: Schedule | Records
   const [toast, setToast] = useState(null)
   const toastTimer = useRef(null)
   const say = (msg, undo) => {
@@ -651,8 +806,15 @@ export function SprayCrew({ code }) {
       return r
     } catch (e) { say(e.message || String(e)); throw e }
   }
+  const [flightFor, setFlightFor] = useState(null)
+  const finish = async (j, flight) => {
+    const r = (await crewCall({ code, action: 'done', jobKey: j.job_key, flight })).data
+    setData((d) => Object.assign({}, d, { jobs: r.jobs }))
+    say(doneMessage(j, r), async () => { await run('undo', j); say('Back on the schedule') })
+  }
   const actions = {
-    done: async (j) => { await run('done', j); say('Done: ' + j.field, async () => { await run('undo', j); say('Back on the schedule') }) },
+    // drone pilots fill in the flight log on Done; Ag Rows is one tap
+    done: async (j) => { if (j.source === 'drone') setFlightFor(j); else { try { await finish(j) } catch (e) { say(e.message || String(e)) } } },
     undo: async (j) => { await run('undo', j); say('Back on the schedule') }
   }
   const byDate = (a, b) => (a.planned_date < b.planned_date ? -1 : a.planned_date > b.planned_date ? 1 : String(a.field).localeCompare(String(b.field)))
@@ -677,7 +839,14 @@ export function SprayCrew({ code }) {
       </div>
       {error && <div className="spray-error">{error}</div>}
       {!data && !error && <div className="spray-empty">Loading the spray schedule…</div>}
-      {data && (
+      {data && data.crew === 'ground' && (
+        <div className="spray-tabs">
+          <button className={tab === 'schedule' ? 'active' : ''} onClick={() => setTab('schedule')}>Schedule</button>
+          <button className={tab === 'records' ? 'active' : ''} onClick={() => setTab('records')}>Records</button>
+        </div>
+      )}
+      {data && tab === 'records' && <CrewRecords code={code} me={data.name} />}
+      {data && tab === 'schedule' && (
         <>
           <div className="spray-summary">
             <span><b>{data.name}</b> · {data.crew === 'drone' ? 'Drone crew' : 'Ag Rows'}</span>
@@ -702,12 +871,65 @@ export function SprayCrew({ code }) {
           )}
         </>
       )}
+      {flightFor && <FlightForm job={flightFor} me={data && data.name} pilots={(data && data.pilots) || []} drones={(data && data.drones) || []}
+        onSave={(flight) => finish(flightFor, flight)} onClose={() => setFlightFor(null)} />}
       {toast && (
         <div className="spray-toast">
           <span>{toast.msg}</span>
           {toast.undo && <button onClick={() => { const u = toast.undo; setToast(null); u() }}>Undo</button>}
         </div>
       )}
+    </div>
+  )
+}
+
+// Ag Rows crew link > Records: this year's Ag Rows applications (whole crew) and acres by operator.
+function CrewRecords({ code, me }) {
+  const [d, setD] = useState(null)
+  const [err, setErr] = useState('')
+  const [mineOnly, setMineOnly] = useState(false)
+  useEffect(() => { crewCall({ code, action: 'records' }).then((r) => setD(r.data)).catch((e) => setErr(e.message || String(e))) }, [code])
+  if (err) return <div className="spray-error">{err}</div>
+  if (!d) return <div className="spray-empty">Loading records…</div>
+  const all = d.records || []
+  const byOp = {}
+  all.forEach((r) => { const k = r.operator.name || 'Nobody assigned'; const o = byOp[k] = byOp[k] || { jobs: 0, acres: 0 }; o.jobs++; o.acres += Number(r.acres) || 0 })
+  const ops = Object.keys(byOp).sort((a, b) => byOp[b].acres - byOp[a].acres)
+  const total = all.reduce((t, r) => t + (Number(r.acres) || 0), 0)
+  const list = (mineOnly ? all.filter((r) => normName(r.operator.name) === normName(me)) : all).slice().reverse()
+  return (
+    <div>
+      <div className="spray-day">Acres by operator · {d.from.slice(0, 4)}</div>
+      <div className="spray-box spray-acres">
+        {ops.map((k) => (
+          <div key={k} className={normName(k) === normName(me) ? 'me' : ''}>
+            <span>{k}</span>
+            <span className="bar"><i style={{ width: (total ? Math.max(3, byOp[k].acres / total * 100) : 0) + '%' }} /></span>
+            <b>{Math.round(byOp[k].acres).toLocaleString()} ac</b><span className="spray-muted">{byOp[k].jobs} job{byOp[k].jobs === 1 ? '' : 's'}</span>
+          </div>
+        ))}
+        {!ops.length && <div className="spray-muted">Nothing done yet this year.</div>}
+        {ops.length > 0 && <div className="tot"><span>All Ag Rows</span><span /><b>{Math.round(total).toLocaleString()} ac</b><span className="spray-muted">{all.length} jobs</span></div>}
+      </div>
+      <div className="spray-bar" style={{ marginTop: 10 }}>
+        <div className="spray-seg">
+          <button className={!mineOnly ? 'active' : ''} onClick={() => setMineOnly(false)}>Everyone</button>
+          <button className={mineOnly ? 'active' : ''} onClick={() => setMineOnly(true)}>Just mine</button>
+        </div>
+      </div>
+      {list.map((r, i) => (
+        <div key={r.id}>
+          {(i === 0 || list[i - 1].date !== r.date) && <div className="spray-day">{fmtDay(r.date)}</div>}
+          <div className="spray-hidden">
+            <div>
+              <b>{r.site.field}</b> <span className="spray-muted">{[r.job_type === 'Spread' ? 'Spread' : 'Spray', r.site.farm, r.site.crop].filter(Boolean).join(' · ')}</span>
+              <div className="spray-muted">{[r.operator.name || 'Nobody assigned', r.done_time ? 'done ' + t12(r.done_time) : '', r.products.map((p) => p.name).join(', ')].filter(Boolean).join(' · ')}</div>
+            </div>
+            <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><b>{Math.round(Number(r.acres) || 0).toLocaleString()} ac</b>{r.gallons ? <div className="spray-muted">{Math.round(r.gallons).toLocaleString()} gal</div> : null}</div>
+          </div>
+        </div>
+      ))}
+      {!list.length && <div className="spray-empty">No records yet.</div>}
     </div>
   )
 }
@@ -853,14 +1075,14 @@ function shiftMonth(m, n) {
 }
 const mondayOf = (ymd) => { const wd = new Date(ymd + 'T12:00:00Z').getUTCDay(); return addDays(ymd, -((wd + 6) % 7)) }
 
-function Calendar({ jobs, ops, isAdmin, run, say }) {
+function Calendar({ jobs, ops, isAdmin, run, say, openFlight }) {
   const today = todayYmd()
   const [month, setMonth] = useState(monthStart(today))
   const [sel, setSel] = useState(today)
   const [crew, setCrew] = useState('all')
   const [open, setOpen] = useState({})
   const [over, setOver] = useState('')
-  const actions = jobActions(run, say)
+  const actions = jobActions(run, say, openFlight)
   const dateOf = (j) => (j.done ? (j.done.completed_date || j.planned_date) : j.planned_date)
   const live = jobs.filter((j) => !j.hidden && (crew === 'all' || j.source === crew))
   const by = {}
@@ -935,6 +1157,393 @@ function Calendar({ jobs, ops, isAdmin, run, say }) {
             open={!!open[j.job_key]} onToggle={() => toggle(j.job_key)} actions={actions} />
         </div>
       )) : <div className="spray-empty">No jobs this day.</div>}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Flight log on Done (drone jobs): saves the application record + logbook entry
+// (functions/sprayRecords.js). The server adds the weather at the field pin, the products and EPA
+// numbers from AgWorld, and the pilot's license / FAA numbers and the drone's registration.
+// ---------------------------------------------------------------------------
+const hhmm = (d) => String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0')
+// initial: an existing record's values (Reports > Correct); askReason: a correction needs a reason.
+function FlightForm({ job, me, pilots, drones, onSave, onClose, initial, askReason, title }) {
+  const now = new Date()
+  const firstPilot = (job.operator && pilots.find((p) => normName(p.name) === normName(job.operator))) ||
+    (me && pilots.find((p) => normName(p.name) === normName(me))) || (pilots.length === 1 ? pilots[0] : null)
+  // The drone is picked for each job (pilots switch drones), so it starts blank.
+  const [f, setF] = useState(Object.assign({
+    pilot: firstPilot ? firstPilot.name : '', drone: '', date: todayYmd(),
+    start: hhmm(new Date(now.getTime() - 2 * 3600000)), end: hhmm(now), flights: '', acres: String(job.acres || ''), notes: '', reason: ''
+  }, initial || {}))
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const set = (k) => (e) => { const v = e.target.value; setF((x) => Object.assign({}, x, { [k]: v })) }
+  const save = async (e) => {
+    e.preventDefault(); setErr(''); setBusy(true)
+    try { await onSave(Object.assign({}, f, { flights: Number(f.flights), acres: Number(f.acres) })); onClose() }
+    catch (x) { setErr(x.message || String(x)) }
+    setBusy(false)
+  }
+  const products = Array.isArray(job.product_detail) ? job.product_detail : []
+  const listed = (arr, v) => !v || arr.some((x) => x.name === v)
+  return (
+    // On document.body so it covers the whole screen (theme.css dark mode filters the page, which
+    // would pin a fixed box to the Spray area); class "spray" brings Spray's colours along.
+    createPortal(<div className="spray spray-modal" onClick={onClose}>
+      <form className="spray-modal-box" onClick={(e) => e.stopPropagation()} onSubmit={save}>
+        <div className="spray-field" style={{ fontSize: 22 }}>{cropEmoji(job.crop)} {job.field}</div>
+        <div className="spray-muted">{[title || 'Flight log', job.acres ? (Number(job.acres) || 0).toLocaleString() + ' ac on the job' : '', job.farm].filter(Boolean).join(' · ')}</div>
+        <div className="spray-form" style={{ marginTop: 10 }}>
+          <label>Pilot<select value={f.pilot} onChange={set('pilot')} required>
+            <option value="">{pilots.length ? 'Pick the pilot' : 'No drone pilots on the Operators tab'}</option>
+            {!listed(pilots, f.pilot) && <option value={f.pilot}>{f.pilot}</option>}
+            {pilots.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
+          </select></label>
+          <label>Drone flown<select value={f.drone} onChange={set('drone')} required>
+            <option value="">{drones.length ? 'Pick the drone' : 'No drones on the Drones tab'}</option>
+            {!listed(drones, f.drone) && <option value={f.drone}>{f.drone}</option>}
+            {drones.map((d) => <option key={d.name} value={d.name}>{d.name}{d.model ? ' · ' + d.model : ''}</option>)}
+          </select></label>
+          <label>Date flown<input type="date" value={f.date} max={todayYmd()} onChange={set('date')} required /></label>
+          <label>Started<input type="time" value={f.start} onChange={set('start')} required /></label>
+          <label>Finished<input type="time" value={f.end} onChange={set('end')} required /></label>
+          <label>Flights<input type="number" min="1" max="300" inputMode="numeric" placeholder="battery sets flown" value={f.flights} onChange={set('flights')} required /></label>
+          <label>Acres sprayed<input type="number" min="0.1" step="0.1" inputMode="decimal" value={f.acres} onChange={set('acres')} required /></label>
+          <label className="wide">Notes <span className="spray-muted">(optional: skipped areas, drift concerns, buffer zones…)</span><input value={f.notes} onChange={set('notes')} maxLength={500} /></label>
+          {askReason && <label className="wide">Why it's being corrected <span className="spray-muted">(kept in the record's history)</span><input value={f.reason} onChange={set('reason')} minLength={4} maxLength={300} required /></label>}
+        </div>
+        {(() => { const p = pilots.find((x) => x.name === f.pilot); return p && p.license_exp && p.license_exp < f.date
+          ? <div className="spray-error" style={{ marginTop: 6 }}>⚠ {p.name}'s Idaho applicator license expired {fmtDay(p.license_exp)}. The record will be flagged.</div> : null })()}
+        {!initial && <div className="spray-muted" style={{ marginTop: 8 }}>
+          Saved with the record automatically: the weather at the field for the hours flown, {products.length ? products.map((p) => p.name + (p.rate ? ' ' + p.rate : '')).join(', ') : 'the products'} from AgWorld with EPA numbers and amounts, the pilot's license and FAA numbers, and the drone's registration.
+        </div>}
+        {err && <div className="spray-error" style={{ marginTop: 8 }}>{err}</div>}
+        <div className="spray-row" style={{ marginTop: 12 }}>
+          <button type="submit" className="save" disabled={busy}>{busy ? 'Saving…' : initial ? 'Save correction' : job.done ? 'Save flight log' : 'Save & mark done'}</button>
+          <button type="button" disabled={busy} onClick={onClose}>Cancel</button>
+        </div>
+      </form>
+    </div>, document.body)
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Reports tab (Spray admins): State (Idaho application records) and FAA (Part 137 records,
+// pilot logbooks, drone logbooks), built from the saved flight records (functions/sprayRecords.js).
+// Laid out as printed reports; Print gives a clean paper copy for an inspector.
+// ---------------------------------------------------------------------------
+const hrs = (min) => (Math.round((Number(min) || 0) / 6) / 10).toFixed(1)
+const sum = (list, k) => list.reduce((t, r) => t + (Number(r[k]) || 0), 0)
+const acresTxt = (n) => (Math.round((Number(n) || 0) * 10) / 10).toLocaleString()
+const t12 = (hm) => { if (!hm) return ''; const [h, m] = hm.split(':').map(Number); return ((h + 11) % 12 + 1) + ':' + String(m).padStart(2, '0') + (h < 12 ? ' am' : ' pm') }
+// weather on a record: the range over the hours sprayed (older records have a single reading)
+const windTxt = (w) => (!w || !w.ok ? 'not recorded' : (w.wind_low_mph != null && w.wind_low_mph !== w.wind_mph ? w.wind_low_mph + '–' : '') + w.wind_mph + ' mph from ' + w.dir +
+  (w.gust_mph != null ? ' (gusts ' + w.gust_mph + ')' : '') + (w.window ? ' · ' + w.window.split('–').map(t12).join('–') : ''))
+const tempTxt = (w) => (!w || !w.ok ? '—' : (w.temp_low_f != null && w.temp_low_f !== w.temp_f ? w.temp_low_f + '–' : '') + w.temp_f + '°F · ' +
+  (w.humidity_high_pct != null && w.humidity_high_pct !== w.humidity_pct ? w.humidity_pct + '–' + w.humidity_high_pct : w.humidity_pct) + '% humidity')
+const hoursTxt = (w) => (w && w.hours && w.hours.length > 1 ? w.hours.map((h) => t12(h.t) + ' ' + h.wind + (h.gust != null ? 'g' + h.gust : '') + ' ' + h.dir).join(' · ') : '')
+const money = (n) => '$' + Number(n).toLocaleString(undefined, { minimumFractionDigits: Number(n) % 1 ? 2 : 0, maximumFractionDigits: 2 })
+const longDay = (ymd) => (ymd ? new Date(ymd + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) : '')
+
+function Reports({ run, say, pilots, drones }) {
+  const yr = todayYmd().slice(0, 4)
+  const [from, setFrom] = useState(yr + '-01-01')
+  const [to, setTo] = useState(todayYmd())
+  const [data, setData] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [section, setSection] = useState('state')   // state | faa
+  const [faa, setFaa] = useState('ops')              // ops | pilots | drones
+  const [pilot, setPilot] = useState('')
+  const [drone, setDrone] = useState('')
+  const [showVoid, setShowVoid] = useState(false)
+  const [bookPilot, setBookPilot] = useState('')    // the one pilot (or drone) whose logbook is showing
+  const [bookDrone, setBookDrone] = useState('')
+  const [gOp, setGOp] = useState('')
+  const [form, setForm] = useState(null)              // { job, initial?, save }
+  const [hist, setHist] = useState({})
+  const load = async () => {
+    setBusy(true)
+    try { setData(await run({ action: 'listFlights', from, to })) } catch (e) { /* shown */ }
+    setBusy(false)
+  }
+  useEffect(() => { load() }, [from, to])
+  const all = (data && data.flights) || []
+  // in a logbook view, the logbook picker chooses the pilot / drone instead of the filter
+  const usePilot = section === 'faa' && faa === 'pilots' ? '' : pilot, useDrone = section === 'faa' && faa === 'drones' ? '' : drone
+  const recs = all.filter((r) => (showVoid || r.status !== 'void') && (!usePilot || r.pilot.name === usePilot) && (!useDrone || r.drone.name === useDrone))
+  const live = recs.filter((r) => r.status !== 'void')
+  const co = (data && data.company) || { name: 'JK Farms', address: '20511 F Street, Rupert, ID 83350' }
+  const period = longDay(from) + ' – ' + longDay(to)
+  const pilotNames = [...new Set(all.map((r) => r.pilot.name))].sort()
+  const droneNames = [...new Set(all.map((r) => r.drone.name))].sort()
+  const activeDrones = drones.filter((d) => d.active !== false)
+
+  const correct = (r) => setForm({
+    job: { field: r.site.field, farm: r.site.farm, crop: r.site.crop, acres: r.job_acres },
+    initial: { pilot: r.pilot.name, drone: r.drone.name, date: r.date, start: r.start, end: r.end, flights: String(r.flights), acres: String(r.acres), notes: r.notes || '' },
+    save: async (f) => { const x = await run({ action: 'editFlight', id: r.id, reason: f.reason, changes: { pilot: f.pilot, drone: f.drone, date: f.date, start: f.start, end: f.end, flights: f.flights, acres: f.acres, notes: f.notes } }); say(x.unchanged ? 'Nothing changed' : 'Record corrected'); await load() }
+  })
+  const voidIt = async (r) => {
+    const why = window.prompt('Void the ' + r.site.field + ' record from ' + longDay(r.date) + '? It stays on file, marked void. Why?')
+    if (!why) return
+    try { await run({ action: 'voidFlight', id: r.id, reason: why }); say('Record voided'); await load() } catch (e) { /* shown */ }
+  }
+  const addLog = (u) => setForm({
+    job: { field: u.field, farm: u.farm, crop: u.crop, acres: u.acres, product_detail: u.product_detail, operator: u.operator, done: true },
+    save: async (f) => { const x = await run({ action: 'logFlight', jobKey: u.job_key, flight: f }); say('Flight log saved' + (x.missing && x.missing.length ? ' · missing: ' + x.missing.join(', ') : '')); await load() }
+  })
+
+  const Head = ({ title, sub }) => (
+    <div className="rp-head">
+      <div><div className="rp-co">{co.name}</div><div className="rp-addr">{co.address}</div></div>
+      <div className="rp-title"><b>{title}</b><div>{sub}</div><div>{period}{usePilot ? ' · pilot ' + usePilot : ''}{useDrone ? ' · drone ' + useDrone : ''}</div></div>
+    </div>
+  )
+  const Missing = ({ r }) => (r.missing && r.missing.length ? <div className="rp-miss">Missing: {r.missing.join(', ')}</div> : null)
+  const Tools = ({ r }) => (
+    <div className="rp-tools no-print">
+      <button onClick={() => setHist((h) => Object.assign({}, h, { [r.id]: !h[r.id] }))}>History ({(r.history || []).length})</button>
+      {r.status !== 'void' && <button onClick={() => correct(r)}>Correct</button>}
+      {r.status !== 'void' && <button className="spray-danger" onClick={() => voidIt(r)}>Void</button>}
+    </div>
+  )
+  const History = ({ r }) => (hist[r.id] ? (
+    <div className="rp-hist">
+      {(r.history || []).map((h, i) => (
+        <div key={i}>{new Date(h.at).toLocaleString()} · {h.by} · {h.what}{h.reason ? ' — ' + h.reason : ''}
+          {h.changes ? ' (' + Object.keys(h.changes).map((k) => k + ': ' + h.changes[k][0] + ' → ' + h.changes[k][1]).join('; ') + ')' : ''}</div>
+      ))}
+    </div>) : null)
+  const Foot = ({ r }) => <div className="rp-foot">Record {r.id} · entered by {r.entered_by} ({r.entered_via}) {r.entered_at ? new Date(r.entered_at).toLocaleString() : ''}{(r.history || []).length > 1 ? ' · corrected ' + (r.history.length - 1) + '×' : ''}</div>
+
+  // ---- State: one Idaho application record per flight log ----
+  const StateReport = () => (
+    <div className="rp">
+      <Head title="Pesticide Application Records" sub="Idaho · IDAPA 02.03.03 · keep 2 years" />
+      <div className="rp-sum">{live.length} application{live.length === 1 ? '' : 's'} · {acresTxt(sum(live, 'acres'))} acres treated · method: aerial, unmanned aircraft (drone)</div>
+      {recs.map((r) => (
+        <div className={'rp-rec' + (r.status === 'void' ? ' void' : '')} key={r.id}>
+          <div className="rp-rechead"><b>{longDay(r.date)} · {r.site.field}</b><span>{r.site.farm}{r.status === 'void' ? ' · VOID: ' + ((r.void && r.void.reason) || '') : ''}</span></div>
+          <div className="rp-grid">
+            <div><i>Applied for</i>{r.applied_for.name}, {r.applied_for.address}{r.applied_for.farm ? ' (' + r.applied_for.farm + ')' : ''}</div>
+            <div><i>Crop / site</i>{r.site.crop || '—'}</div>
+            <div><i>Location</i>{r.site.field}{r.site.farm ? ', ' + r.site.farm : ''}{r.site.lat != null ? ' · ' + Number(r.site.lat).toFixed(5) + ', ' + Number(r.site.lng).toFixed(5) : ''}</div>
+            <div><i>Size treated</i>{acresTxt(r.acres)} ac{r.job_acres && r.job_acres !== r.acres ? ' (of ' + acresTxt(r.job_acres) + ' ac)' : ''}</div>
+            <div><i>Date &amp; time</i>{longDay(r.date)}, {t12(r.start)} – {t12(r.end)}</div>
+            <div><i>Wind</i>{windTxt(r.weather)}</div>
+            <div><i>Temp / humidity</i>{tempTxt(r.weather)}</div>
+            <div><i>Applicator</i>{r.pilot.name} · {r.pilot.license_type || 'Idaho license'} #{r.pilot.license_no || '—'}{r.pilot.license_cats ? ' (' + r.pilot.license_cats + ')' : ''}</div>
+            {r.pilot.supervisor && <div><i>Supervisor</i>{r.pilot.supervisor}</div>}
+            <div><i>Equipment</i>{r.drone.name} · {[r.drone.make, r.drone.model].filter(Boolean).join(' ')}{r.drone.faa_reg ? ' · FAA ' + r.drone.faa_reg : ''}</div>
+          </div>
+          <table className="rp-tbl">
+            <thead><tr><th>Brand name</th><th>EPA reg. no.</th><th>Rate</th><th>Total applied</th></tr></thead>
+            <tbody>{(r.products || []).length ? r.products.map((p, i) => <tr key={i}><td>{p.name}</td><td>{p.epa_reg_no || '—'}</td><td>{p.rate || '—'}</td><td>{p.total_applied || '—'}</td></tr>)
+              : <tr><td colSpan={4}>No products on the AgWorld job</td></tr>}</tbody>
+          </table>
+          {r.weather && r.weather.ok && <div className="rp-note">Weather: {r.weather.source}, pulled {new Date(r.weather.stamped_at).toLocaleString()}{hoursTxt(r.weather) ? ' · by hour (mph): ' + hoursTxt(r.weather) : ''}</div>}
+          {r.notes && <div className="rp-note">Notes: {r.notes}</div>}
+          <Missing r={r} /><Foot r={r} /><Tools r={r} /><History r={r} />
+        </div>
+      ))}
+      {!recs.length && <div className="rp-empty">No flight records in this period.</div>}
+    </div>
+  )
+
+  // ---- FAA: 14 CFR 137.71 operations record + pilot roster ----
+  const roster = [...new Map(live.map((r) => [r.pilot.name, r.pilot])).values()]
+  const OpsReport = () => (
+    <div className="rp">
+      <Head title="Agricultural Aircraft Operator Records" sub="14 CFR 137.71 · keep 12 months or more" />
+      <div className="rp-sec">Pilots</div>
+      <table className="rp-tbl">
+        <thead><tr><th>Name</th><th>Address</th><th>FAA certificate #</th><th>137.19(e) date</th></tr></thead>
+        <tbody>{roster.map((p) => <tr key={p.name}><td>{p.name}</td><td>{p.address}</td><td>{p.faa_cert || '—'}</td><td>{p.part137_date ? longDay(p.part137_date) : '—'}</td></tr>)}</tbody>
+      </table>
+      <div className="rp-sec">Operations ({live.length})</div>
+      <table className="rp-tbl">
+        <thead><tr><th>Date</th><th>Customer</th><th>Field</th><th>Material &amp; quantity</th><th>Pilot</th><th>Aircraft</th></tr></thead>
+        <tbody>{recs.map((r) => (
+          <tr key={r.id} className={r.status === 'void' ? 'void' : ''}>
+            <td>{longDay(r.date)}</td><td>{r.applied_for.name}<div className="rp-small">{r.applied_for.address}</div></td>
+            <td>{r.site.field}<div className="rp-small">{r.site.farm} · {acresTxt(r.acres)} ac</div></td>
+            <td>{(r.products || []).map((p, i) => <div key={i}>{p.name}: {p.total_applied || '—'}</div>)}</td>
+            <td>{r.pilot.name}</td><td>{r.drone.name}<div className="rp-small">{r.drone.faa_reg || 'no FAA reg'}</div></td>
+          </tr>))}</tbody>
+      </table>
+      {!recs.length && <div className="rp-empty">No flight records in this period.</div>}
+    </div>
+  )
+
+  // ---- FAA: logbooks, one person's (or one drone's) book at a time, totals up top ----
+  const Logbook = ({ kind }) => {
+    const key = (r) => (kind === 'pilot' ? r.pilot.name : r.drone.name)
+    const names = [...new Set(recs.map(key))].sort()
+    const pick = kind === 'pilot' ? bookPilot : bookDrone
+    const shown = names.indexOf(pick) >= 0 ? pick : names[0]
+    return (
+      <>
+      {names.length > 0 && <div className="rp-pick no-print">
+        <span>{kind === 'pilot' ? 'Logbook for' : 'Drone'}</span>
+        <select value={shown} onChange={(e) => (kind === 'pilot' ? setBookPilot : setBookDrone)(e.target.value)}>
+          {names.map((n) => <option key={n}>{n}</option>)}
+        </select>
+      </div>}
+      <div className="rp">
+        {names.filter((n) => n === shown).map((n) => {
+          const rows = recs.filter((r) => key(r) === n), ok = rows.filter((r) => r.status !== 'void')
+          const who = rows[rows.length - 1]
+          const dInfo = drones.find((d) => d.name === n) || {}
+          const cycles = dInfo.batteries_per_flight ? sum(ok, 'flights') * dInfo.batteries_per_flight : null
+          return (
+            <div className="rp-book" key={n}>
+              <Head title={kind === 'pilot' ? 'Pilot Logbook' : 'Aircraft Logbook'} sub={kind === 'pilot'
+                ? n + ' · FAA ' + (who.pilot.faa_cert || '—') + ' · Part 137 ' + (who.pilot.part137_date ? longDay(who.pilot.part137_date) : '—') + ' · ID ' + (who.pilot.license_no || '—')
+                : n + ' · ' + [who.drone.make, who.drone.model].filter(Boolean).join(' ') + ' · FAA ' + (who.drone.faa_reg || '—') + (who.drone.serial ? ' · S/N ' + who.drone.serial : '')} />
+              <div className="rp-totals">
+                <div><b>{new Set(ok.map((r) => r.date)).size}</b>days</div>
+                <div><b>{ok.length}</b>jobs</div>
+                <div><b>{sum(ok, 'flights')}</b>flights</div>
+                <div><b>{hrs(sum(ok, 'minutes'))}</b>hours</div>
+                <div><b>{acresTxt(sum(ok, 'acres'))}</b>acres</div>
+                {kind === 'drone' && cycles != null && <div><b>{cycles}</b>battery cycles</div>}
+                {kind === 'drone' && dInfo.acres_total != null && <div><b>{acresTxt(dInfo.acres_total)}</b>lifetime acres</div>}
+              </div>
+              <table className="rp-tbl">
+                <thead><tr><th>Date</th><th>Field</th><th>{kind === 'pilot' ? 'Aircraft' : 'Pilot'}</th><th>Time</th><th>Hrs</th><th>Flights</th><th>Acres</th><th>Notes</th></tr></thead>
+                <tbody>{rows.map((r) => (
+                  <tr key={r.id} className={r.status === 'void' ? 'void' : ''}>
+                    <td>{longDay(r.date)}</td><td>{r.site.field}<div className="rp-small">{r.site.farm}</div></td>
+                    <td>{kind === 'pilot' ? r.drone.name + (r.drone.faa_reg ? ' · ' + r.drone.faa_reg : '') : r.pilot.name}</td>
+                    <td>{t12(r.start)}–{t12(r.end)}</td><td>{hrs(r.minutes)}</td><td>{r.flights}</td><td>{acresTxt(r.acres)}</td>
+                    <td>{r.status === 'void' ? 'VOID' : r.notes || ''}</td>
+                  </tr>))}
+                  <tr className="rp-tot"><td colSpan={4}>Totals this period</td><td>{hrs(sum(ok, 'minutes'))}</td><td>{sum(ok, 'flights')}</td><td>{acresTxt(sum(ok, 'acres'))}</td><td></td></tr>
+                </tbody>
+              </table>
+              {kind === 'drone' && (() => {
+                const ml = ((data && data.maint) || []).filter((m) => m.drone === n && (showVoid || m.status !== 'void'))
+                return <>
+                  <div className="rp-sec">Maintenance ({ml.filter((m) => m.status !== 'void').length})</div>
+                  {ml.length ? <table className="rp-tbl">
+                    <thead><tr><th>Date</th><th>Type</th><th>What was done</th><th>By</th><th>Cost</th></tr></thead>
+                    <tbody>{ml.slice().reverse().map((m) => <tr key={m.id} className={m.status === 'void' ? 'void' : ''}><td>{longDay(m.date)}</td><td>{m.kind}</td><td>{m.what}</td><td>{m.by}</td><td>{m.cost != null ? money(m.cost) : ''}</td></tr>)}</tbody>
+                  </table> : <div className="rp-empty">No maintenance logged in this period.</div>}
+                </>
+              })()}
+              <div className="rp-sign">Reviewed by ______________________ &nbsp; Date __________</div>
+            </div>
+          )
+        })}
+        {!names.length && <div className="rp-empty">No flight records in this period.</div>}
+      </div>
+      </>
+    )
+  }
+
+  // ---- State: Ag Rows (ground) records, one per job; acres by operator up top ----
+  const [crewSec, setCrewSec] = useState('drone')   // State reports: drone | ground
+  const [gdata, setGdata] = useState(null)
+  const loadG = async () => { try { setGdata(await run({ action: 'listGround', from, to })) } catch (e) { /* shown */ } }
+  useEffect(() => { if (section === 'state' && crewSec === 'ground') loadG() }, [from, to, section, crewSec])
+  const voidG = async (r) => {
+    const why = window.prompt('Void the ' + r.site.field + ' record from ' + longDay(r.date) + '? It stays on file, marked void. Why?')
+    if (!why) return
+    try { await run({ action: 'voidGround', jobKey: r.job_key, reason: why }); say('Record voided'); await loadG() } catch (e) { /* shown */ }
+  }
+  const GroundReport = () => {
+    const all2 = (gdata && gdata.records) || []
+    const opNames = [...new Set(all2.map((r) => r.operator.name || '(nobody assigned)'))].sort()
+    const gr = all2.filter((r) => (showVoid || r.status !== 'void') && (!gOp || (r.operator.name || '(nobody assigned)') === gOp))
+    const live2 = gr.filter((r) => r.status !== 'void')
+    const acresOf = (r) => (r.agworld && r.agworld.acres != null ? Number(r.agworld.acres) : Number(r.acres) || 0)
+    const byOp = {}
+    live2.forEach((r) => { const k = r.operator.name || '(nobody assigned)'; const o = byOp[k] = byOp[k] || { jobs: 0, acres: 0, gallons: 0, spray: 0, spread: 0 }; o.jobs++; o.acres += acresOf(r); o.gallons += Number(r.agworld && r.agworld.gallons) || 0; if (r.job_type === 'Spread') o.spread += acresOf(r); else o.spray += acresOf(r) })
+    if (!gdata) return <div className="spray-empty">Loading Ag Rows records…</div>
+    return (
+      <>
+      <div className="rp-pick no-print"><span>Operator</span>
+        <select value={gOp} onChange={(e) => setGOp(e.target.value)}><option value="">All Ag Rows</option>{opNames.map((n) => <option key={n}>{n}</option>)}</select></div>
+      <div className="rp">
+        <Head title="Pesticide Application Records" sub={'Idaho · IDAPA 02.03.03 · keep 2 years · Ag Rows (ground)' + (gOp ? ' · ' + gOp : '')} />
+        <div className="rp-sec">Acres by operator</div>
+        <table className="rp-tbl">
+          <thead><tr><th>Operator</th><th>Jobs</th><th>Spray ac</th><th>Spread ac</th><th>Total ac</th><th>Gallons (AgWorld)</th></tr></thead>
+          <tbody>{Object.keys(byOp).sort().map((k) => <tr key={k}><td>{k}</td><td>{byOp[k].jobs}</td><td>{acresTxt(byOp[k].spray)}</td><td>{acresTxt(byOp[k].spread)}</td><td>{acresTxt(byOp[k].acres)}</td><td>{byOp[k].gallons ? Math.round(byOp[k].gallons).toLocaleString() : '—'}</td></tr>)}
+            <tr className="rp-tot"><td>Total</td><td>{live2.length}</td><td>{acresTxt(Object.values(byOp).reduce((t, o) => t + o.spray, 0))}</td><td>{acresTxt(Object.values(byOp).reduce((t, o) => t + o.spread, 0))}</td><td>{acresTxt(Object.values(byOp).reduce((t, o) => t + o.acres, 0))}</td><td>{Math.round(Object.values(byOp).reduce((t, o) => t + o.gallons, 0)).toLocaleString()}</td></tr></tbody>
+        </table>
+        <div className="rp-sec">Applications ({live2.length})</div>
+        {gr.map((r) => (
+          <div className={'rp-rec' + (r.status === 'void' ? ' void' : '')} key={r.id}>
+            <div className="rp-rechead"><b>{longDay(r.date)} · {r.site.field}</b><span>{[r.job_type === 'Spread' ? 'Spread' : 'Spray', r.site.farm, r.status === 'void' ? 'VOID: ' + ((r.void && r.void.reason) || '') : ''].filter(Boolean).join(' · ')}</span></div>
+            <div className="rp-grid">
+              <div><i>Applied for</i>{r.applied_for.name}, {r.applied_for.address}{r.applied_for.farm ? ' (' + r.applied_for.farm + ')' : ''}</div>
+              <div><i>Crop / site</i>{r.site.crop || '—'}</div>
+              <div><i>Location</i>{r.site.field}{r.site.farm ? ', ' + r.site.farm : ''}{r.site.lat != null ? ' · ' + Number(r.site.lat).toFixed(5) + ', ' + Number(r.site.lng).toFixed(5) : ''}</div>
+              <div><i>Size treated</i>{acresTxt(acresOf(r))} ac{r.agworld && r.agworld.acres != null ? ' (AgWorld actual)' : ''}</div>
+              <div><i>Date &amp; time</i>{longDay(r.date)}{r.done_time ? ', done ' + t12(r.done_time) : ' · time not recorded'}</div>
+              <div><i>Wind</i>{windTxt(r.weather)}</div>
+              <div><i>Temp / humidity</i>{tempTxt(r.weather)}</div>
+              {r.agworld && r.agworld.conditions && <div><i>Conditions in AgWorld</i>{r.agworld.conditions}</div>}
+              {r.agworld && r.agworld.gallons != null && <div><i>Spray volume (AgWorld)</i>{Math.round(r.agworld.gallons).toLocaleString()} gal{r.agworld.gpa ? ' · ' + r.agworld.gpa + ' gal/ac' : ''}</div>}
+              <div><i>Applicator</i>{r.operator.name || '—'} · {r.operator.license_type || 'Idaho license'} #{r.operator.license_no || '—'}{r.operator.license_cats ? ' (' + r.operator.license_cats + ')' : ''}</div>
+              {r.operator.supervisor && <div><i>Supervisor</i>{r.operator.supervisor}</div>}
+              <div><i>Method</i>Ground application (Ag Rows)</div>
+            </div>
+            <table className="rp-tbl">
+              <thead><tr><th>Brand name</th><th>EPA reg. no.</th><th>Rate</th><th>Total applied</th></tr></thead>
+              <tbody>{(r.products || []).length ? r.products.map((p, i) => <tr key={i}><td>{p.name}</td><td>{p.epa_reg_no || '—'}</td><td>{p.rate || '—'}</td><td>{p.total_applied || '—'}</td></tr>)
+                : <tr><td colSpan={4}>No products on the AgWorld job</td></tr>}</tbody>
+            </table>
+            {r.weather && r.weather.ok && <div className="rp-note">Weather: {r.weather.source}, for the hour before Done{hoursTxt(r.weather) ? ' · by hour (mph): ' + hoursTxt(r.weather) : ''}</div>}
+            <Missing r={r} />
+            {!r.from_agworld_only && <Foot r={r} />}
+            {!r.from_agworld_only && r.status !== 'void' && <div className="rp-tools no-print"><button className="spray-danger" onClick={() => voidG(r)}>Void</button></div>}
+          </div>
+        ))}
+        {!gr.length && <div className="rp-empty">No Ag Rows records in this period.</div>}
+      </div>
+      </>
+    )
+  }
+
+  const unlogged = (data && data.unlogged) || []
+  return (
+    <div>
+      <div className="spray-subtabs no-print">
+        <button className={section === 'state' ? 'active' : ''} onClick={() => setSection('state')}>State reports</button>
+        <button className={section === 'faa' ? 'active' : ''} onClick={() => setSection('faa')}>FAA reports</button>
+      </div>
+      {section === 'state' && <div className="spray-seg no-print" style={{ marginBottom: 10 }}>
+        {[['drone', 'Drone'], ['ground', 'Ag Rows']].map(([k, l]) => <button key={k} className={crewSec === k ? 'active' : ''} onClick={() => setCrewSec(k)}>{l}</button>)}
+      </div>}
+      {section === 'faa' && <div className="spray-seg no-print" style={{ marginBottom: 10 }}>
+        {[['ops', 'Part 137 records'], ['pilots', 'Pilot logbooks'], ['drones', 'Drone logbooks']].map(([k, l]) =>
+          <button key={k} className={faa === k ? 'active' : ''} onClick={() => setFaa(k)}>{l}</button>)}
+      </div>}
+      <div className="spray-box rp-ctl no-print">
+        <label>From<input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} /></label>
+        <label>To<input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} /></label>
+        {!(section === 'faa' && faa === 'pilots') && !(section === 'state' && crewSec === 'ground') && <label>Pilot<select value={pilot} onChange={(e) => setPilot(e.target.value)}><option value="">All</option>{pilotNames.map((n) => <option key={n}>{n}</option>)}</select></label>}
+        {!(section === 'faa' && faa === 'drones') && !(section === 'state' && crewSec === 'ground') && <label>Drone<select value={drone} onChange={(e) => setDrone(e.target.value)}><option value="">All</option>{droneNames.map((n) => <option key={n}>{n}</option>)}</select></label>}
+        <label className="check"><input type="checkbox" checked={showVoid} onChange={(e) => setShowVoid(e.target.checked)} /> Show voided</label>
+        <button className="save" onClick={() => window.print()}>Print / save PDF</button>
+      </div>
+      {unlogged.length > 0 && !(section === 'state' && crewSec === 'ground') && <div className="spray-box rp-warn no-print">
+        <b>⚠ Drone jobs done with no flight log ({unlogged.length})</b>
+        <div className="spray-muted">These were closed (in AgWorld or before flight logs) without a record. Add the flight log so the records are complete.</div>
+        {unlogged.map((u) => (
+          <div className="spray-hidden" key={u.job_key}>
+            <div><b>{u.field}</b> <span className="spray-muted">{[u.farm, u.acres ? u.acres + ' ac' : '', 'done ' + fmtDay(u.completed_date), u.entered_by === 'AgWorld' ? 'closed in AgWorld' : '', u.operator].filter(Boolean).join(' · ')}</span></div>
+            <button className="save" onClick={() => addLog(u)}>Add flight log</button>
+          </div>))}
+      </div>}
+      {busy && !data ? <div className="spray-empty">Loading records…</div>
+        : section === 'state' ? (crewSec === 'ground' ? <GroundReport /> : <StateReport />) : faa === 'ops' ? <OpsReport /> : <Logbook kind={faa === 'pilots' ? 'pilot' : 'drone'} />}
+      {form && <FlightForm job={form.job} pilots={pilots} drones={activeDrones} initial={form.initial} askReason={!!form.initial}
+        title={form.initial ? 'Correct flight record' : 'Add flight log'} onSave={form.save} onClose={() => setForm(null)} />}
     </div>
   )
 }
