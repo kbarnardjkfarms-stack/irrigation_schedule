@@ -3272,6 +3272,14 @@ const agrimet = require('./agrimet');
 exports.archiveAgrimetNightly = agrimet.archiveAgrimetNightly;
 exports.archiveAgrimetNow = agrimet.archiveAgrimetNow;
 
+// Open-Meteo forecast archive (paid Standard plan): saves each station's
+// day-by-day forecast and ET0 every morning so we can compare it with
+// AgriMet's measured ETr and work out the grass-to-alfalfa conversion. Does
+// not change the ET column. Own file, see openMeteo.js.
+const openMeteo = require('./openMeteo');
+exports.archiveOpenMeteoNightly = openMeteo.archiveOpenMeteoNightly;
+exports.archiveOpenMeteoNow = openMeteo.archiveOpenMeteoNow;
+
 // Field history links by location (old Agworld field outlines overlapped
 // with today's). Lives in its own file — see fieldLineage.js.
 const fieldLineageExports = require('./fieldLineage').makeExports(AGWORLD_TOKEN, MIN_SEASON_YEAR);
