@@ -120,27 +120,32 @@ function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabe
         placeholder="(208) 555-0123"
         style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #ccc', marginBottom: '10px' }}
       />
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '6px' }}>
-        <input
-          type="checkbox"
-          id="receiveTextAlerts"
-          checked={!!form.phone && form.receiveTextAlerts === true}
-          onChange={(e) => setForm((f) => ({ ...f, receiveTextAlerts: e.target.checked }))}
-          disabled={!form.phone}
-          style={{ margin: '2px 0 0 0', flexShrink: 0 }}
-        />
-        <label htmlFor="receiveTextAlerts" style={{ fontSize: '12px', lineHeight: 1.45, color: form.phone ? '#000' : '#888' }}>
-          I agree to receive recurring text messages (SMS) from Jentzsch-Kearl Farms, a Tree Source company, at this
-          number. The texts are internal irrigation and equipment alerts for farm staff only, for example when a pivot
-          has stopped moving while running. Message frequency varies. Msg &amp; data rates may apply. Reply STOP to opt
-          out, HELP for help. Agreeing is optional.{!form.phone && ' (Add a phone number first.)'}
-        </label>
-      </div>
-      <div style={{ fontSize: '11px', color: '#888', margin: '0 0 14px 22px' }}>
-        <a href="https://treesource.com/terms" target="_blank" rel="noopener noreferrer">Terms</a>
-        {' \u00b7 '}
-        <a href="https://treesource.com/privacy-policy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
-      </div>
+      {/* The text-message agreement is not shown when adding a new user; it stays on the edit form so an existing user's texts can still be turned off. */}
+      {!emailEditable && (
+        <>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '6px' }}>
+          <input
+            type="checkbox"
+            id="receiveTextAlerts"
+            checked={!!form.phone && form.receiveTextAlerts === true}
+            onChange={(e) => setForm((f) => ({ ...f, receiveTextAlerts: e.target.checked }))}
+            disabled={!form.phone}
+            style={{ margin: '2px 0 0 0', flexShrink: 0 }}
+          />
+          <label htmlFor="receiveTextAlerts" style={{ fontSize: '12px', lineHeight: 1.45, color: form.phone ? '#000' : '#888' }}>
+            I agree to receive recurring text messages (SMS) from Jentzsch-Kearl Farms, a Tree Source company, at this
+            number. The texts are internal irrigation and equipment alerts for farm staff only, for example when a pivot
+            has stopped moving while running. Message frequency varies. Msg &amp; data rates may apply. Reply STOP to opt
+            out, HELP for help. Agreeing is optional.{!form.phone && ' (Add a phone number first.)'}
+          </label>
+        </div>
+        <div style={{ fontSize: '11px', color: '#888', margin: '0 0 14px 22px' }}>
+          <a href="https://treesource.com/terms" target="_blank" rel="noopener noreferrer">Terms</a>
+          {' \u00b7 '}
+          <a href="https://treesource.com/privacy-policy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+        </div>
+        </>
+      )}
       <div className="editor-label">Role</div>
       <select
         value={form.role}
