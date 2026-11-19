@@ -4,6 +4,7 @@ import App from './App.jsx'
 import PublicScheduleView from './PublicScheduleView.jsx'
 import { SprayCrew } from './Spray.jsx'
 import './styles.css'
+import './theme.css' // light / dark mode from the device setting
 // (flat layout: no src/ folder — everything lives at the project root)
 
 // A /watch/<farm-slug> URL renders the no-login, view-only irrigator page

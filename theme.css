@@ -1,0 +1,38 @@
+/* Light / dark mode for the whole of AIO, following the phone or computer's
+   own setting (prefers-color-scheme) — nothing to switch in the app.
+
+   AIO's screens colour themselves with ~2,400 fixed colours (styles.css and
+   inline styles), so dark mode flips the page's lightness in one place:
+   white cards turn near-black, dark text turns light, and the hue turn puts
+   greens, blues, team and crop colours back to roughly their own hue.
+   Anything that's a picture of the real world — photos, map tiles, video,
+   canvas drawings — is flipped back so it looks normal, and the Spray
+   module (already dark by design) is left as it is.
+
+   Rules for new screens: nothing needed — just don't set a filter on html. To
+   keep something exactly as drawn in dark mode, give it the class
+   "keep-colors". To keep AIO light on one device, set html[data-theme="light"]. */
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) {
+    filter: invert(0.92) hue-rotate(180deg);
+    background: #f7f5f0; /* flips to the dark page colour */
+  }
+  /* flip real-world content back */
+  html:not([data-theme="light"]) img,
+  html:not([data-theme="light"]) video,
+  html:not([data-theme="light"]) canvas,
+  html:not([data-theme="light"]) picture,
+  html:not([data-theme="light"]) iframe,
+  html:not([data-theme="light"]) .leaflet-container,
+  html:not([data-theme="light"]) .spray,
+  html:not([data-theme="light"]) .keep-colors {
+    filter: invert(1) hue-rotate(180deg);
+  }
+  /* already flipped back by a parent above — don't flip twice */
+  html:not([data-theme="light"]) :is(.leaflet-container, .spray, .keep-colors) :is(img, video, canvas, picture, iframe, .leaflet-container, .keep-colors) {
+    filter: none;
+  }
+  /* soft edges instead of glow from flipped shadows */
+  html:not([data-theme="light"]) ::selection { background: #b8c9e8; }
+}
