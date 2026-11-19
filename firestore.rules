@@ -363,10 +363,10 @@ service cloud.firestore {
     // written only by the satelliteRotation Cloud Functions (Admin key).
     // fieldBoundaries (field outlines from the Agworld sync) are written only
     // by the Cloud Functions; Contracts > Storage plan reads them to measure
-    // field-to-cellar distance and Ground work numbers fields southwest →
-    // northeast from them (the same outlines the public map feed shows).
+    // field-to-cellar distance and Operations (Ground work, Planting) numbers
+    // fields southwest → northeast from them (the same outlines the public map feed shows).
     match /fieldBoundaries/{fieldId} {
-      allow read: if signedIn() && canViewContracts() && (hasModule('contracts') || hasModule('ground'));
+      allow read: if signedIn() && canViewContracts() && (hasModule('contracts') || hasModule('harvest') || hasModule('ground'));
     }
     // Field history links (Contracts > Rotation, Yields > Field history):
     // which old field names a current field takes history from. Same
@@ -396,14 +396,25 @@ service cloud.firestore {
       allow read: if signedIn() && canViewContracts() && hasModule('yields');
       allow write: if signedIn() && isAdminOrOwner();
     }
-    // Ground work module (GroundWork.jsx): groundSettings/{seasonId} (start
-    // date, equipment, crop recipes) and groundJobs/{id} (one field × one
-    // pass, or a rain/move/down block). Admin, Owner and Farm manager.
+    // Operations > Ground work and Planting (GroundWork.jsx):
+    // groundSettings/{seasonId} + groundJobs/{id}, plantSettings/{seasonId} +
+    // plantJobs/{id} (start date, equipment, crop recipes; one field × one
+    // pass, or a rain/move/down block). Admin, Owner and Farm manager with the
+    // Operations module ('harvest'), or 'ground' from when it had its own tile.
+    function canFieldOps() {
+      return signedIn() && canViewContracts() && (hasModule('harvest') || hasModule('ground'));
+    }
     match /groundSettings/{seasonId} {
-      allow read, write: if signedIn() && canViewContracts() && hasModule('ground');
+      allow read, write: if canFieldOps();
     }
     match /groundJobs/{jobId} {
-      allow read, write: if signedIn() && canViewContracts() && hasModule('ground');
+      allow read, write: if canFieldOps();
+    }
+    match /plantSettings/{seasonId} {
+      allow read, write: if canFieldOps();
+    }
+    match /plantJobs/{jobId} {
+      allow read, write: if canFieldOps();
     }
     // Harvest Schedule module (Harvest.jsx). harvestPlans/{seasonId} holds
     // the settings, harvestFields/{seasonId}__{key} one doc per field on the
