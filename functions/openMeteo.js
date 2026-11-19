@@ -227,3 +227,5 @@ exports.archiveOpenMeteoNow = onRequest(
 );
 
 exports._test = { parseDaily, requestUrl, archiveAll, todayInDenver, STATIONS };
+// Shared with etRatio.js (the one-time history fill needs the same secret).
+exports._secret = OPEN_METEO_API_KEY;
