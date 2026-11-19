@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { balanceAssign, fmtDays, fmtN, fmtSlot } from './harvestMath.js'
+import { balanceAssign, fmtDays, fmtN, fmtSlot, isPlanting, words } from './harvestMath.js'
 import { paceChip } from './Harvest.jsx'
 
 // Schedule board: the unscheduled fields on the left (filter by crop / farm
@@ -27,6 +27,8 @@ export default function HarvestBoard({ allFields, schedule, settings, canEdit, w
   const [fillOpen, setFillOpen] = useState(false)
   const [fillTeams, setFillTeams] = useState(() => new Set())
   const [custom, setCustom] = useState({ name: '', crop: 'POTATO', acres: '' })
+  const plant = isPlanting(settings)
+  const W = words(settings)
 
   const pool = allFields.filter((f) => !f.teamId && f.kind !== 'block')
   const cropCounts = useMemo(() => {
@@ -36,7 +38,7 @@ export default function HarvestBoard({ allFields, schedule, settings, canEdit, w
   }, [pool])
   // Default to the harvest crops when they're there, otherwise everything.
   const harvestCrops = cropCounts.filter(([c]) => ['POTATO', 'BEETS', 'ONIONS', 'MINI POTATOES'].includes(c)).map(([c]) => c)
-  const cropSet = crop === 'default' ? (harvestCrops.length ? new Set(harvestCrops) : null) : crop === 'all' ? null : new Set([crop])
+  const cropSet = crop === 'default' ? (!plant && harvestCrops.length ? new Set(harvestCrops) : null) : crop === 'all' ? null : new Set([crop])
   const farms = [...new Set(pool.map((f) => f.farmName).filter(Boolean))].sort()
 
   const shown = pool
@@ -148,18 +150,18 @@ export default function HarvestBoard({ allFields, schedule, settings, canEdit, w
               {settings.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
             <button className="save" disabled={!sel.size || !bulkTeam} onClick={() => { writes.addMany(shown.filter((f) => sel.has(f.key)).map((f) => f.key), bulkTeam); setSel(new Set()) }}>Add</button>
-            <button onClick={() => setFillOpen((o) => !o)} title="Spread the shown fields across teams so they finish about the same day">Auto-fill…</button>
+            <button onClick={() => setFillOpen((o) => !o)} title={`Spread the shown fields across ${W.team}s so they finish about the same day`}>Auto-fill…</button>
           </div>
         )}
         {fillOpen && (
           <div className="hb-fill">
-            <div className="contracts-sub" style={{ marginTop: 0 }}>Spread the {shown.length} shown field{shown.length === 1 ? '' : 's'} across these teams so they finish as evenly as possible (biggest fields first). Fields go on the end of each line — re-order after.</div>
+            <div className="contracts-sub" style={{ marginTop: 0 }}>Spread the {shown.length} shown field{shown.length === 1 ? '' : 's'} across these {W.team}s so they finish as evenly as possible (biggest fields first). Fields go on the end of each line — re-order after.</div>
             <div className="hb-fill-teams">
               {settings.teams.map((t) => (
                 <label key={t.id} className="hb-check"><input type="checkbox" checked={fillTeams.has(t.id)} onChange={() => setFillTeams((s) => { const n = new Set(s); n.has(t.id) ? n.delete(t.id) : n.add(t.id); return n })} /><i style={{ background: t.color }} />{t.name}</label>
               ))}
             </div>
-            <button className="save" disabled={!fillTeams.size || !shown.length} onClick={autoFill}>Fill {fillTeams.size} team{fillTeams.size === 1 ? '' : 's'}</button>
+            <button className="save" disabled={!fillTeams.size || !shown.length} onClick={autoFill}>Fill {fillTeams.size} {W.team}{fillTeams.size === 1 ? '' : 's'}</button>
           </div>
         )}
         <div className="hb-pool-list">
@@ -175,7 +177,7 @@ export default function HarvestBoard({ allFields, schedule, settings, canEdit, w
               <div className="hb-card-num">{fmtN(f.acres)} ac</div>
             </div>
           ))}
-          {!shown.length && <div className="contracts-sub" style={{ padding: 10 }}>{pool.length ? 'No unscheduled fields match.' : 'Every field is on a team.'}</div>}
+          {!shown.length && <div className="contracts-sub" style={{ padding: 10 }}>{pool.length ? 'No unscheduled fields match.' : `Every field is on a ${W.team}.`}</div>}
         </div>
         {canEdit && (
           <div className="hb-custom">
@@ -213,7 +215,7 @@ export default function HarvestBoard({ allFields, schedule, settings, canEdit, w
                 {rows.map((r, i) => (
                   <div key={r.key}>
                     {isDropLane && dropAt.beforeKey === r.key && <div className="hb-drop-line" />}
-                    <LaneCard r={r} startDate={schedule.startDate} canEdit={canEdit} dragging={drag && drag.keys.includes(r.key)}
+                    <LaneCard r={r} plant={plant} startDate={schedule.startDate} canEdit={canEdit} dragging={drag && drag.keys.includes(r.key)}
                       onDragStart={(e) => startDrag(e, r, team.id)} onDragEnd={endDrag} onDragOver={(e) => overCard(e, team.id, rows, i)}
                       onClick={() => onOpen(r.key)} onUnpin={() => writes.clearStart(r.key)} />
                   </div>
@@ -237,7 +239,7 @@ export default function HarvestBoard({ allFields, schedule, settings, canEdit, w
   )
 }
 
-function LaneCard({ r, startDate, canEdit, dragging, onDragStart, onDragEnd, onDragOver, onClick, onUnpin }) {
+function LaneCard({ r, plant, startDate, canEdit, dragging, onDragStart, onDragEnd, onDragOver, onClick, onUnpin }) {
   const block = r.kind === 'block'
   return (
     <div className={`hb-card lane ${r.status}${block ? ' block' : ''}${dragging ? ' dragging' : ''}`} draggable={canEdit}
@@ -251,7 +253,9 @@ function LaneCard({ r, startDate, canEdit, dragging, onDragStart, onDragEnd, onD
           {r.killStatus === 'overdue' && <span className="hb-tag warn" title={`Kill date was ${r.killDate}`}>kill overdue</span>}
           {r.killStatus === 'soon' && <span className="hb-tag soon" title={`Kill by ${r.killDate}`}>kill {r.killDate.slice(5).replace('-', '/')}</span>}
           {r.source === 'missing' && <span className="hb-tag warn">not in Agworld this season</span>}
-          {r.pinSlot != null && (
+          {r.waitGround && <span className="hb-tag soon" title="Ground work on this field finishes then">ground {r.readyOn.date.slice(5).replace('-', '/')} {r.readyOn.half}</span>}
+          {plant && r.groundUnplanned && r.status !== 'done' && <span className="hb-tag warn" title="Some ground-work passes on this field aren’t on a machine yet">ground not planned</span>}
+          {r.startOn && r.startOn.date && r.pinSlot != null && (
             <span className={`hb-tag ${r.pinLate ? 'warn' : 'pin'}`} title={r.pinLate ? 'The fields ahead of it run past this date' : 'Held to start on this date'}>
               📌 {r.startOn.date.slice(5).replace('-', '/')} {r.startOn.half}{r.pinLate ? ' — late' : ''}
               {canEdit && onUnpin && <button className="hb-unpin" title="Clear the start date" onClick={(e) => { e.stopPropagation(); onUnpin() }}>×</button>}
@@ -259,12 +263,12 @@ function LaneCard({ r, startDate, canEdit, dragging, onDragStart, onDragEnd, onD
           )}
         </div>
         <div className="hb-card-sub">
-          {block ? `${fmtDays(r.days)}` : `${r.variety || r.crop.toLowerCase()} · ${fmtN(r.acres)} ac · ${fmtN(r.total)} ${r.unit} · ${fmtDays(r.days)}`}
+          {block ? `${fmtDays(r.days)}` : plant ? `${r.variety || r.crop.toLowerCase()} · ${fmtN(r.acres)} ac · ${fmtDays(r.days)}` : `${r.variety || r.crop.toLowerCase()} · ${fmtN(r.acres)} ac · ${fmtN(r.total)} ${r.unit} · ${fmtDays(r.days)}`}
         </div>
-        {r.waitFrom != null && <div className="hb-wait">waits from {fmtSlot(startDate, Math.floor(r.waitFrom))}</div>}
+        {r.waitFrom != null && <div className="hb-wait">waits from {fmtSlot(startDate, Math.floor(r.waitFrom))}{r.waitGround ? ' for ground work' : ''}</div>}
         <div className="hb-card-when">
           {r.startSlot != null ? fmtSlot(startDate, r.startSlot) : '—'} → {r.endSlot != null ? fmtSlot(startDate, Math.ceil(r.endSlot) - 1) : '—'}
-          {r.trucks != null && !block && <span title="10-wheelers needed"> · {r.trucks} trucks</span>}
+          {r.trucks != null && !block && <span title={plant ? 'Seed trucks needed' : '10-wheelers needed'}> · {r.trucks} {plant ? 'seed trucks' : 'trucks'}</span>}
         </div>
         {r.status === 'active' && <div className="hb-mini-bar"><div style={{ width: `${r.pct * 100}%` }} /></div>}
       </div>

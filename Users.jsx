@@ -29,7 +29,7 @@ const MODULES = [
   { id: 'harvest', label: 'Operations', note: 'Planting, ground work and harvest schedules. Admin, Owner and Farm manager can build them and log progress.' },
   { id: 'seed', label: 'Potato seed', note: 'Ticket portals for anyone with it; contracts, edits and reports for Admin, Owner and Farm manager.' },
   { id: 'map', label: 'Farm map', note: 'Anyone with it can view; only Admin and Owner import and edit.' },
-  { id: 'spray', label: 'Spray schedule', note: 'Drone + Ag Rows spray and spread jobs from AgWorld. Admin, Owner and Farm manager only; crews use their own links.' }
+  { id: 'spray', label: 'Spray schedule', note: 'Drone + Ag Rows spray and spread jobs from AgWorld, shown as the Spray tab in Operations. Admin, Owner and Farm manager only; crews use their own links.' }
 ]
 const ALL_MODULE_IDS = MODULES.map((m) => m.id)
 const FULL_ACCESS_ROLES = ['admin', 'owner']

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
-  DEFAULT_CROPS, DEFAULT_LIMITS, DEFAULT_TRUCKING, cropSettings, fieldPlan, fmtDate, fmtDays, fmtN, fmtSlot,
-  parseFieldTable, slotInfo
+  DEFAULT_LIMITS, DEFAULT_PLANT_LIMITS, DEFAULT_TRUCKING, cropDefaults, cropSettings, fieldPlan, fmtDate, fmtDays, fmtN, fmtSlot,
+  isPlanting, parseFieldTable, slotInfo, words
 } from './harvestMath.js'
 import { deleteDoc, doc, writeBatch } from 'firebase/firestore'
 import { db } from './firebase.js'
@@ -22,9 +22,11 @@ export function FieldDrawer({ field, schedule, settings, canEdit, writes, onClos
   const block = f.kind === 'block'
   const team = settings.teams.find((t) => t.id === f.teamId) || null
   const plan = fieldPlan(f, settings, team)
+  const plant = isPlanting(settings)
+  const W = words(settings)
   const cs = cropSettings(settings, f.crop)
   const [form, setForm] = useState(() => ({
-    name: f.name || '', blockDays: f.blockDays ?? '', yieldPerAcre: f.yieldPerAcre ?? '', goalPerDay: f.goalPerDay ?? '', dayLength: f.dayLength ?? '',
+    seedRate: f.seedRate ?? '', name: f.name || '', blockDays: f.blockDays ?? '', yieldPerAcre: f.yieldPerAcre ?? '', goalPerDay: f.goalPerDay ?? '', dayLength: f.dayLength ?? '',
     oneWayMin: f.oneWayMin != null ? Math.round(f.oneWayMin * 100) / 100 : '', destination: f.destination || '', bay: f.bay ?? '', skinSetDays: f.skinSetDays ?? '',
     killType: f.killType || '', killed: !!f.killed, buyer: f.buyer || '', storage: f.storage || '', area: f.area || '',
     postHarvestSpray: f.postHarvestSpray || '', pileHeight: f.pileHeight ?? '', stopLoadingTemp: f.stopLoadingTemp ?? '',
@@ -43,6 +45,7 @@ export function FieldDrawer({ field, schedule, settings, canEdit, writes, onClos
     const patch = block
       ? { name: s(form.name) || 'Move day', blockDays: Math.max(0.5, Math.round((n(form.blockDays) ?? 1) * 2) / 2), notes: s(form.notes) }
       : {
+          ...(plant ? { seedRate: n(form.seedRate) } : {}),
           yieldPerAcre: n(form.yieldPerAcre), goalPerDay: n(form.goalPerDay), dayLength: n(form.dayLength), oneWayMin: n(form.oneWayMin),
           destination: s(form.destination), bay: s(form.bay), skinSetDays: n(form.skinSetDays), killType: s(form.killType), killed: !!form.killed,
           buyer: s(form.buyer), storage: s(form.storage), area: s(form.area), postHarvestSpray: s(form.postHarvestSpray),
@@ -80,13 +83,14 @@ export function FieldDrawer({ field, schedule, settings, canEdit, writes, onClos
         </div>
 
         <div className="hd-stats">
-          <div><span>Team</span><strong>{team ? team.name : 'Unscheduled'}</strong></div>
-          {!block && <div><span>Total</span><strong>{fmtN(plan.total)} {plan.unit}</strong><small>{fmtN(plan.yieldPerAcre)}/ac ({plan.yieldSource === 'history' ? 'field avg' : plan.yieldSource === 'set' ? 'set' : 'crop default'})</small></div>}
+          <div><span>{plant ? 'Crew' : 'Team'}</span><strong>{team ? team.name : 'Unscheduled'}</strong></div>
+          {!block && !plant && <div><span>Total</span><strong>{fmtN(plan.total)} {plan.unit}</strong><small>{fmtN(plan.yieldPerAcre)}/ac ({plan.yieldSource === 'history' ? 'field avg' : plan.yieldSource === 'set' ? 'set' : 'crop default'})</small></div>}
           <div><span>Days</span><strong>{fmtDays(plan.days)}</strong>{!block && <small>goal {fmtN(plan.goal)}/day · {plan.dayLength} h</small>}</div>
           {f.startSlot != null && <div><span>When</span><strong>{fmtSlot(schedule.startDate, f.startSlot, true)}</strong><small>to {f.endSlot != null ? fmtSlot(schedule.startDate, Math.ceil(f.endSlot) - 1, true) : '—'}</small></div>}
-          {!block && <div><span>10-wheelers</span><strong>{plan.trucks ?? '—'}</strong>{plan.trucks == null && <small>needs one-way minutes</small>}</div>}
-          {f.killDate && <div><span>Kill by</span><strong className={f.killStatus === 'overdue' ? 'harvest-overdue' : ''}>{fmtDate(f.killDate, true)}</strong><small>water-up check {fmtDate(f.waterUpDate)}</small></div>}
-          {f.status === 'active' && <div><span>Dug</span><strong>{Math.round(f.pct * 100)}%</strong><small>{fmtDays(f.remainingDays)} left</small></div>}
+          {!block && (!plant || plan.seedRate) && <div><span>{W.trucks}</span><strong>{plan.trucks ?? '—'}</strong>{plan.trucks == null ? <small>needs one-way minutes</small> : plan.seedPerDay ? <small>{fmtN(plan.seedPerDay)} cwt seed/day</small> : null}</div>}
+          {plant && !block && (f.readyOn || f.groundDone || f.groundUnplanned) && <div><span>Ground work</span><strong>{f.groundDone ? 'Done' : f.groundUnplanned ? 'Not planned' : fmtDate(f.readyOn.date, true)}</strong><small>{f.groundDone ? 'ready to plant' : f.groundUnplanned ? 'some passes not on a machine' : `ready ${f.readyOn.half}${f.waitGround ? ' · planting waits' : ''}`}</small></div>}
+          {!plant && f.killDate && <div><span>Kill by</span><strong className={f.killStatus === 'overdue' ? 'harvest-overdue' : ''}>{fmtDate(f.killDate, true)}</strong><small>water-up check {fmtDate(f.waterUpDate)}</small></div>}
+          {f.status === 'active' && <div><span>{plant ? 'Planted' : 'Dug'}</span><strong>{Math.round(f.pct * 100)}%</strong><small>{fmtDays(f.remainingDays)} left</small></div>}
         </div>
 
         {canEdit && (
@@ -130,6 +134,23 @@ export function FieldDrawer({ field, schedule, settings, canEdit, writes, onClos
             {inp('blockDays', 'Days (half-day steps)', 1)}
             {inp('notes', 'Notes', '', { text: true })}
           </div>
+        ) : plant ? (
+          <>
+            <div className="hd-section">
+              <div className="agronomy-section-label">Planting — blank uses the default shown</div>
+              <div className="hd-grid">
+                {inp('goalPerDay', 'Goal (acres/day)', (team && team.goalPerDay) || cs.goalPerDay)}
+                {inp('dayLength', 'Working day (hours)', (team && team.dayLength) || settings.dayLength)}
+                {inp('acresOverride', 'Acres (override)', f.source === 'agworld' ? f.acres : '')}
+                {inp('seedRate', 'Seed (cwt/ac)', cs.seedRate ?? '')}
+                {inp('oneWayMin', 'Seed haul one way (min)', '')}
+              </div>
+            </div>
+            <div className="hd-section">
+              {inp('notes', 'Notes', '', { text: true })}
+              <label className="hd-field hd-check"><input type="checkbox" disabled={!canEdit} checked={form.finished} onChange={(e) => set('finished', e.target.checked)} /> <span>Field finished (counts as 100% planted)</span></label>
+            </div>
+          </>
         ) : (
           <>
             <div className="hd-section">
@@ -205,7 +226,10 @@ export function FieldDrawer({ field, schedule, settings, canEdit, writes, onClos
 // ---------------------------------------------------------------------------
 // Field details table + import / export
 // ---------------------------------------------------------------------------
-export function FieldsTable({ allFields, schedule, settings, canEdit, writes, onOpen, seasonName }) {
+export function FieldsTable(props) {
+  return isPlanting(props.settings) ? <PlantFieldsTable {...props} /> : <HarvestFieldsTable {...props} />
+}
+function HarvestFieldsTable({ allFields, schedule, settings, canEdit, writes, onOpen, seasonName }) {
   const [team, setTeam] = useState('all')
   const [q, setQ] = useState('')
   const [importing, setImporting] = useState(false)
@@ -390,11 +414,11 @@ function ImportPanel({ allFields, settings, writes, onDone }) {
       if (replace) {
         // old move/down blocks would double up with the workbook's
         const oldBlocks = allFields.filter((f) => f.kind === 'block')
-        for (const b of oldBlocks) await deleteDoc(doc(db, 'harvestFields', hfId(sid, b.key)))
+        for (const b of oldBlocks) await deleteDoc(doc(db, writes.cols.fields, hfId(sid, b.key)))
       }
       for (let i = 0; i < docs.length; i += 300) {
         const b = writeBatch(db)
-        docs.slice(i, i + 300).forEach(([key, d]) => b.set(doc(db, 'harvestFields', hfId(sid, key)), d, { merge: true }))
+        docs.slice(i, i + 300).forEach(([key, d]) => b.set(doc(db, writes.cols.fields, hfId(sid, key)), d, { merge: true }))
         await b.commit()
       }
     }, `Imported ${matched.length + unmatched.length} fields and ${blocks.length} move/down blocks.`)
@@ -441,7 +465,9 @@ export function HarvestSettings({ settings, canEdit, writes, allFields }) {
   const [s, setS] = useState(() => JSON.parse(JSON.stringify(settings)))
   const [dirty, setDirty] = useState(false)
   const up = (patch) => { setS((x) => ({ ...x, ...patch })); setDirty(true) }
-  const cropList = [...new Set([...Object.keys(DEFAULT_CROPS), ...allFields.filter((f) => f.teamId && f.crop && f.kind !== 'block').map((f) => f.crop)])]
+  const plant = isPlanting(settings)
+  const W = words(settings)
+  const cropList = [...new Set([...Object.keys(cropDefaults(settings)), ...allFields.filter((f) => f.teamId && f.crop && f.kind !== 'block').map((f) => f.crop)])]
   const teamCounts = {}
   allFields.forEach((f) => { if (f.teamId) teamCounts[f.teamId] = (teamCounts[f.teamId] || 0) + 1 })
   const ro = !canEdit
@@ -456,14 +482,15 @@ export function HarvestSettings({ settings, canEdit, writes, allFields }) {
   function moveTeam(i, d) { const teams = [...s.teams]; const j = i + d; if (j < 0 || j >= teams.length) return; [teams[i], teams[j]] = [teams[j], teams[i]]; up({ teams }) }
   function addTeam() {
     const id = `team${Date.now().toString(36)}`
-    up({ teams: [...s.teams, { id, name: `Team ${s.teams.length + 1}`, color: TEAM_COLORS[s.teams.length % TEAM_COLORS.length] }] })
+    up({ teams: [...s.teams, { id, name: `${plant ? 'Crew' : 'Team'} ${s.teams.length + 1}`, color: TEAM_COLORS[s.teams.length % TEAM_COLORS.length] }] })
   }
   function save() {
     const clean = (o) => JSON.parse(JSON.stringify(o, (k, v) => (v === undefined || (typeof v === 'number' && !isFinite(v)) ? null : v)))
     const teams = s.teams.map((t) => clean({ ...t, dayLength: t.dayLength === '' ? null : t.dayLength, goalPerDay: t.goalPerDay === '' ? null : t.goalPerDay, startDate: t.startDate || null }))
     writes.saveSettings(clean({
       startDate: s.startDate, dayLength: Number(s.dayLength) || 12, rateMode: s.rateMode, standardDay: Number(s.standardDay) || 12, sundaysOff: !!s.sundaysOff,
-      teams, crops: s.crops || {}, limits: s.limits, trucking: s.trucking, calendar: s.calendar || {}
+      teams, crops: s.crops || {}, limits: s.limits, trucking: s.trucking, calendar: s.calendar || {},
+      ...(plant ? { gapDays: Number(s.gapDays) || 0, waitForGround: s.waitForGround !== false } : {})
     })).then(() => setDirty(false))
   }
   const calRows = []
@@ -490,7 +517,7 @@ export function HarvestSettings({ settings, canEdit, writes, allFields }) {
         <div className="yields-card">
           <div className="yields-card-title">Season</div>
           <div className="hd-grid" style={{ marginTop: 8 }}>
-            <label className="hd-field"><span>First harvest day</span><input type="date" disabled={ro} value={s.startDate || ''} onChange={(e) => up({ startDate: e.target.value })} /></label>
+            <label className="hd-field"><span>{W.first}</span><input type="date" disabled={ro} value={s.startDate || ''} onChange={(e) => up({ startDate: e.target.value })} /></label>
             <label className="hd-field"><span>Working day length (hours)</span>{numIn(s.dayLength, (v) => up({ dayLength: v }), 90)}</label>
             <label className="hd-field"><span>Production goal is…</span>
               <select disabled={ro} value={s.rateMode} onChange={(e) => up({ rateMode: e.target.value })}>
@@ -500,8 +527,11 @@ export function HarvestSettings({ settings, canEdit, writes, allFields }) {
             </label>
             {s.rateMode === 'scale' && <label className="hd-field"><span>Goals are for a day of (hours)</span>{numIn(s.standardDay, (v) => up({ standardDay: v }), 90, 12)}</label>}
             <label className="hd-field hd-check"><input type="checkbox" disabled={ro} checked={!!s.sundaysOff} onChange={(e) => up({ sundaysOff: e.target.checked })} /><span>Sundays off</span></label>
+            {plant && <label className="hd-field hd-check"><input type="checkbox" disabled={ro} checked={s.waitForGround !== false} onChange={(e) => up({ waitForGround: e.target.checked })} /><span>Wait for ground work</span></label>}
+            {plant && s.waitForGround !== false && <label className="hd-field"><span>Days after ground work is done</span>{numIn(s.gapDays, (v) => up({ gapDays: v }), 70, 0)}</label>}
           </div>
-          <div className="contracts-sub">Fixed: the goal is what a crew digs in a day whatever its length; day length drives trucks. Scaled: goals are for a standard day, so a 14 h day on a 12 h standard digs 14/12 of the goal (and shorter days less).</div>
+          {plant && <div className="contracts-sub">Planting won’t start a field before the Ground work tab has it finished (done, or where its last pass is scheduled to end), plus the days after.</div>}
+          <div className="contracts-sub">Fixed: the goal is what a crew {plant ? 'plants' : 'digs'} in a day whatever its length; day length drives trucks. Scaled: goals are for a standard day, so a 14 h day on a 12 h standard digs 14/12 of the goal (and shorter days less).</div>
           <div className="agronomy-section-label">Trucking formula</div>
           <div className="hd-grid">
             <label className="hd-field"><span>Hours not hauling / day</span>{numIn(s.trucking.nonHaulHours, (v) => up({ trucking: { ...s.trucking, nonHaulHours: v } }), 70, DEFAULT_TRUCKING.nonHaulHours)}</label>
@@ -512,8 +542,8 @@ export function HarvestSettings({ settings, canEdit, writes, allFields }) {
         <div className="yields-card">
           <div className="yields-card-title">Limits (red when over)</div>
           <div className="hd-grid" style={{ marginTop: 8 }}>
-            {[['trucks', '10-wheelers available'], ['pilers', 'Pilers'], ['generators', 'Generators'], ['airSeps', 'Air seps'], ['sandMachines', 'Sand machines'], ['bruiseSamples', 'Bruise samples / ½ day'], ['pickers', 'Pickers']].map(([k, l]) => (
-              <label key={k} className="hd-field"><span>{l}</span>{numIn(s.limits[k], (v) => up({ limits: { ...s.limits, [k]: v } }), 70, DEFAULT_LIMITS[k])}</label>
+            {(plant ? [['trucks', 'Seed trucks available']] : [['trucks', '10-wheelers available'], ['pilers', 'Pilers'], ['generators', 'Generators'], ['airSeps', 'Air seps'], ['sandMachines', 'Sand machines'], ['bruiseSamples', 'Bruise samples / ½ day'], ['pickers', 'Pickers']]).map(([k, l]) => (
+              <label key={k} className="hd-field"><span>{l}</span>{numIn(s.limits[k], (v) => up({ limits: { ...s.limits, [k]: v } }), 70, (plant ? DEFAULT_PLANT_LIMITS : DEFAULT_LIMITS)[k])}</label>
             ))}
           </div>
         </div>
@@ -521,8 +551,27 @@ export function HarvestSettings({ settings, canEdit, writes, allFields }) {
 
       <div className="yields-card">
         <div className="yields-card-title">Crop defaults</div>
-        <div className="contracts-sub">Used for any field without its own number. Load = one 10-wheeler (sheet: 250 cwt potatoes, 12.5 tons beets).</div>
+        <div className="contracts-sub">{plant ? 'Used for any field without its own number. Seed trucks are worked out for crops with a seed rate: cwt/day = acres/day × seed cwt/ac, load = one seed truck in cwt.' : 'Used for any field without its own number. Load = one 10-wheeler (sheet: 250 cwt potatoes, 12.5 tons beets).'}</div>
         <div className="table-scroll" style={{ marginTop: 8 }}>
+          {plant ? (
+            <table className="contracts-table contracts-table-auto">
+              <thead><tr><th>Crop</th><th className="num">Goal ac / day</th><th className="num">Seed cwt / ac</th><th className="num">Load cwt</th></tr></thead>
+              <tbody>
+                {cropList.map((c) => {
+                  const cur = cropSettings(s, c)
+                  const own = (s.crops || {})[c] || {}
+                  return (
+                    <tr key={c}>
+                      <td>{c.toLowerCase()}</td>
+                      <td className="num">{numIn(own.goalPerDay, (v) => setCrop(c, 'goalPerDay', v), 80, cur.goalPerDay)}</td>
+                      <td className="num">{numIn(own.seedRate, (v) => setCrop(c, 'seedRate', v), 70, cur.seedRate ?? '')}</td>
+                      <td className="num">{numIn(own.loadSize, (v) => setCrop(c, 'loadSize', v), 70, cur.loadSize ?? '')}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          ) : (
           <table className="contracts-table contracts-table-auto">
             <thead><tr><th>Crop</th><th>Unit</th><th className="num">Yield / ac</th><th className="num">Goal / day</th><th className="num">Load size</th></tr></thead>
             <tbody>
@@ -541,16 +590,17 @@ export function HarvestSettings({ settings, canEdit, writes, allFields }) {
               })}
             </tbody>
           </table>
+          )}
         </div>
       </div>
 
       <div className="yields-card">
         <div className="yields-card-head">
           <div>
-            <div className="yields-card-title">Teams</div>
-            <div className="contracts-sub">Blank day length / goal = use the season and crop defaults. A later start date holds that team back.</div>
+            <div className="yields-card-title">{plant ? 'Planting crews' : 'Teams'}</div>
+            <div className="contracts-sub">Blank day length / goal = use the season and crop defaults. A later start date holds that {W.team} back.</div>
           </div>
-          {canEdit && <button onClick={addTeam}>+ Add team</button>}
+          {canEdit && <button onClick={addTeam}>+ Add {W.team}</button>}
         </div>
         <div className="table-scroll">
           <table className="contracts-table contracts-table-auto">
@@ -582,7 +632,7 @@ export function HarvestSettings({ settings, canEdit, writes, allFields }) {
             <tbody>
               {calRows.map((r) => (
                 <tr key={r.d + (r.team ? r.team.id : '')}>
-                  <td>{fmtDate(r.d, true)}</td><td>{r.team ? r.team.name : 'All teams'}</td>
+                  <td>{fmtDate(r.d, true)}</td><td>{r.team ? r.team.name : plant ? 'All crews' : 'All teams'}</td>
                   <td className="num">{r.v.AM ?? 1}</td><td className="num">{r.v.PM ?? 1}</td>
                   {canEdit && <td><button className="clear-sort-btn" onClick={() => dropCal(r)}>Remove</button></td>}
                 </tr>
@@ -591,6 +641,80 @@ export function HarvestSettings({ settings, canEdit, writes, allFields }) {
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Planting: the field list with planting columns (acres, goal, seed, ground work).
+function PlantFieldsTable({ schedule, settings, onOpen, seasonName }) {
+  const [team, setTeam] = useState('all')
+  const [q, setQ] = useState('')
+  const teamIdx = Object.fromEntries(settings.teams.map((t, i) => [t.id, i]))
+  const tName = Object.fromEntries(settings.teams.map((t) => [t.id, t]))
+  const rows = Object.values(schedule.byKey)
+    .filter((r) => team === 'all' || r.teamId === team)
+    .filter((r) => !q || `${r.name} ${r.variety || ''} ${r.crop || ''}`.toLowerCase().includes(q.toLowerCase()))
+    .sort((a, b) => (teamIdx[a.teamId] - teamIdx[b.teamId]) || (a.order ?? 0) - (b.order ?? 0))
+  const ground = (r) => r.kind === 'block' ? '' : r.groundDone ? 'done' : r.groundUnplanned ? 'not planned' : r.readyOn ? `${fmtDate(r.readyOn.date)} ${r.readyOn.half}` : ''
+  async function exportXlsx() {
+    const XLSX = await import('xlsx')
+    const sheetRows = rows.map((r) => ({
+      Crew: (tName[r.teamId] || {}).name, Field: r.name, Crop: r.crop, Variety: r.variety || '', Acres: r.kind === 'block' ? '' : r.acres,
+      'Goal ac/day': r.kind === 'block' ? '' : r.goal, 'Hours planting': r.dayLength, 'Days required': Math.round(r.days * 100) / 100,
+      'Ground work ready': ground(r),
+      Start: r.startSlot != null ? fmtSlot(schedule.startDate, r.startSlot) : '', Finish: r.endSlot != null ? fmtSlot(schedule.startDate, Math.ceil(r.endSlot) - 1) : '',
+      'Seed cwt/ac': r.seedRate ?? '', 'Seed trucks': r.trucks ?? '', 'One-way min': r.oneWayMin ?? '', '% planted': Math.round(r.pct * 100), Status: r.status
+    }))
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheetRows), 'Planting')
+    XLSX.writeFile(wb, `planting_schedule_${seasonName || ''}.xlsx`)
+  }
+  return (
+    <div className="yields-card">
+      <div className="yields-card-head">
+        <div>
+          <div className="yields-card-title">Field details</div>
+          <div className="contracts-sub">Everything on the planting schedule, in line order. Click a row to edit.</div>
+        </div>
+        <div className="agronomy-filter-bar" style={{ margin: 0 }}>
+          <select value={team} onChange={(e) => setTeam(e.target.value)}>
+            <option value="all">All crews</option>
+            {settings.teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+          <input className="agronomy-search-input" style={{ minWidth: 160 }} placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <button onClick={exportXlsx} disabled={!rows.length}>Export to Excel</button>
+        </div>
+      </div>
+      <div className="table-scroll" style={{ maxHeight: 620 }}>
+        <table className="contracts-table contracts-table-auto harvest-fields">
+          <thead>
+            <tr>
+              <th>Crew</th><th>Field</th><th>Crop / variety</th><th className="num">Acres</th><th className="num">Goal ac/day</th><th className="num">Hrs</th><th className="num">Days</th>
+              <th>Ground work</th><th>Start</th><th>Finish</th><th className="num">Seed cwt/ac</th><th className="num">Seed trucks</th><th className="num">Planted</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key} onClick={() => onOpen(r.key)} className={`clickable${r.status === 'done' ? ' harvest-done-row' : ''}`}>
+                <td><span className="hb-team-dot" style={{ background: (tName[r.teamId] || {}).color }} />{(tName[r.teamId] || {}).name}</td>
+                <td><strong>{r.name}</strong></td>
+                <td>{r.kind === 'block' ? <span className="contracts-sub">block</span> : [r.crop && r.crop.toLowerCase(), r.variety].filter(Boolean).join(' · ')}</td>
+                <td className="num">{r.kind === 'block' ? '' : fmtN(r.acres)}</td>
+                <td className="num">{r.kind === 'block' ? '' : fmtN(r.goal)}</td>
+                <td className="num">{r.dayLength}</td>
+                <td className="num">{(Math.round(r.days * 10) / 10).toFixed(1)}</td>
+                <td className={r.waitGround ? 'harvest-overdue' : ''} style={{ whiteSpace: 'nowrap' }} title={r.waitGround ? 'Planting waits for this' : ''}>{ground(r)}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>{r.startSlot != null ? fmtSlot(schedule.startDate, r.startSlot) : '—'}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>{r.endSlot != null ? fmtSlot(schedule.startDate, Math.ceil(r.endSlot) - 1) : '—'}</td>
+                <td className="num">{r.seedRate ?? ''}</td>
+                <td className="num">{r.trucks ?? ''}</td>
+                <td className="num">{r.kind === 'block' ? '' : `${Math.round(r.pct * 100)}%`}</td>
+              </tr>
+            ))}
+            {!rows.length && <tr><td colSpan={13} className="contracts-sub">Nothing scheduled yet — drag fields onto crews on the Schedule board.</td></tr>}
+          </tbody>
+        </table>
       </div>
     </div>
   )

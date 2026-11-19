@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { DEFAULT_LIMITS, fmtDate, fmtDays, fmtN, fmtSlot, resourcesAt, slotFactor, slotInfo, weekday } from './harvestMath.js'
+import { DEFAULT_LIMITS, isPlanting, fmtDate, fmtDays, fmtN, fmtSlot, resourcesAt, slotFactor, slotInfo, weekday } from './harvestMath.js'
 import { BLOCKS, CROP_TINT } from './HarvestBoard.jsx'
 
 // Timeline: the sheet's half-day dashboard turned sideways. One row per
@@ -17,7 +17,11 @@ const RES_ROWS = [
   ['bruiseSamples', 'Bruise samples', 'bruiseSamples'], ['pickers', 'Pickers', 'pickers']
 ]
 
+const PLANT_RES_ROWS = [['trucks', 'Seed trucks', 'trucks', (v) => v.toFixed(0)]]
+
 export default function HarvestTimeline({ schedule, settings, canEdit, writes, onOpen }) {
+  const plant = isPlanting(settings)
+  const resRows = plant ? PLANT_RES_ROWS : RES_ROWS
   const [W, setW] = useState(22) // px per half-day
   const [drag, setDrag] = useState(null)
   const [drop, setDrop] = useState(null) // { teamId, pos, beforeKey }
@@ -98,7 +102,7 @@ export default function HarvestTimeline({ schedule, settings, canEdit, writes, o
       <div className="yields-card-head">
         <div>
           <div className="yields-card-title">Half-day timeline</div>
-          <div className="contracts-sub">Drag a bar onto a day to start it then — the fields after it follow in sequence (onto another row to change team). 📌 = held to a start date. {canEdit ? 'Click a day to mark rain / off / short days.' : ''} Hatched = off, pale = partial day.</div>
+          <div className="contracts-sub">Drag a bar onto a day to start it then — the fields after it follow in sequence (onto another row to change {plant ? 'crew' : 'team'}). 📌 = held to a start date.{plant ? ' Dashed = waiting for ground work or a start date.' : ''} {canEdit ? 'Click a day to mark rain / off / short days.' : ''} Hatched = off, pale = partial day.</div>
         </div>
         <div className="agronomy-filter-bar" style={{ margin: 0 }}>
           <select value={dropMode} onChange={(e) => setDropMode(e.target.value)} title="What dropping a bar does">
@@ -124,7 +128,7 @@ export default function HarvestTimeline({ schedule, settings, canEdit, writes, o
               </div>
             )
           })}
-          {showRes && RES_ROWS.map(([k, l]) => <div key={k} className="ht-res-label">{l}</div>)}
+          {showRes && resRows.map(([k, l]) => <div key={k} className="ht-res-label">{l}</div>)}
         </div>
         <div className="ht-scroll" ref={scroller}>
           <div style={{ width, position: 'relative' }}>
@@ -176,12 +180,12 @@ export default function HarvestTimeline({ schedule, settings, canEdit, writes, o
                     </div>
                   )}
                   {rows.filter((r) => r.waitFrom != null && r.startSlot != null).map((r) => (
-                    <div key={'w' + r.key} className="ht-wait" style={{ left: (r.waitFrom - range.from) * W, width: Math.max(2, (r.startSlot - r.waitFrom) * W) }} title={`Waiting for ${r.name} to start ${fmtSlot(startDate, r.pinSlot)}`} />
+                    <div key={'w' + r.key} className="ht-wait" style={{ left: (r.waitFrom - range.from) * W, width: Math.max(2, (r.startSlot - r.waitFrom) * W) }} title={`${r.name} waits ${r.waitGround ? 'for ground work' : 'to start'} until ${fmtSlot(startDate, r.waitGround ? r.readySlot : r.pinSlot)}`} />
                   ))}
                 </div>
               )
             })}
-            {showRes && RES_ROWS.map(([k, , lk, f]) => (
+            {showRes && resRows.map(([k, , lk, f]) => (
               <div key={k} className="ht-res-row">
                 {resBySlot.map((r, i) => {
                   const v = r[k]
@@ -196,7 +200,7 @@ export default function HarvestTimeline({ schedule, settings, canEdit, writes, o
               <div className="ht-pick" style={{ left: Math.min(pick.x, width - 230) }} onClick={(e) => e.stopPropagation()}>
                 <div className="ht-pick-title">{fmtDate(slotInfo(startDate, pick.slot).date, true)}</div>
                 <select value={pickTeam} onChange={(e) => setPickTeam(e.target.value)}>
-                  <option value="all">All teams</option>
+                  <option value="all">{plant ? 'All crews' : 'All teams'}</option>
                   {teams.map((t) => <option key={t.id} value={t.id}>{t.name} only</option>)}
                 </select>
                 {['Whole day', 'AM', 'PM'].map((lab, i) => (

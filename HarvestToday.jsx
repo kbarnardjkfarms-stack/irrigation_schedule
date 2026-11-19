@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   allocateTrucks, currentSlot, daysBetween, fmtDate, fmtDays, fmtN, fmtSlot, isoToday, resourcesAt,
-  resourceWarnings, slotFactor, slotInfo, slotOf
+  resourceWarnings, slotFactor, slotInfo, slotOf, isPlanting, words
 } from './harvestMath.js'
 import { paceChip } from './Harvest.jsx'
 
@@ -17,6 +17,8 @@ const WORK = [[1, 'Full'], [0.75, '¾'], [0.5, '½'], [0.25, '¼'], [0, 'Down']]
 
 export default function HarvestToday({ schedule, settings, canEdit, writes, logs, onOpen }) {
   const startDate = schedule.startDate
+  const plant = isPlanting(settings)
+  const W = words(settings)
   const [date, setDate] = useState(() => isoToday())
   const [half, setHalf] = useState(() => (new Date().getHours() < 12 ? 'AM' : 'PM'))
   const [available, setAvailable] = useState(null)
@@ -43,6 +45,16 @@ export default function HarvestToday({ schedule, settings, canEdit, writes, logs
   const upcoming = []
   Object.values(schedule.byKey).forEach((r) => {
     if (r.kind === 'block' || r.done || r.status === 'active') return
+    if (plant) {
+      // Planting: ground work finishing on fields still to plant, and fields
+      // whose ground work isn't on a machine yet.
+      if (r.groundUnplanned) upcoming.push({ r, what: 'Ground work not planned', date: '9999-12-31', d: null })
+      else if (r.readyOn && r.readyOn.date) {
+        const d = daysBetween(today, r.readyOn.date)
+        if (d <= 14) upcoming.push({ r, what: `Ground work done ${r.readyOn.half}${r.waitGround ? ' (planting waits)' : ''}`, date: r.readyOn.date, d })
+      }
+      return
+    }
     if (r.killDate && !r.killed) {
       const d = daysBetween(today, r.killDate)
       if (d <= 14) upcoming.push({ r, what: 'Kill', date: r.killDate, d })
@@ -63,7 +75,7 @@ export default function HarvestToday({ schedule, settings, canEdit, writes, logs
         <div className="yields-card-head">
           <div>
             <div className="yields-card-title">Goals for {fmtDate(date, true)} {half}</div>
-            <div className="contracts-sub">Projected field per team, goal for the half-day and 10-wheelers needed (same formula as the sheet).</div>
+            <div className="contracts-sub">{plant ? 'Projected field per crew, acres to plant this half-day and seed trucks needed (seed cwt/day ÷ load, harvest trucking formula).' : 'Projected field per team, goal for the half-day and 10-wheelers needed (same formula as the sheet).'}</div>
           </div>
           <div className="agronomy-filter-bar" style={{ margin: 0 }}>
             <input type="date" value={date} onChange={(e) => e.target.value && setDate(e.target.value)} />
@@ -71,7 +83,7 @@ export default function HarvestToday({ schedule, settings, canEdit, writes, logs
               {['AM', 'PM'].map((h) => <button key={h} className={half === h ? 'active' : ''} onClick={() => setHalf(h)}>{h}</button>)}
             </div>
             <button onClick={() => { setDate(isoToday()); setHalf(new Date().getHours() < 12 ? 'AM' : 'PM') }}>Now</button>
-            <label className="hb-check">Trucks available <input className="yields-cell-input" style={{ width: 52 }} inputMode="numeric" value={trucksAvail} onChange={(e) => setAvailable(Number(e.target.value) || 0)} /></label>
+            <label className="hb-check">{plant ? 'Seed trucks' : 'Trucks'} available <input className="yields-cell-input" style={{ width: 52 }} inputMode="numeric" value={trucksAvail} onChange={(e) => setAvailable(Number(e.target.value) || 0)} /></label>
           </div>
         </div>
         {warnings.length > 0 && <div className="agronomy-error-banner" style={{ marginBottom: 8 }}>Over the limit this half-day: {warnings.join(' · ')}</div>}
@@ -79,8 +91,8 @@ export default function HarvestToday({ schedule, settings, canEdit, writes, logs
           <table className="contracts-table contracts-table-auto harvest-today">
             <thead>
               <tr>
-                <th>Team</th><th>Field</th><th>Destination</th><th className="num">One-way min</th><th className="num">Goal this ½ day</th>
-                <th className="num">Day</th><th className="num">Trucks needed</th><th title="Up to 3 teams that get their trucks first when short">Priority</th><th className="num">Trucks assigned</th>
+                <th>{plant ? 'Crew' : 'Team'}</th><th>Field</th><th>{plant ? 'Ground work' : 'Destination'}</th><th className="num">One-way min</th><th className="num">Goal this ½ day</th>
+                <th className="num">Day</th><th className="num">Trucks needed</th><th title={`Up to 3 ${W.team}s that get their trucks first when short`}>Priority</th><th className="num">Trucks assigned</th>
                 <th>Pace</th>{canEdit && <th />}
               </tr>
             </thead>
@@ -95,8 +107,8 @@ export default function HarvestToday({ schedule, settings, canEdit, writes, logs
                   <tr key={team.id}>
                     <td><span className="hb-team-dot" style={{ background: team.color }} />{team.name}</td>
                     <td>{f ? <button className="link-btn" onClick={() => onOpen(f.key)}>{f.name}</button> : <span className="contracts-sub">—</span>}
-                      {f && f.kind !== 'block' && <div className="contracts-sub" style={{ marginTop: 0 }}>{[f.variety, f.killType, f.bay && `bay ${f.bay}`].filter(Boolean).join(' · ')}</div>}</td>
-                    <td>{f ? f.destination || <span className="contracts-sub">—</span> : ''}</td>
+                      {f && f.kind !== 'block' && <div className="contracts-sub" style={{ marginTop: 0 }}>{(plant ? [f.crop && f.crop.toLowerCase(), f.variety, f.seedRate && `${f.seedRate} cwt/ac`] : [f.variety, f.killType, f.bay && `bay ${f.bay}`]).filter(Boolean).join(' · ')}</div>}</td>
+                    <td>{!f ? '' : plant ? (f.kind === 'block' ? '' : f.groundDone ? 'done' : f.groundUnplanned ? <span className="harvest-overdue">not planned</span> : f.readyOn ? `${fmtDate(f.readyOn.date)} ${f.readyOn.half}` : <span className="contracts-sub">—</span>) : f.destination || <span className="contracts-sub">—</span>}</td>
                     <td className="num">{f && f.oneWayMin != null ? fmtN(f.oneWayMin, 1) : '—'}</td>
                     <td className="num">{f && f.kind !== 'block' ? `${fmtN((f.goal / 2) * factor)} ${f.unit}` : '—'}{factor < 1 && <div className="contracts-sub" style={{ marginTop: 0 }}>{factor === 0 ? 'off' : `${factor * 100}% day`}</div>}</td>
                     <td className="num">{f ? `${f.dayLength} h` : '—'}</td>
@@ -119,32 +131,32 @@ export default function HarvestToday({ schedule, settings, canEdit, writes, logs
             </tfoot>
           </table>
         </div>
-        <div className="harvest-res-strip">
+        {!plant && <div className="harvest-res-strip">
           {[['Pilers', res.pilers, 'pilers'], ['Generators', res.generators, 'generators'], ['Air seps', res.airSeps, 'airSeps'], ['Sand machines', res.sandMachines, 'sandMachines'], ['Eliminators', res.eliminators], ['Pull tractors', res.pullTractors], ['Airknives', res.airknives], ['Bruise samples', res.bruiseSamples, 'bruiseSamples'], ['Pickers', res.pickers, 'pickers']].map(([l, v, k]) => (
             <span key={l} className={k && v > settings.limits[k] ? 'over' : ''}>{l} <strong>{v}</strong>{k ? <small>/{settings.limits[k]}</small> : null}</span>
           ))}
-        </div>
+        </div>}
         {logFor && canEdit && (
           <LogForm key={`${logFor}-${slot}`} team={settings.teams.find((t) => t.id === logFor)} t={schedule.teams[logFor]} date={date} half={half} slot={slot}
-            current={fieldFor(logFor)} writes={writes} startDate={startDate} onDone={() => setLogFor(null)} />
+            current={fieldFor(logFor)} W={W} writes={writes} startDate={startDate} onDone={() => setLogFor(null)} />
         )}
       </div>
 
       <div className="harvest-two">
         <div className="yields-card">
           <div className="yields-card-title">Coming up</div>
-          <div className="contracts-sub">Kill dates (start − skin-set days) in the next 2 weeks and water-up checks (start − 7 days).</div>
-          {!upcoming.length && <div className="contracts-sub" style={{ marginTop: 10 }}>Nothing due — set skin-set days on fields to get kill reminders.</div>}
+          <div className="contracts-sub">{plant ? 'Ground work finishing on fields still to plant in the next 2 weeks, and fields whose ground work isn’t on a machine yet.' : 'Kill dates (start − skin-set days) in the next 2 weeks and water-up checks (start − 7 days).'}</div>
+          {!upcoming.length && <div className="contracts-sub" style={{ marginTop: 10 }}>{plant ? 'Nothing due.' : 'Nothing due — set skin-set days on fields to get kill reminders.'}</div>}
           <div className="table-scroll" style={{ maxHeight: 340, marginTop: 8 }}>
             <table className="contracts-table contracts-table-auto">
               <tbody>
                 {upcoming.map(({ r, what, date: d, d: n }) => (
                   <tr key={r.key + what}>
-                    <td style={{ whiteSpace: 'nowrap' }} className={n < 0 ? 'harvest-overdue' : ''}>{fmtDate(d, true)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }} className={n != null && n < 0 ? 'harvest-overdue' : ''}>{n == null ? '—' : fmtDate(d, true)}</td>
                     <td>{what}</td>
                     <td><button className="link-btn" onClick={() => onOpen(r.key)}>{r.name}</button></td>
                     <td><span className="hb-team-dot" style={{ background: (settings.teams.find((t) => t.id === r.teamId) || {}).color }} />{teamName[r.teamId]}</td>
-                    <td className="contracts-sub">{n < 0 ? `${-n} day${n === -1 ? '' : 's'} ago` : n === 0 ? 'today' : `in ${n} day${n === 1 ? '' : 's'}`}{r.killType && what === 'Kill' ? ` · ${r.killType}` : ''}</td>
+                    <td className="contracts-sub">{n == null ? '' : n < 0 ? `${-n} day${n === -1 ? '' : 's'} ago` : n === 0 ? 'today' : `in ${n} day${n === 1 ? '' : 's'}`}{r.killType && what === 'Kill' ? ` · ${r.killType}` : ''}</td>
                   </tr>
                 ))}
               </tbody>
@@ -179,7 +191,7 @@ export default function HarvestToday({ schedule, settings, canEdit, writes, logs
           )}
           <div className="table-scroll" style={{ maxHeight: 340, marginTop: 8 }}>
             <table className="contracts-table contracts-table-auto">
-              <thead><tr><th>Half-day</th><th>Team</th><th>Worked</th><th>Field / amount</th><th>Note</th>{canEdit && <th />}</tr></thead>
+              <thead><tr><th>Half-day</th><th>{plant ? 'Crew' : 'Team'}</th><th>Worked</th><th>Field / amount</th><th>Note</th>{canEdit && <th />}</tr></thead>
               <tbody>
                 {recent.map((l) => (
                   <tr key={l.id}>
@@ -201,7 +213,7 @@ export default function HarvestToday({ schedule, settings, canEdit, writes, logs
   )
 }
 
-function LogForm({ team, t, date, half, slot, current, writes, startDate, onDone }) {
+function LogForm({ team, t, date, half, slot, current, W, writes, startDate, onDone }) {
   const existing = t && t.logs.find((l) => l.slot === slot)
   const open = t ? t.rows.filter((r) => !r.done || (existing && r.key === existing.fieldKey)) : []
   const [fraction, setFraction] = useState(existing ? Number(existing.fraction) : 1)
@@ -229,9 +241,9 @@ function LogForm({ team, t, date, half, slot, current, writes, startDate, onDone
       <div className="agronomy-filter-bar">
         <select value={fieldKey} onChange={(e) => setFieldKey(e.target.value)}>
           <option value="">Field: next in line{current ? ` (${current.name})` : ''}</option>
-          {open.map((r) => <option key={r.key} value={r.key}>{r.name}{r.status === 'active' ? ` — ${Math.round(r.pct * 100)}% dug` : ''}</option>)}
+          {open.map((r) => <option key={r.key} value={r.key}>{r.name}{r.status === 'active' ? ` — ${Math.round(r.pct * 100)}% ${W.done}` : ''}</option>)}
         </select>
-        <label className="hb-check">Amount dug <input className="yields-cell-input" inputMode="decimal" placeholder={chosen && chosen.kind !== 'block' ? `${fmtN((chosen.goal / 2) * fraction)} ${chosen.unit}` : ''} value={amount} onChange={(e) => setAmount(e.target.value)} /> {chosen && chosen.kind !== 'block' ? chosen.unit : ''}</label>
+        <label className="hb-check">Amount {W.done} <input className="yields-cell-input" inputMode="decimal" placeholder={chosen && chosen.kind !== 'block' ? `${fmtN((chosen.goal / 2) * fraction)} ${chosen.unit}` : ''} value={amount} onChange={(e) => setAmount(e.target.value)} /> {chosen && chosen.kind !== 'block' ? chosen.unit : ''}</label>
         <label className="hb-check"><input type="checkbox" checked={finished} onChange={(e) => setFinished(e.target.checked)} /> Field finished</label>
         <input className="agronomy-search-input" style={{ minWidth: 160 }} placeholder="Note (rain, breakdown…)" value={note} onChange={(e) => setNote(e.target.value)} />
       </div>

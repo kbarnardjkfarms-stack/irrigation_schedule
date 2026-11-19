@@ -3,8 +3,9 @@ import { collection, collectionGroup, deleteDoc, doc, onSnapshot, query, setDoc,
 import { auth, db } from './firebase.js'
 import { canonCrop, effectiveYield, fieldKey } from './yieldMath.js'
 import {
-  buildSchedule, defaultSettings, fmtDate, fmtDays, fmtN, isoToday, orderBetween, resourcesAt, slotOf
+  buildSchedule, defaultSettings, fmtDate, fmtDays, fmtN, isoToday, orderBetween, resourcesAt, slotOf, words
 } from './harvestMath.js'
+import { buildGround, defaultSettings as groundDefaults, groundReadyTimes } from './groundMath.js'
 import HarvestBoard from './HarvestBoard.jsx'
 import HarvestTimeline from './HarvestTimeline.jsx'
 import HarvestToday from './HarvestToday.jsx'
@@ -30,11 +31,22 @@ import { FieldDrawer, FieldsTable, HarvestSettings } from './HarvestSetup.jsx'
 //                                                 move day / down time block
 //   harvestLogs/{seasonId}__{team}__{date}__{AM|PM} one doc per team per half-day
 
+// Planting (Operations > Planting) runs on the same screens with its own
+// data: plantPlans / plantFields / plantLogs, same shapes as the harvest ones.
+// Crews instead of teams, acres per day instead of cwt, seed trucks, and each
+// field waits for its ground work (groundSettings / groundJobs) to finish.
+export const MODES = {
+  harvest: { plans: 'harvestPlans', fields: 'harvestFields', logs: 'harvestLogs', defaultStart: '08-15' },
+  planting: { plans: 'plantPlans', fields: 'plantFields', logs: 'plantLogs', defaultStart: '04-10' }
+}
+
 const who = () => (auth.currentUser ? auth.currentUser.email || auth.currentUser.uid : null)
 export const hfId = (seasonId, key) => `${seasonId}__${key}`
 export const hlId = (seasonId, teamId, date, half) => `${seasonId}__${teamId}__${date}__${half}`
 
-export default function Harvest({ userRole }) {
+export default function Harvest({ userRole, mode = 'harvest' }) {
+  const M = MODES[mode] || MODES.harvest
+  const plant = mode === 'planting'
   const canEdit = userRole === 'admin' || userRole === 'owner' || userRole === 'farm_manager'
   const [view, setView] = useState('board')
   const [seasons, setSeasons] = useState([])
@@ -50,6 +62,8 @@ export default function Harvest({ userRole }) {
   const [msg, setMsg] = useState(null)
   const [openKey, setOpenKey] = useState(null)
   const [now, setNow] = useState(() => new Date())
+  const [groundDoc, setGroundDoc] = useState(null)
+  const [groundJobs, setGroundJobs] = useState([])
 
   // keep "now" fresh so the banners roll over at noon / midnight
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 60000); return () => clearInterval(t) }, [])
@@ -84,13 +98,13 @@ export default function Harvest({ userRole }) {
         snap.forEach((d) => { next[d.ref.parent.parent.id] = d.data() })
         setSeasonData(next)
       }),
-      onSnapshot(doc(db, 'harvestPlans', sid), (d) => { setPlanDoc(d.exists() ? d.data() : null); setError(null) }, onErr),
-      onSnapshot(query(collection(db, 'harvestFields'), where('seasonId', '==', sid)), (snap) => {
+      onSnapshot(doc(db, M.plans, sid), (d) => { setPlanDoc(d.exists() ? d.data() : null); setError(null) }, onErr),
+      onSnapshot(query(collection(db, M.fields), where('seasonId', '==', sid)), (snap) => {
         const next = {}
         snap.forEach((d) => { next[d.data().key] = d.data() })
         setPlanDocs(next)
       }, onErr),
-      onSnapshot(query(collection(db, 'harvestLogs'), where('seasonId', '==', sid)), (snap) => {
+      onSnapshot(query(collection(db, M.logs), where('seasonId', '==', sid)), (snap) => {
         const list = []
         snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
         setLogs(list)
@@ -98,6 +112,11 @@ export default function Harvest({ userRole }) {
     ]
     // Optional extras — quietly skipped if this login can't read them.
     const quiet = () => {}
+    if (plant) {
+      unsubs.push(onSnapshot(doc(db, 'groundSettings', sid), (d) => setGroundDoc(d.exists() ? d.data() : null), () => setGroundDoc(null)))
+      unsubs.push(onSnapshot(query(collection(db, 'groundJobs'), where('seasonId', '==', sid)), (snap) => { const o = []; snap.forEach((d) => o.push({ id: d.id, ...d.data() })); setGroundJobs(o) }, () => setGroundJobs([])))
+      return () => unsubs.forEach((u) => u())
+    }
     unsubs.push(onSnapshot(query(collection(db, 'contractAllocations'), where('seasonId', '==', sid)), (snap) => {
       const m = {}
       snap.forEach((d) => { const a = d.data(); if (a.fieldId) m[a.fieldId] = a.contractId })
@@ -109,11 +128,11 @@ export default function Harvest({ userRole }) {
       setBuyers((b) => ({ ...b, contracts: m }))
     }, quiet))
     return () => unsubs.forEach((u) => u())
-  }, [seasonId])
+  }, [seasonId, mode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Each field's own average yield for its crop (last 5 recorded years), used
   // as the yield projection until one is typed in.
-  useEffect(() => onSnapshot(collection(db, 'yieldHistory'), (snap) => {
+  useEffect(() => plant ? undefined : onSnapshot(collection(db, 'yieldHistory'), (snap) => {
     const acc = {}
     snap.forEach((d) => {
       const r = d.data()
@@ -129,15 +148,15 @@ export default function Harvest({ userRole }) {
       out[k] = last.reduce((s, x) => s + x.y, 0) / last.length
     })
     setHistory(out)
-  }, () => {}), [])
+  }, () => {}), [plant])
 
   const season = seasons.find((s) => String(s.id) === String(seasonId))
   const settings = useMemo(() => {
     const yr = season && /^\d{4}$/.test(String(season.name)) ? String(season.name) : String(new Date().getFullYear())
-    const base = defaultSettings(`${yr}-08-15`)
+    const base = { ...defaultSettings(`${yr}-${M.defaultStart}`, mode), mode }
     if (!planDoc) return base
-    return { ...base, ...planDoc, teams: planDoc.teams && planDoc.teams.length ? planDoc.teams : base.teams, limits: { ...base.limits, ...(planDoc.limits || {}) }, trucking: { ...base.trucking, ...(planDoc.trucking || {}) }, calendar: planDoc.calendar || {}, crops: planDoc.crops || {} }
-  }, [planDoc, season])
+    return { ...base, ...planDoc, mode, teams: planDoc.teams && planDoc.teams.length ? planDoc.teams : base.teams, limits: { ...base.limits, ...(planDoc.limits || {}) }, trucking: { ...base.trucking, ...(planDoc.trucking || {}) }, calendar: planDoc.calendar || {}, crops: planDoc.crops || {} }
+  }, [planDoc, season, mode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Agworld fields for the season merged with what's saved on the plan.
   const allFields = useMemo(() => {
@@ -171,7 +190,31 @@ export default function Harvest({ userRole }) {
     return out
   }, [seasonData, baseFields, planDocs, history, buyers])
 
-  const schedule = useMemo(() => buildSchedule({ fields: allFields.filter((f) => f.teamId), settings, logs, now }), [allFields, settings, logs, now])
+  // Planting: when each field's ground work is done (finished, or where the
+  // Ground work schedule has it ending), plus the "days after" gap.
+  const ready = useMemo(() => {
+    if (!plant || settings.waitForGround === false || !groundDoc || !groundDoc.startDate || !groundJobs.length) return {}
+    const gs = { ...groundDefaults(groundDoc.startDate, 'ground'), ...groundDoc }
+    const live = Object.fromEntries(Object.entries(seasonData).map(([id, sd]) => [id, Number(sd.acres) || 0]))
+    const times = groundReadyTimes(buildGround({ jobs: groundJobs, settings: gs, liveAcres: live, now }), groundJobs, gs)
+    const gap = (Number(settings.gapDays) || 0) * 86400000
+    const out = {}
+    Object.entries(times).forEach(([id, t]) => {
+      if (t.unplanned) { out[id] = { unplanned: true }; return }
+      if (t.done || !t.ms) { out[id] = { done: true }; return }
+      const d = new Date(t.ms + gap)
+      out[id] = { date: isoToday(d), half: d.getHours() < 12 ? 'AM' : 'PM' }
+    })
+    return out
+  }, [plant, settings.waitForGround, settings.gapDays, groundDoc, groundJobs, seasonData, now])
+
+  const schedule = useMemo(() => buildSchedule({
+    fields: allFields.filter((f) => f.teamId).map((f) => {
+      const r = f.fieldId && ready[f.fieldId]
+      return r ? { ...f, readyOn: r.date ? r : null, groundUnplanned: !!r.unplanned, groundDone: !!r.done } : f
+    }),
+    settings, logs, now
+  }), [allFields, settings, logs, now, ready])
 
   // ---------------------------------------------------------------------
   // Writes
@@ -209,7 +252,7 @@ export default function Harvest({ userRole }) {
       const b = writeBatch(db)
       keys.forEach((k, j) => {
         const f = byKey[k]
-        const ref = doc(db, 'harvestFields', hfId(sid, k))
+        const ref = doc(db, M.fields, hfId(sid, k))
         if (!teamId && f.source === 'agworld' && isBare(f)) b.delete(ref)
         else b.set(ref, { ...ident(f), teamId: teamId || null, order: teamId ? orders[j] : null, ...(teamId ? extra || {} : { startOn: null }) }, { merge: true })
       })
@@ -226,7 +269,7 @@ export default function Harvest({ userRole }) {
         keys.slice(i, i + 400).forEach((k) => {
           const f = byKey[k]; if (!f) return
           last += 1000
-          b.set(doc(db, 'harvestFields', hfId(sid, k)), { ...ident(f), teamId, order: last }, { merge: true })
+          b.set(doc(db, M.fields, hfId(sid, k)), { ...ident(f), teamId, order: last }, { merge: true })
         })
         await b.commit()
       }
@@ -240,7 +283,7 @@ export default function Harvest({ userRole }) {
       pairs.forEach(({ key, teamId }) => {
         const f = byKey[key]; if (!f) return
         lastBy[teamId] = (lastBy[teamId] ?? 0) + 1000
-        b.set(doc(db, 'harvestFields', hfId(sid, key)), { ...ident(f), teamId, order: lastBy[teamId] }, { merge: true })
+        b.set(doc(db, M.fields, hfId(sid, key)), { ...ident(f), teamId, order: lastBy[teamId] }, { merge: true })
       })
       await b.commit()
     }, `Placed ${pairs.length} field${pairs.length === 1 ? '' : 's'}.`)
@@ -248,12 +291,12 @@ export default function Harvest({ userRole }) {
   function saveField(key, patch) {
     const f = byKey[key]
     if (!f) return Promise.resolve()
-    return run(() => setDoc(doc(db, 'harvestFields', hfId(sid, key)), { ...ident({ ...f, ...patch }), ...patch }, { merge: true }))
+    return run(() => setDoc(doc(db, M.fields, hfId(sid, key)), { ...ident({ ...f, ...patch }), ...patch }, { merge: true }))
   }
   function removeField(key) {
     const f = byKey[key]
     if (!f) return
-    run(() => (f.source === 'agworld' ? setDoc(doc(db, 'harvestFields', hfId(sid, key)), { ...ident(f), teamId: null, order: null }, { merge: true }) : deleteDoc(doc(db, 'harvestFields', hfId(sid, key)))))
+    run(() => (f.source === 'agworld' ? setDoc(doc(db, M.fields, hfId(sid, key)), { ...ident(f), teamId: null, order: null }, { merge: true }) : deleteDoc(doc(db, M.fields, hfId(sid, key)))))
   }
   // Move day / rain day / down time. Goes before `beforeKey` (null = end of line),
   // optionally held to a start date like a field.
@@ -263,7 +306,7 @@ export default function Harvest({ userRole }) {
     const i = beforeKey ? lane.findIndex((x) => x.key === beforeKey) : -1
     const order = i < 0 ? orderBetween(lane.length ? lane[lane.length - 1].order ?? 0 : null, null)
       : orderBetween(i > 0 ? lane[i - 1].order ?? 0 : null, lane[i].order ?? 0)
-    return run(() => setDoc(doc(db, 'harvestFields', hfId(sid, key)), { seasonId: sid, key, kind: 'block', name: label || 'Move day', blockDays: days || 1, crop: null, teamId, order, startOn: startOn || null, updatedBy: who(), updatedAt: Date.now() }))
+    return run(() => setDoc(doc(db, M.fields, hfId(sid, key)), { seasonId: sid, key, kind: 'block', name: label || 'Move day', blockDays: days || 1, crop: null, teamId, order, startOn: startOn || null, updatedBy: who(), updatedAt: Date.now() }))
   }
   // The field in a team's line that starts at or after a half-day — i.e. where
   // something starting then belongs in the order.
@@ -284,36 +327,36 @@ export default function Harvest({ userRole }) {
     const key = `x_${fieldKey(name)}`
     if (!fieldKey(name)) return Promise.resolve()
     if (byKey[key]) { setMsg({ ok: false, text: `“${name}” is already on the list.` }); return Promise.resolve() }
-    return run(() => setDoc(doc(db, 'harvestFields', hfId(sid, key)), { seasonId: sid, key, name, crop, acresOverride: Number(acres) || 0, teamId: null, order: null, updatedBy: who(), updatedAt: Date.now() }), `Added ${name}.`)
+    return run(() => setDoc(doc(db, M.fields, hfId(sid, key)), { seasonId: sid, key, name, crop, acresOverride: Number(acres) || 0, teamId: null, order: null, updatedBy: who(), updatedAt: Date.now() }), `Added ${name}.`)
   }
   // updateDoc replaces each top-level field it's given (a merge would keep
   // calendar days / crop numbers that were just removed).
   function saveSettings(patch) {
-    const ref = doc(db, 'harvestPlans', sid)
+    const ref = doc(db, M.plans, sid)
     const stamp = { seasonId: sid, updatedBy: who(), updatedAt: Date.now() }
-    return run(() => (planDoc ? updateDoc(ref, { ...patch, ...stamp }) : setDoc(ref, { ...defaultSettings(settings.startDate), ...patch, ...stamp })))
+    return run(() => (planDoc ? updateDoc(ref, { ...patch, ...stamp }) : setDoc(ref, { ...defaultSettings(settings.startDate, mode), ...patch, ...stamp })))
   }
   function saveLog(entry) {
     const id = hlId(sid, entry.teamId, entry.date, entry.half)
-    return run(() => setDoc(doc(db, 'harvestLogs', id), { ...entry, seasonId: sid, by: who(), at: Date.now() }), 'Logged.')
+    return run(() => setDoc(doc(db, M.logs, id), { ...entry, seasonId: sid, by: who(), at: Date.now() }), 'Logged.')
   }
   function saveLogs(entries) {
     return run(async () => {
       const b = writeBatch(db)
-      entries.forEach((e) => b.set(doc(db, 'harvestLogs', hlId(sid, e.teamId, e.date, e.half)), { ...e, seasonId: sid, by: who(), at: Date.now() }))
+      entries.forEach((e) => b.set(doc(db, M.logs, hlId(sid, e.teamId, e.date, e.half)), { ...e, seasonId: sid, by: who(), at: Date.now() }))
       await b.commit()
     }, `Logged ${entries.length} half-day${entries.length === 1 ? '' : 's'}.`)
   }
-  function deleteLog(id) { return run(() => deleteDoc(doc(db, 'harvestLogs', id))) }
+  function deleteLog(id) { return run(() => deleteDoc(doc(db, M.logs, id))) }
 
-  const writes = { moveField, placeAt, clearStart, keyStartingFrom, addMany, assignMany, saveField, removeField, addBlock, addCustom, saveSettings, saveLog, saveLogs, deleteLog, run, sid }
+  const writes = { mode, cols: M, moveField, placeAt, clearStart, keyStartingFrom, addMany, assignMany, saveField, removeField, addBlock, addCustom, saveSettings, saveLog, saveLogs, deleteLog, run, sid }
 
   const nowRes = useMemo(() => resourcesAt(schedule, schedule.nowSlot), [schedule])
   const scheduledCount = allFields.filter((f) => f.teamId && f.kind !== 'block').length
   const openField = openKey ? (schedule.byKey[openKey] || byKey[openKey]) : null
 
   return (
-    <div className="agronomy harvest">
+    <div className={`agronomy harvest${plant ? ' planting' : ''}`}>
       <div className="agronomy-filter-bar">
         {seasons.length > 0 && (
           <select value={seasonId || ''} onChange={(e) => setSeasonId(e.target.value)}>
@@ -322,6 +365,7 @@ export default function Harvest({ userRole }) {
         )}
         <span className="contracts-sub" style={{ marginTop: 0 }}>
           Starts {fmtDate(settings.startDate, true)} · {settings.dayLength} h days · {scheduledCount} field{scheduledCount === 1 ? '' : 's'} scheduled
+          {plant && (settings.waitForGround === false ? ' · not waiting for ground work' : groundJobs.length ? ' · each field waits for its ground work' : ' · no ground work planned yet')}
           {planDoc === null && canEdit && ' · using default settings (Settings tab to change)'}
         </span>
         {!canEdit && <span className="contracts-readonly">View only</span>}
@@ -353,7 +397,7 @@ export default function Harvest({ userRole }) {
 // An Agworld field doc that only ever held a team/order can be dropped
 // entirely when it goes back to the pool.
 function isBare(f) {
-  const keep = ['yieldPerAcre', 'goalPerDay', 'dayLength', 'oneWayMin', 'destination', 'skinSetDays', 'killType', 'killed', 'notes', 'resources', 'finished', 'buyer', 'storage', 'bay', 'acresOverride', 'loadSize', 'totalOverride']
+  const keep = ['seedRate', 'yieldPerAcre', 'goalPerDay', 'dayLength', 'oneWayMin', 'destination', 'skinSetDays', 'killType', 'killed', 'notes', 'resources', 'finished', 'buyer', 'storage', 'bay', 'acresOverride', 'loadSize', 'totalOverride']
   return !keep.some((k) => f[k] != null && f[k] !== '')
 }
 
@@ -376,12 +420,12 @@ function Banners({ schedule, settings, nowRes }) {
   return (
     <div className="harvest-banners">
       <div className="harvest-banner harvest-banner-total">
-        <div className="hb-head"><span className="hb-name">All teams</span><span className={`hb-pace ${totalChip}`} title="All teams added together">{Math.abs(tot.aheadDays) < 0.25 ? 'On pace' : `${fmtDays(Math.abs(tot.aheadDays)).replace('day', 'crew-day')} ${tot.aheadDays > 0 ? 'ahead' : 'behind'}`}</span></div>
+        <div className="hb-head"><span className="hb-name">{settings.mode === 'planting' ? 'All crews' : 'All teams'}</span><span className={`hb-pace ${totalChip}`} title="All teams added together">{Math.abs(tot.aheadDays) < 0.25 ? 'On pace' : `${fmtDays(Math.abs(tot.aheadDays)).replace('day', 'crew-day')} ${tot.aheadDays > 0 ? 'ahead' : 'behind'}`}</span></div>
         <div className="hb-pct">{Math.round(tot.pct * 100)}<small>%</small></div>
         <div className="hb-bar"><div style={{ width: `${Math.min(100, tot.pct * 100)}%` }} /></div>
         <div className="hb-line">{fmtN(tot.acresDone)} of {fmtN(tot.acres)} ac</div>
-        {units.map(([u, v]) => <div key={u} className="hb-line">{fmtN(v.dug)} / {fmtN(v.total)} {u}</div>)}
-        <div className="hb-line">Finish {tot.finishDate ? fmtDate(tot.finishDate) : '—'} · trucks now {nowRes.trucks.toFixed(0)}/{settings.limits.trucks}</div>
+        {units.filter(([u]) => u !== 'ac').map(([u, v]) => <div key={u} className="hb-line">{fmtN(v.dug)} / {fmtN(v.total)} {u}</div>)}
+        <div className="hb-line">Finish {tot.finishDate ? fmtDate(tot.finishDate) : '—'} · {settings.mode === 'planting' ? 'seed trucks' : 'trucks'} now {nowRes.trucks.toFixed(0)}/{settings.limits.trucks}</div>
       </div>
       {(settings.teams || []).map((team) => {
         const t = schedule.teams[team.id]
@@ -392,7 +436,7 @@ function Banners({ schedule, settings, nowRes }) {
             <div className="hb-head"><span className="hb-name"><i style={{ background: team.color }} />{team.name}</span><span className={`hb-pace ${chip.cls}`}>{chip.text}</span></div>
             <div className="hb-pct">{Math.round(t.pct * 100)}<small>%</small></div>
             <div className="hb-bar"><div style={{ width: `${Math.min(100, t.pct * 100)}%`, background: team.color }} /></div>
-            <div className="hb-line" title={t.current ? t.current.name : ''}>{t.current ? `On ${t.current.name}` : t.rows.length ? 'All fields done' : 'Drag fields onto this team'}</div>
+            <div className="hb-line" title={t.current ? t.current.name : ''}>{t.current ? `On ${t.current.name}` : t.rows.length ? 'All fields done' : `Drag fields onto this ${words(settings).team}`}</div>
             <div className="hb-line">{fmtN(t.acresDone)} / {fmtN(t.acres)} ac · {fmtDays(t.totalDays - t.doneDays)} left</div>
             <div className="hb-line">Finish {t.finishDate ? fmtDate(t.finishDate) : '—'}</div>
           </div>

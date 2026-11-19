@@ -49,18 +49,57 @@ export const DEFAULT_LIMITS = {
 
 export const DEFAULT_TRUCKING = { nonHaulHours: 2, tripFactor: 2.6, tripFixedMin: 38, roundUp: 0.9 }
 
-export function defaultSettings(startDate) {
+// ---------------------------------------------------------------------------
+// Planting mode (Operations > Planting). Same board, timeline, logging and
+// pace as harvest, measured in acres: total = acres, goal = acres per day.
+// Seed trucks use the harvest truck formula on the seed hauled per day
+// (acres/day × seed cwt/ac ÷ load cwt) when the crop has a seeding rate.
+// A field can't start before its ground work is done (readyOn).
+// ---------------------------------------------------------------------------
+export const DEFAULT_PLANT_TEAMS = [
+  { id: 'potato1', name: 'Potato planter 1', color: '#7B4FC9' },
+  { id: 'potato2', name: 'Potato planter 2', color: '#D23B3B' },
+  { id: 'potato3', name: 'Potato planter 3', color: '#E8801A' },
+  { id: 'potato4', name: 'Potato planter 4', color: '#2E9B4F' },
+  { id: 'beet1', name: 'Beet planter 1', color: '#D9B300' },
+  { id: 'beet2', name: 'Beet planter 2', color: '#9A9890' },
+  { id: 'corn', name: 'Corn planter', color: '#2A6FD6' },
+  { id: 'drill', name: 'Grain drill', color: '#5B5F66' }
+]
+export const DEFAULT_PLANT_CROPS = {
+  POTATO: { unit: 'ac', yieldPerAcre: 1, goalPerDay: 60, seedRate: 22, loadSize: 500 },
+  'MINI POTATOES': { unit: 'ac', yieldPerAcre: 1, goalPerDay: 40, seedRate: 25, loadSize: 500 },
+  BEETS: { unit: 'ac', yieldPerAcre: 1, goalPerDay: 70 },
+  ONIONS: { unit: 'ac', yieldPerAcre: 1, goalPerDay: 40 },
+  CORN: { unit: 'ac', yieldPerAcre: 1, goalPerDay: 150 },
+  WHEAT: { unit: 'ac', yieldPerAcre: 1, goalPerDay: 150 },
+  BARLEY: { unit: 'ac', yieldPerAcre: 1, goalPerDay: 150 }
+}
+const FALLBACK_PLANT_CROP = { unit: 'ac', yieldPerAcre: 1, goalPerDay: 100 }
+export const DEFAULT_PLANT_LIMITS = { trucks: 20 }
+export const isPlanting = (settings) => !!settings && settings.mode === 'planting'
+export function cropDefaults(settings) { return isPlanting(settings) ? DEFAULT_PLANT_CROPS : DEFAULT_CROPS }
+// Words that differ between the two modes.
+export function words(settings) {
+  return isPlanting(settings)
+    ? { done: 'planted', work: 'planting', trucks: 'Seed trucks', truckTip: 'Seed trucks needed', day: 'Hours planting', what: 'planting', first: 'First planting day', team: 'crew' }
+    : { done: 'dug', work: 'digging', trucks: '10-wheelers', truckTip: '10-wheelers needed', day: 'Hours digging', what: 'harvest', first: 'First harvest day', team: 'team' }
+}
+
+export function defaultSettings(startDate, mode = 'harvest') {
+  const plant = mode === 'planting'
   return {
     startDate: startDate || null,
     dayLength: 12,
     rateMode: 'day', // 'day' = goal per day (the sheet); 'scale' = output scales with day length
     standardDay: 12,
-    sundaysOff: false,
-    teams: DEFAULT_TEAMS.map((t) => ({ ...t })),
+    sundaysOff: plant,
+    teams: (plant ? DEFAULT_PLANT_TEAMS : DEFAULT_TEAMS).map((t) => ({ ...t })),
     crops: {},
-    limits: { ...DEFAULT_LIMITS },
+    limits: { ...(plant ? DEFAULT_PLANT_LIMITS : DEFAULT_LIMITS) },
     trucking: { ...DEFAULT_TRUCKING },
-    calendar: {}
+    calendar: {},
+    ...(plant ? { gapDays: 0, waitForGround: true } : {})
   }
 }
 
@@ -100,7 +139,7 @@ export function fmtSlot(startIso, slot, withDow = false) {
 // Settings lookups
 // ---------------------------------------------------------------------------
 export function cropSettings(settings, crop) {
-  const base = DEFAULT_CROPS[crop] || FALLBACK_CROP
+  const base = isPlanting(settings) ? (DEFAULT_PLANT_CROPS[crop] || FALLBACK_PLANT_CROP) : (DEFAULT_CROPS[crop] || FALLBACK_CROP)
   return { ...base, ...(((settings && settings.crops) || {})[crop] || {}) }
 }
 
@@ -127,8 +166,9 @@ export function fieldPlan(f, settings, team) {
   }
   const cs = cropSettings(settings, f.crop)
   const acres = Number(f.acres) || 0
-  const yieldPerAcre = num(f.yieldPerAcre) ?? num(f.histYield) ?? cs.yieldPerAcre
-  const total = num(f.totalOverride) ?? acres * yieldPerAcre
+  const plant = isPlanting(settings)
+  const yieldPerAcre = plant ? 1 : num(f.yieldPerAcre) ?? num(f.histYield) ?? cs.yieldPerAcre
+  const total = plant ? acres : num(f.totalOverride) ?? acres * yieldPerAcre
   const dayLength = num(f.dayLength) ?? num(team && team.dayLength) ?? num(settings.dayLength) ?? 12
   const rate = num(f.goalPerDay) ?? num(team && team.goalPerDay) ?? cs.goalPerDay
   // 'scale': goals are for a standard-length day, so a 14 h day on a 12 h
@@ -136,10 +176,14 @@ export function fieldPlan(f, settings, team) {
   const goal = settings.rateMode === 'scale' ? rate * dayLength / (num(settings.standardDay) || 12) : rate
   const loadSize = num(f.loadSize) ?? cs.loadSize
   const days = goal > 0 ? total / goal : 0
+  // Planting hauls seed: cwt per day = acres per day × seeding rate.
+  const seedRate = plant ? num(f.seedRate) ?? num(cs.seedRate) : null
+  const haul = plant ? (seedRate ? goal * seedRate : 0) : goal
   return {
-    acres, yieldPerAcre, yieldSource: num(f.yieldPerAcre) != null ? 'set' : num(f.histYield) != null ? 'history' : 'default',
-    total, goal, dayLength, unit: cs.unit, loadSize, days,
-    trucks: trucksNeeded({ goal, loadSize, dayLength, oneWayMin: num(f.oneWayMin) }, settings.trucking)
+    acres, yieldPerAcre, yieldSource: plant ? 'acres' : num(f.yieldPerAcre) != null ? 'set' : num(f.histYield) != null ? 'history' : 'default',
+    total, goal, dayLength, unit: cs.unit, loadSize, days, seedRate,
+    seedPerDay: plant && seedRate ? haul : null,
+    trucks: trucksNeeded({ goal: haul, loadSize, dayLength, oneWayMin: num(f.oneWayMin) }, settings.trucking)
   }
 }
 
@@ -243,12 +287,18 @@ export function buildSchedule({ fields, settings, logs = [], now = new Date(), h
       // "Start on" date: hold the line until then (the crew waits / works
       // elsewhere); everything after it follows in sequence. Only for a
       // field that hasn't been started.
-      r.pinSlot = null; r.pinLate = false; r.waitFrom = null
-      if (r.startOn && r.startOn.date && r.dug <= 0) {
-        const pin = slotOf(startDate, r.startOn.date, r.startOn.half || 'AM')
-        r.pinSlot = pin
+      r.pinSlot = null; r.pinLate = false; r.waitFrom = null; r.waitGround = false; r.readySlot = null
+      // Planting: not before the field's ground work is done (readyOn).
+      const pinUser = r.startOn && r.startOn.date ? slotOf(startDate, r.startOn.date, r.startOn.half || 'AM') : null
+      const pinReady = r.readyOn && r.readyOn.date ? slotOf(startDate, r.readyOn.date, r.readyOn.half || 'AM') : null
+      if ((pinUser != null || pinReady != null) && r.dug <= 0) {
+        const pin = Math.max(pinUser ?? -Infinity, pinReady ?? -Infinity)
+        const fromGround = pinReady != null && (pinUser == null || pinReady > pinUser)
+        r.pinSlot = pinUser // the date someone asked for (📌)
         const pos = slot + (used > 0 ? used / Math.max(capAt(slot), 1e-9) : 0)
         if (pin > pos + 1e-9) {
+          r.waitGround = fromGround
+          if (fromGround) r.readySlot = pin
           r.waitFrom = pos
           slot = pin; used = 0
           while (loggedSlots.has(slot)) slot++

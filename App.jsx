@@ -27,13 +27,11 @@ import Yields from './Yields.jsx'
 import Operations from './Operations.jsx'
 import Seed from './Seed.jsx'
 import FarmMap from './FarmMap.jsx'
-import Spray from './Spray.jsx'
 
 
 import AioLogo from './AioLogo.jsx'
 
 import aioLogoIcon from './aio-logo-icon.png'
-import sprayTile from './spray-tile.jpg'
 
 import PivotIcon from './PivotIcon.jsx'
 
@@ -1457,7 +1455,7 @@ export default function App() {
               <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Yields</div>
             </div>
           )}
-          {(canSeeHarvest || canSeeGround) && (
+          {(canSeeHarvest || canSeeGround || canSeeSpray) && (
             <div
               onClick={() => setPage('harvest')}
               style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
@@ -1513,17 +1511,6 @@ export default function App() {
               <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Farm Map</div>
             </div>
           )}
-          {canSeeSpray && (
-            <div
-              onClick={() => setPage('spray')}
-              style={{ cursor: 'pointer', width: 'min(160px, calc(50% - 8px))', flexShrink: 0, height: '176px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', textAlign: 'center', gap: '10px', padding: '28px 6px 0', background: '#fff', border: '1px solid #ddd', borderRadius: '12px' }}
-            >
-              <div style={{ width: '90px', height: '90px', borderRadius: '16px', overflow: 'hidden', background: '#2d6a35' }}>
-                <img src={sprayTile} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
-              </div>
-              <div style={{ height: '44px', fontSize: '17px', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', lineHeight: 1.25 }}>Spray Schedule</div>
-            </div>
-          )}
         </div>
       )}
       {page === 'potato-storage' && hasModule('potato-storage') && <PotatoStorage />}
@@ -1533,10 +1520,12 @@ export default function App() {
       {page === 'agronomy' && canSeeAgronomy && <Agronomy userRole={userRole} />}
       {page === 'contracts' && canSeeContracts && <Contracts userRole={userRole} />}
       {page === 'yields' && canSeeYields && <Yields userRole={userRole} />}
-      {page === 'harvest' && (canSeeHarvest || canSeeGround) && <Operations userRole={userRole} canHarvest={canSeeHarvest} canField={canSeeHarvest || canSeeGround} />}
+      {(page === 'harvest' || page === 'spray') && (canSeeHarvest || canSeeGround || canSeeSpray) && (
+        <Operations userRole={userRole} canHarvest={canSeeHarvest} canField={canSeeHarvest || canSeeGround}
+          canSpray={canSeeSpray} sprayAdmin={sprayAdmin} userProfile={userProfile} initial={page === 'spray' ? 'spray' : null} />
+      )}
       {page === 'seed' && canSeeSeed && <Seed userRole={userRole} />}
       {page === 'map' && canSeeMap && <FarmMap userRole={userRole} />}
-      {page === 'spray' && canSeeSpray && <Spray userRole={userRole} sprayAdmin={sprayAdmin} userProfile={userProfile} />}
       {page === 'irrigation' && hasModule('irrigation') && (
         <>
           {view === 'live-data' && <LiveData />}
