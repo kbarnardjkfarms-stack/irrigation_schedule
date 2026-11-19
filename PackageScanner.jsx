@@ -119,9 +119,9 @@ async function processPhoto(file, quadOverride, say) {
 
 // ---------------------------------------------------------------------------
 
-function CameraIcon({ color = '#fff' }) {
+function CameraIcon({ color = '#fff', size = 20 }) {
   return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
       <circle cx="12" cy="13.5" r="3.5" />
     </svg>
@@ -168,7 +168,7 @@ function EdgeEditor({ file, quad, srcW, srcH, onApply, onCancel }) {
   )
 }
 
-export default function PackageScanner({ onPdf, disabled, onError, label = 'Scan with camera', replaceStyle = false }) {
+export default function PackageScanner({ onPdf, disabled, onError, label = 'Scan with camera', replaceStyle = false, iconOnly = false }) {
   const [open, setOpen] = useState(false)
   const [pages, setPages] = useState([])   // { id, file, blob, url, w, h, quad, srcW, srcH, info }
   const [sel, setSel] = useState(0)
@@ -270,12 +270,16 @@ export default function PackageScanner({ onPdf, disabled, onError, label = 'Scan
         data-testid="scan-button"
         onClick={() => clickCamera('add')}
         disabled={disabled || working}
-        style={replaceStyle
+        title={iconOnly ? 'Scan the package with your camera' : undefined}
+        aria-label={iconOnly ? 'Scan the package with your camera' : undefined}
+        style={iconOnly
+          ? { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '26px', height: '22px', padding: 0, border: '1px solid #ccc', borderRadius: '5px', background: disabled ? '#f4f2ec' : '#fff', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1 }
+          : replaceStyle
           ? { display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '6px 10px', border: '1px solid #ccc', borderRadius: '6px', background: '#fff', color: '#2b2b26', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1 }
           : { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px', padding: '9px 14px', border: 'none', borderRadius: '8px', background: '#2b2b26', color: '#fff', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1 }}
       >
-        <CameraIcon color={replaceStyle ? '#2b2b26' : '#fff'} />
-        {label}
+        <CameraIcon color={replaceStyle || iconOnly ? '#2b2b26' : '#fff'} size={iconOnly ? 15 : 20} />
+        {iconOnly ? null : label}
       </button>
       <input ref={inputRef} data-testid="scan-input" type="file" accept="image/*" capture="environment" onChange={handlePhoto} style={{ display: 'none' }} />
 
