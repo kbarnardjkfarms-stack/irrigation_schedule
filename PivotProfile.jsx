@@ -6,6 +6,7 @@ import PivotIcon from './PivotIcon.jsx'
 import GpmChangeDialog from './GpmChangeDialog.jsx'
 import { nextGpm, describeHistory } from './gpmHistory.js'
 import { travelDegrees } from './appliedMath.js'
+import PackageScanner from './PackageScanner.jsx'
 
 // Layout helpers for the profile page: each data section sits in its own
 // white card with a title, and cards are grouped under small headings so
@@ -165,7 +166,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     // PDFs. A photo is turned away here, before anything is saved.
     const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')
     if (!isPdf) {
-      setUploadError('AIO needs a PDF. Scan the printout with your phone\u2019s scanner (steps below), then upload the PDF it saves.')
+      setUploadError('That file needs to be a PDF. Tap Scan with camera to scan the printout, or use your phone\u2019s scanner (steps below) and upload the PDF it saves.')
       e.target.value = ''
       return
     }
@@ -532,6 +533,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
               {uploading ? 'Uploading\u2026' : 'Replace'}
               <input type="file" accept="application/pdf" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
             </label>
+            <PackageScanner onPdf={savePackage} disabled={uploading} onError={setUploadError} label="Scan again" replaceStyle />
             {canDelete && (
               <button onClick={() => setDeleteTarget({ kind: 'current', entry: pkg })} style={{ fontSize: '12px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: '#A32D2D' }}>Delete</button>
             )}
@@ -539,6 +541,7 @@ export default function PivotProfile({ pivotGuid, onBack }) {
         ) : (
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <PackageScanner onPdf={savePackage} disabled={uploading} onError={setUploadError} />
               <label style={{ display: 'inline-block', fontSize: '13px', padding: '8px 14px', border: '1px dashed #ccc', borderRadius: '8px', cursor: uploading ? 'default' : 'pointer' }}>
                 {uploading ? 'Uploading\u2026' : 'Upload package PDF'}
                 <input type="file" accept="application/pdf" onChange={handleUpload} disabled={uploading} style={{ display: 'none' }} />
@@ -550,9 +553,11 @@ export default function PivotProfile({ pivotGuid, onBack }) {
             </label>
           </>
         )}
-        <div style={{ fontSize: '10px', color: '#888', marginTop: '8px' }}>PDF only.</div>
-        <details open={!pkg} data-testid="scan-howto" style={{ marginTop: '8px', background: '#f4f2ec', borderRadius: '8px', padding: '8px 12px' }}>
-          <summary style={{ fontSize: '12px', fontWeight: 600, color: '#2b2b26', cursor: 'pointer' }}>No PDF? Scan the printout with your phone</summary>
+        <div style={{ fontSize: '11px', color: '#555', marginTop: '8px', lineHeight: 1.45 }}>
+          Tap <b>Scan with camera</b>: take a picture of each page, cover page first. AIO straightens and cleans each page and tells you if one is blurry. Lay the page flat in good light and fill the screen with it. Or upload a PDF you already have.
+        </div>
+        <details data-testid="scan-howto" style={{ marginTop: '8px', background: '#f4f2ec', borderRadius: '8px', padding: '8px 12px' }}>
+          <summary style={{ fontSize: '12px', fontWeight: 600, color: '#2b2b26', cursor: 'pointer' }}>Other way: make a PDF with your phone&rsquo;s own scanner</summary>
           <div style={{ fontSize: '12px', color: '#2b2b26', lineHeight: 1.5, marginTop: '8px' }}>
             <div style={{ fontWeight: 600 }}>iPhone</div>
             <ol style={{ margin: '2px 0 8px', paddingLeft: '18px' }}>
