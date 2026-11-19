@@ -280,6 +280,13 @@ service cloud.firestore {
       allow read: if signedIn() && hasModule('irrigation');
       allow write: if false;
     }
+    // Open-Meteo forecast per station (ET0 for grass, temperature, rain, wind,
+    // sun), written only by the archiveOpenMeteoNightly function. The raw
+    // daily copies (openMeteoRaw) are server-only and have no rule.
+    match /openMeteoDaily/{stationId} {
+      allow read: if signedIn() && hasModule('irrigation');
+      allow write: if false;
+    }
     match /fieldSettings/{fieldId} {
       allow read: if signedIn() && hasModule('irrigation');
       allow write: if signedIn() && hasModule('irrigation') && canEditFarmData(fieldId);
