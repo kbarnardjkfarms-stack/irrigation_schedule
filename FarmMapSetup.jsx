@@ -148,16 +148,19 @@ function KmlImport({ rawFields, points, run }) {
       ops.push(['set', doc(db, 'farmFields', f.id), data, { merge: true }])
     })
     if (removeMissing) stats.missing.forEach((f) => ops.push(['set', doc(db, 'farmFields', f.id), { archived: true, updatedBy: who(), updatedAt: Date.now() }, { merge: true }]))
+    // Pins added or edited in AIO (source 'manual' / edited) are left alone;
+    // the rest follow the file.
     const keep = new Set(parsed.points.map((p) => p.id))
-    parsed.points.forEach((p) => ops.push(['set', doc(db, 'farmPoints', p.id), { name: p.name, farm: p.farm, lat: p.lat, lng: p.lng, type: p.type, updatedAt: Date.now() }]))
-    points.filter((p) => !keep.has(p.id)).forEach((p) => ops.push(['del', doc(db, 'farmPoints', p.id)]))
+    const mine = new Set(points.filter((p) => p.source === 'manual' || p.edited).map((p) => p.id))
+    parsed.points.forEach((p) => { if (!mine.has(p.id)) ops.push(['set', doc(db, 'farmPoints', p.id), { name: p.name, farm: p.farm, lat: p.lat, lng: p.lng, type: p.type, updatedAt: Date.now() }]) })
+    points.filter((p) => !keep.has(p.id) && !mine.has(p.id)).forEach((p) => ops.push(['del', doc(db, 'farmPoints', p.id)]))
     run(async () => { await commitAll(ops); setParsed(null) }, `Map imported: ${stats.added} new, ${stats.updated} updated outlines, ${parsed.points.length} points.`)
     setBusy(false)
   }
   return (
     <div className="yields-card">
       <div className="yields-card-title">1 · Farm map (KML / KMZ)</div>
-      <div className="contracts-sub">From Google My Maps: ⋮ → Export to KML/KMZ (whole map). Each folder becomes a farm, each shape a field, each pin a point (cellars, shops, beet dumps…). Re-importing updates outlines and keeps your links and notes.</div>
+      <div className="contracts-sub">From Google My Maps: ⋮ → Export to KML/KMZ (whole map). Each folder becomes a farm, each shape a field, each pin a point (cellars, shops, beet dumps…). Re-importing updates outlines and keeps your links and notes; pins added or edited in AIO are kept.</div>
       <input type="file" accept=".kml,.kmz" onChange={onFile} style={{ marginTop: 10 }} />
       {err && <div className="agronomy-error-banner" style={{ marginTop: 8 }}>{err}</div>}
       {parsed && stats && (

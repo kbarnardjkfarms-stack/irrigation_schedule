@@ -131,8 +131,26 @@ export async function kmzToKml(buf) {
 
 const POINT_TYPES = [
   [/CELLAR/i, 'Cellar'], [/BEET DUMP|PILER/i, 'Beet dump'], [/SHOP/i, 'Shop'], [/FUEL/i, 'Fuel'], [/JUG DROP/i, 'Jug drop'],
-  [/OFFICE/i, 'Office'], [/HOUSE|WIDE|HOTEL|HOME|BUNK/i, 'Housing'], [/TRANSLOAD/i, 'Transload'], [/PUMP|WELL/i, 'Pump']
+  [/OFFICE/i, 'Office'], [/HOUSE|WIDE|HOTEL|HOME|BUNK/i, 'Housing'], [/TRANSLOAD/i, 'Transload'], [/PUMP|WELL/i, 'Pump'],
+  [/SCALE/i, 'Scale'], [/GATE/i, 'Gate']
 ]
+// Pin types for the Farm Map and the public feed (functions/publicMapFeed.js
+// keeps the same list for Google Earth). icon = what's drawn in the pin.
+export const PIN_TYPES = [
+  { type: 'Housing', color: '#2A6FD6', icon: '🏠' },
+  { type: 'Fuel', color: '#D23B3B', icon: '⛽' },
+  { type: 'Beet dump', color: '#097138', icon: '🚚' },
+  { type: 'Cellar', color: '#C17A3B', icon: '🥔' },
+  { type: 'Shop', color: '#5B5F66', icon: '🔧' },
+  { type: 'Office', color: '#7B4FC9', icon: '🏢' },
+  { type: 'Scale', color: '#8C6D1F', icon: '⚖️' },
+  { type: 'Pump', color: '#185FA5', icon: '💧' },
+  { type: 'Jug drop', color: '#0F8C8C', icon: '🧴' },
+  { type: 'Transload', color: '#E8801A', icon: '🔄' },
+  { type: 'Gate', color: '#6B8E23', icon: '🚧' },
+  { type: 'Other', color: '#333333', icon: '📍' }
+]
+export const pinInfo = (type) => PIN_TYPES.find((t) => t.type === type) || PIN_TYPES[PIN_TYPES.length - 1]
 export const pointType = (name) => (POINT_TYPES.find(([re]) => re.test(name)) || [null, 'Other'])[1]
 // Whole-name matches only: "NORTH CANAL" and "DRY CREEK ALPHA" are farmed fields.
 const OTHER_AREA = /^\s*(CREP\b.*|CANAL|CANYON RIM|DRY|ROAD|YARD|DITCH|POND|RESERVOIR)\s*$/i

@@ -13,7 +13,7 @@ const FEED_BASE = 'https://us-central1-irrigation-schedule-f8b69.cloudfunctions.
 const DEFAULTS = {
   enabled: false, key: '', year: 'auto', groupBy: 'crop', labelAcres: false,
   includeHidden: false, refreshMinutes: 60, title: 'JK Farms fields',
-  show: { farm: true, crop: true, variety: false, acres: true }
+  show: { farm: true, crop: true, variety: false, acres: true, pins: true, pinNotes: false }
 }
 const newKey = () => {
   const a = new Uint8Array(15)
@@ -48,7 +48,7 @@ export default function FarmMapFeed({ years }) {
     setPreview({ loading: true })
     Promise.all([
       fetch(`${feedUrl}&format=json&t=${Date.now()}`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`The link answered ${r.status}.`)))),
-      fetch(`${feedUrl}&t=${Date.now()}`).then((r) => r.text())
+      fetch(`${feedUrl}&kml=1&t=${Date.now()}`).then((r) => r.text())
     ]).then(([summary, kml]) => { if (!gone) setPreview({ summary, kml }) })
       .catch((e) => { if (!gone) setPreview({ error: /fetch/i.test(e.message) ? 'Couldn’t reach the feed. If it was just uploaded, give the functions deploy a few minutes.' : e.message }) })
     return () => { gone = true }
@@ -80,7 +80,7 @@ export default function FarmMapFeed({ years }) {
           <div className="yields-card-head">
             <div>
               <div className="yields-card-title">Public map feed</div>
-              <div className="contracts-sub">A live link of the Agworld fields — outlines in crop colours, with acres — for Google Earth and other map programs. It follows Agworld: change a crop or a boundary there and the link shows it after the next sync (every morning at 5, or Sync now).</div>
+              <div className="contracts-sub">A live link of the Agworld fields — outlines in crop colours, with acres — and the Farm Map pins. Clicked on a phone or computer it opens a map in the browser; Google Earth and other map programs get the same fields as KML. It follows Agworld: change a crop or a boundary there and the link shows it after the next sync (every morning at 5, or Sync now).</div>
             </div>
           </div>
 
@@ -121,7 +121,12 @@ export default function FarmMapFeed({ years }) {
             <label><input type="checkbox" checked={form.labelAcres} disabled={!form.show.acres} onChange={(e) => set({ labelAcres: e.target.checked })} /> Acres in the map label too (“27A · 125 ac”)</label>
             <label><input type="checkbox" checked={form.includeHidden} onChange={(e) => set({ includeHidden: e.target.checked })} /> Include subleased / archive farms</label>
           </div>
-          <div className="contracts-sub">Outline colour is always the crop. Nothing else goes out — no yields, contracts, applications or notes.</div>
+          <div className="fm-lab" style={{ marginTop: 12 }}>Pins from the Farm Map</div>
+          <div className="fmf-checks">
+            <label><input type="checkbox" checked={form.show.pins} onChange={(e) => setShow({ pins: e.target.checked })} /> Houses, fuel, beet dumps, cellars… (a “Places” folder)</label>
+            <label><input type="checkbox" checked={form.show.pinNotes} disabled={!form.show.pins} onChange={(e) => setShow({ pinNotes: e.target.checked })} /> Pin notes too (leave off if they hold gate codes)</label>
+          </div>
+          <div className="contracts-sub">Outline colour is always the crop. Nothing else goes out — no yields, contracts, applications or field notes.</div>
 
           <div className="fm-row" style={{ marginTop: 12 }}>
             <button className="save" disabled={!dirty} onClick={() => save()}>Save</button>
@@ -133,18 +138,21 @@ export default function FarmMapFeed({ years }) {
           <div className="yields-card-title">The link</div>
           {!feedUrl ? <div className="contracts-sub">Turn the feed on to make a link.</div> : (
             <>
+              <div className="contracts-sub" style={{ marginTop: 0 }}>Send this to anyone — text, email, a bookmark on a phone. It opens a satellite map of the fields and pins; tapping a field or pin gives <b>Directions in Google Maps</b>.</div>
               <div className="fmf-url"><code>{feedUrl}</code><button onClick={copy}>{copied ? 'Copied' : 'Copy'}</button></div>
               <div className="fm-row" style={{ marginTop: 8 }}>
-                <button className="save" onClick={() => { window.location.href = `${feedUrl}&link=1` }}>Download Google Earth file</button>
+                <a className="fm-linkbtn" href={`${feedUrl}&map=1`} target="_blank" rel="noreferrer">Open the map</a>
+                <button onClick={() => { window.location.href = `${feedUrl}&link=1` }}>Download Google Earth file</button>
                 {!confirmReplace
                   ? <button onClick={() => setConfirmReplace(true)}>Replace link…</button>
                   : <><button className="fmf-danger" onClick={() => { setConfirmReplace(false); save({ ...form, key: newKey() }, 'New link made. The old one has stopped working.') }}>Stop the old link and make a new one</button><button onClick={() => setConfirmReplace(false)}>Cancel</button></>}
               </div>
               {!form.enabled && <div className="fm-note">The feed is off, so this link answers “not found” right now.</div>}
               <ol className="fmf-how">
+                <li><b>Anyone with a browser:</b> just open the link — nothing to install. It shows what’s in AIO each time it’s opened.</li>
                 <li><b>Google Earth Pro (desktop):</b> open the downloaded file. It sits under Places and re-reads the link on the timer above. Share the same small file with anyone who should have it.</li>
                 <li><b>Google Earth on the web:</b> Projects → New project → Import KML file → pick the downloaded file. It loads the fields; reopen the project to be sure you’re seeing the latest.</li>
-                <li><b>QGIS, ArcGIS, CalTopo and similar:</b> add a layer “from URL” and paste the link.</li>
+                <li><b>QGIS, ArcGIS, CalTopo and similar:</b> add a layer “from URL” and paste the link with <code>&amp;kml=1</code> on the end.</li>
                 <li><b>Google My Maps</b> can’t follow a link — it only takes a one-time copy, so it won’t update itself.</li>
               </ol>
               <div className="contracts-sub">Anyone holding the link can see what’s shown here. Replacing the link cuts off every copy handed out before.</div>
@@ -158,7 +166,7 @@ export default function FarmMapFeed({ years }) {
           <div className="yields-card-head">
             <div>
               <div className="yields-card-title">What the link shows right now{s ? ` — ${s.year}` : ''}</div>
-              <div className="contracts-sub">{s ? `${s.fields} fields · ${fmt(s.acres)} ac${s.seasonNames.length ? ` · Agworld season ${s.seasonNames.join(', ')}` : ' · no Agworld season for that year yet'}` : preview && preview.loading ? 'Reading the link…' : ''}</div>
+              <div className="contracts-sub">{s ? `${s.fields} fields · ${fmt(s.acres)} ac${s.pins ? ` · ${s.pins} pins` : ''}${s.seasonNames.length ? ` · Agworld season ${s.seasonNames.join(', ')}` : ' · no Agworld season for that year yet'}` : preview && preview.loading ? 'Reading the link…' : ''}</div>
             </div>
             {dirty && <span className="hb-tag warn">Save to see your changes here</span>}
           </div>
@@ -200,9 +208,25 @@ function FeedMap({ kml }) {
       map = L.map(el.current, { zoomControl: true, attributionControl: false })
       L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 }).addTo(map)
       const group = L.featureGroup().addTo(map)
+      Array.from(x.getElementsByTagNameNS('*', 'Style')).forEach((st) => {
+        const c = st.getElementsByTagNameNS('*', 'IconStyle')[0]
+        const v = c && c.getElementsByTagNameNS('*', 'color')[0]
+        if (v && !colors['#' + st.getAttribute('id')]) { const t = v.textContent.trim(); colors['#' + st.getAttribute('id')] = '#' + t.slice(6, 8) + t.slice(4, 6) + t.slice(2, 4) }
+      })
       Array.from(x.getElementsByTagNameNS('*', 'Placemark')).forEach((p) => {
         const ring = p.getElementsByTagNameNS('*', 'LinearRing')[0]
-        if (!ring) return
+        if (!ring) {
+          // a pin
+          const pt = p.getElementsByTagNameNS('*', 'Point')[0]
+          if (!pt) return
+          const [lng, lat] = pt.textContent.trim().split(',').map(Number)
+          const su = p.getElementsByTagNameNS('*', 'styleUrl')[0]
+          const name = (p.getElementsByTagNameNS('*', 'name')[0] || {}).textContent || ''
+          const desc = (p.getElementsByTagNameNS('*', 'description')[0] || {}).textContent || ''
+          L.circleMarker([lat, lng], { radius: 6, weight: 2, color: '#fff', fillColor: (su && colors[su.textContent.trim()]) || '#333', fillOpacity: 1 })
+            .bindTooltip(name).bindPopup(`<b>${name.replace(/</g, '&lt;')}</b>${desc}`).addTo(group)
+          return
+        }
         const pts = ring.textContent.trim().split(/\s+/).map((t) => t.split(',').map(Number)).map(([lng, lat]) => [lat, lng])
         const su = p.getElementsByTagNameNS('*', 'styleUrl')[0]
         const color = (su && colors[su.textContent.trim()]) || '#8D8A7E'

@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { collection, collectionGroup, doc, onSnapshot, query, setDoc, updateDoc, where } from 'firebase/firestore'
+import { collection, collectionGroup, deleteDoc, doc, onSnapshot, query, setDoc, updateDoc, where } from 'firebase/firestore'
 import { auth, db } from './firebase.js'
 import { canonCrop, effectiveYield } from './yieldMath.js'
 import {
-  POT_BUCKETS, centroid, circleRing, cropColor, cropFor, cropLabel, cropsFromDesc, lastPotatoYear, mapKey, matchPlan,
-  packRing, potBucket, shapeAcres, unpackRing
+  PIN_TYPES, POT_BUCKETS, centroid, circleRing, cropColor, cropFor, cropLabel, cropsFromDesc, lastPotatoYear, mapKey, matchPlan,
+  packRing, pinInfo, potBucket, shapeAcres, unpackRing
 } from './mapMath.js'
 import { FieldsTable, MapImport } from './FarmMapSetup.jsx'
 import FarmMapFeed from './FarmMapFeed.jsx'
@@ -16,7 +16,10 @@ import FarmMapFeed from './FarmMapFeed.jsx'
 //   farmFields/{id}     one outline per field / area: name, farm, kind ('field' |
 //                       'other' for CREP, canal, dry corners…), rings [{ c:[lng,lat,…], hole }],
 //                       acres (from the outline), planKey (manual link to a plan row)
-//   farmPoints/{id}     cellars, shops, beet dumps, housing, fuel…
+//   farmPoints/{id}     pins: cellars, shops, beet dumps, housing, fuel… { name, type,
+//                       farm, lat, lng, notes }. From the KML import, or added on the
+//                       map (source 'manual', id pin_…; edited imports get edited: true
+//                       so a re-import leaves them alone). Shown in the public feed.
 //   fieldPlanRows/{planYear}__{KEY}  one row of the Main Field Plan: crops by year
 //                       and the field's basic plan data. The plan module builds on these.
 // This is the start of AIO having its own field list instead of Agworld's;
@@ -65,6 +68,8 @@ export default function FarmMap({ userRole }) {
   const [layers, setLayers] = useState({ labels: true, points: true, other: true, satellite: true })
   const [search, setSearch] = useState('')
   const [edit, setEdit] = useState(null) // { id|null, mode: 'edit'|'draw'|'circle', pts }
+  const [pinId, setPinId] = useState(null) // pin card open
+  const [pinDraft, setPinDraft] = useState(null) // { id|null, name, type, farm, notes, lat, lng } while adding / moving
 
   useEffect(() => {
     const onErr = (e) => setError(e.code === 'permission-denied'
@@ -174,6 +179,25 @@ export default function FarmMap({ userRole }) {
       setEdit(null); setSelId(id)
     }
   }
+  function savePin(d) {
+    const id = d.id || `pin_${newId()}`
+    const old = points.find((p) => p.id === d.id)
+    const data = {
+      name: (d.name || '').trim() || d.type || 'Pin', type: d.type || 'Other', farm: (d.farm || '').trim() || null,
+      notes: (d.notes || '').trim() || null, lat: Number(d.lat), lng: Number(d.lng), updatedBy: who(), updatedAt: Date.now(),
+      ...(old && !old.id.startsWith('pin_') ? { edited: true } : {}), ...(!old ? { source: 'manual', createdBy: who() } : {})
+    }
+    run(() => setDoc(doc(db, 'farmPoints', id), data, { merge: true }), `${data.name} saved.`)
+    setPinDraft(null); setPinId(id)
+  }
+  function deletePin(p) {
+    if (!window.confirm(`Delete the pin “${p.name}”?`)) return
+    run(() => deleteDoc(doc(db, 'farmPoints', p.id)), `${p.name} deleted.`)
+    setPinId(null)
+  }
+  const selPin = points.find((p) => p.id === pinId) || null
+  const pinFarms = useMemo(() => [...new Set([...farms, ...points.map((p) => p.farm).filter(Boolean)])].sort(), [farms, points])
+
   function saveField(id, patch) { run(() => updateDoc(doc(db, 'farmFields', id), { ...patch, updatedBy: who(), updatedAt: Date.now() }), 'Saved.') }
 
   const tabs = [['map', 'Map'], ['fields', 'Fields & links'], ...(canEdit ? [['import', 'Import'], ['feed', 'Public feed']] : [])]
@@ -213,10 +237,13 @@ export default function FarmMap({ userRole }) {
               <div className="fm-row">
                 <input className="agronomy-search-input" list="fm-names" placeholder="Find a field…" value={search} onChange={(e) => {
                   setSearch(e.target.value)
-                  const hit = fields.find((f) => f.name.toLowerCase() === e.target.value.toLowerCase())
-                  if (hit) { setSelId(hit.id); setSearch('') }
+                  const v = e.target.value.toLowerCase()
+                  const hit = fields.find((f) => f.name.toLowerCase() === v)
+                  const pin = !hit && points.find((p) => `📍 ${p.name}`.toLowerCase() === v)
+                  if (hit) { setSelId(hit.id); setPinId(null); setSearch('') }
+                  if (pin) { setPinId(pin.id); setSelId(null); setSearch(''); setLayers((l) => ({ ...l, points: true })) }
                 }} />
-                <datalist id="fm-names">{fields.map((f) => <option key={f.id} value={f.name}>{f.farm}</option>)}</datalist>
+                <datalist id="fm-names">{fields.map((f) => <option key={f.id} value={f.name}>{f.farm}</option>)}{points.map((p) => <option key={p.id} value={`📍 ${p.name}`}>{p.type}</option>)}</datalist>
               </div>
               <div>
                 <div className="fm-lab">{mode === 'crop' ? `Acres by crop · ${year}` : mode === 'pot' ? `Potato rotation · ${year}` : 'Acres by farm'}</div>
@@ -235,23 +262,36 @@ export default function FarmMap({ userRole }) {
                 </div>
               </div>
               <div className="fm-layers">
-                {[['satellite', 'Satellite'], ['labels', 'Field names'], ['points', 'Cellars, shops, dumps…'], ['other', 'CREP / other areas']].map(([k, l]) => (
+                {[['satellite', 'Satellite'], ['labels', 'Field names'], ['points', 'Pins (houses, fuel, dumps…)'], ['other', 'CREP / other areas']].map(([k, l]) => (
                   <label key={k} className="hb-check"><input type="checkbox" checked={layers[k]} onChange={(e) => setLayers({ ...layers, [k]: e.target.checked })} /> {l}</label>
                 ))}
+              </div>
+              <div className="fm-tools">
+                <div className="fm-lab">Measure</div>
+                <button disabled={!!edit || !!pinDraft} onClick={() => { setSelId(null); setPinId(null); setEdit({ id: null, mode: 'draw', pts: [], name: '', farm: farm !== 'all' ? farm : '', measure: true }) }}>📐 Measure area</button>
+                <button disabled={!!edit || !!pinDraft} onClick={() => { setSelId(null); setPinId(null); setEdit({ id: null, mode: 'circle', pts: [], name: '', farm: farm !== 'all' ? farm : '', measure: true }) }}>◯ Measure a pivot circle</button>
               </div>
               {canEdit && (
                 <div className="fm-tools">
                   <div className="fm-lab">Draw</div>
                   <button disabled={!!edit} onClick={() => { setSelId(null); setEdit({ id: null, mode: 'draw', pts: [], name: '', farm: farm !== 'all' ? farm : '' }) }}>+ Field by corners</button>
                   <button disabled={!!edit} onClick={() => { setSelId(null); setEdit({ id: null, mode: 'circle', pts: [], name: '', farm: farm !== 'all' ? farm : '' }) }}>+ Pivot circle</button>
+                  <button disabled={!!edit || !!pinDraft} onClick={() => { setSelId(null); setPinId(null); setLayers((l) => ({ ...l, points: true })); setPinDraft({ id: null, name: '', type: 'Housing', farm: farm !== 'all' ? farm : '', notes: '', lat: null, lng: null }) }}>+ Pin (house, fuel, dump…)</button>
                 </div>
               )}
             </aside>
             <div className="fm-mapbox">
               <LeafletMap fields={fields} points={points} year={year} mode={mode} farm={farm} focus={focus} farms={farms}
-                selId={selId} onSelect={(id) => { if (!edit) setSelId(id) }} layers={layers} edit={edit} setEdit={setEdit} />
-              {edit && <EditBar edit={edit} setEdit={setEdit} farms={farms} onSave={saveShape} />}
-              {sel && !edit && (
+                selId={selId} onSelect={(id) => { if (!edit && !pinDraft) { setSelId(id); setPinId(null) } }} layers={layers} edit={edit} setEdit={setEdit}
+                pinId={pinId} onPin={(id) => { if (!edit && !pinDraft) { setPinId(id); setSelId(null) } }} pinDraft={pinDraft} setPinDraft={setPinDraft} />
+              {edit && !edit.measure && <EditBar edit={edit} setEdit={setEdit} farms={farms} onSave={saveShape} />}
+              {edit && edit.measure && <MeasureBar edit={edit} setEdit={setEdit} canEdit={canEdit} />}
+              {pinDraft && <PinCard draft={pinDraft} setDraft={setPinDraft} farms={pinFarms} onSave={savePin} onCancel={() => setPinDraft(null)} />}
+              {selPin && !pinDraft && !edit && (
+                <PinCard pin={selPin} canEdit={canEdit} onClose={() => setPinId(null)} onDelete={() => deletePin(selPin)}
+                  onEdit={(move) => setPinDraft({ id: selPin.id, name: selPin.name || '', type: selPin.type || 'Other', farm: selPin.farm || '', notes: selPin.notes || '', lat: move ? null : selPin.lat, lng: move ? null : selPin.lng, moving: move })} />
+              )}
+              {sel && !edit && !pinDraft && (
                 <FieldCard f={sel} year={year} agCrop={sel.ag && agCrops[sel.ag.id] ? agCrops[sel.ag.id] : null} agSeasonName={agSeason && agSeason.name}
                   canEdit={canEdit} farms={farms} planByKey={planByKey} onClose={() => setSelId(null)} onSave={(patch) => saveField(sel.id, patch)}
                   onEditShape={() => { const outer = sel.rings.find((r) => !r.hole) || sel.rings[0]; setEdit({ id: sel.id, mode: 'edit', pts: outer.pts.map((p) => [...p]) }) }} />
@@ -274,7 +314,9 @@ export const farmColor = (f, farms) => FARM_PALETTE[Math.max(0, farms.indexOf(f)
 // ---------------------------------------------------------------------------
 // The Leaflet map
 // ---------------------------------------------------------------------------
-function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onSelect, layers, edit, setEdit }) {
+function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onSelect, layers, edit, setEdit, pinId, onPin, pinDraft, setPinDraft }) {
+  const onPinRef = useRef(onPin)
+  onPinRef.current = onPin
   const box = useRef(null)
   const st = useRef({})
   const [ready, setReady] = useState(false)
@@ -289,8 +331,8 @@ function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onS
       const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { attribution: 'Imagery &copy; Esri', maxZoom: 20, maxNativeZoom: 19 })
       const plain = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap', maxZoom: 20, maxNativeZoom: 19 })
       st.current = { L, map, sat, plain, polys: L.layerGroup().addTo(map), pts: L.layerGroup().addTo(map), edit: L.layerGroup().addTo(map), byId: {} }
-      map.on('zoomend', () => { const show = map.getZoom() >= 11; if (show && !map.hasLayer(st.current.pts) && st.current.wantPts) map.addLayer(st.current.pts); if (!show && map.hasLayer(st.current.pts)) map.removeLayer(st.current.pts); applyLabels(); if (st.current.refreshEdit) st.current.refreshEdit() })
-      map.on('click', (e) => st.current.onMapClick && st.current.onMapClick(e))
+      map.on('zoomend', () => { const show = map.getZoom() >= 10; if (show && !map.hasLayer(st.current.pts) && st.current.wantPts) map.addLayer(st.current.pts); if (!show && map.hasLayer(st.current.pts)) map.removeLayer(st.current.pts); applyLabels(); if (st.current.refreshEdit) st.current.refreshEdit() })
+      map.on('click', (e) => { if (st.current.onPinClick) st.current.onPinClick(e); else if (st.current.onMapClick) st.current.onMapClick(e) })
       setReady(true)
     }).catch((e) => setLoadErr(e.message))
     return () => { dead = true; if (st.current.map) { st.current.map.remove(); st.current = {} } }
@@ -314,7 +356,13 @@ function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onS
       const holes = f.rings.filter((r) => r.hole).map((r) => r.pts.map(([x, y]) => [y, x]))
       if (!outer.length) return
       const layer = L.polygon(outer.length === 1 ? [outer[0], ...holes] : outer.map((o) => [o, ...holes]), { weight: 1, color: '#1d1d1b', fillOpacity: 0.7 })
-      layer.on('click', (e) => { L.DomEvent.stopPropagation(e); onSelectRef.current(f.id) })
+      layer.on('click', (e) => {
+        L.DomEvent.stopPropagation(e)
+        // while drawing, measuring or placing a pin, a click on a field is a click on the map
+        if (st.current.onPinClick) return st.current.onPinClick(e)
+        if (st.current.onMapClick) return st.current.onMapClick(e)
+        onSelectRef.current(f.id)
+      })
       layer.bindTooltip(f.name, { permanent: true, direction: 'center', className: 'fm-label', interactive: false })
       polys.addLayer(layer)
       st.current.byId[f.id] = { layer, f }
@@ -385,21 +433,50 @@ function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onS
     if (fitted.current) fitBulk(farm === 'all' ? null : farm)
   }, [ready, farm]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // points
+  // pins
   useEffect(() => {
     if (!ready) return
     const { L, pts, map } = st.current
     pts.clearLayers()
     st.current.wantPts = layers.points
-    if (map.getZoom() < 11) map.removeLayer(pts); else if (layers.points) map.addLayer(pts)
+    if (map.getZoom() < 10) map.removeLayer(pts); else if (layers.points) map.addLayer(pts)
     if (!layers.points) return
     points.forEach((p) => {
       if (!isFinite(p.lat) || !isFinite(p.lng)) return
-      const m = L.circleMarker([p.lat, p.lng], { radius: 4.5, weight: 1.5, color: '#fff', fillColor: POINT_COLOR[p.type] || '#333', fillOpacity: 1 })
-      m.bindTooltip(`${p.name}<br><small>${p.type}${p.farm ? ' · ' + p.farm : ''}</small>`)
+      if (pinDraft && pinDraft.id === p.id) return // being moved / edited — the draft marker shows it
+      const t = pinInfo(p.type)
+      const m = L.marker([p.lat, p.lng], { icon: pinIcon(L, t, p.id === pinId), zIndexOffset: p.id === pinId ? 900 : 500 })
+      m.bindTooltip(`<b>${esc(p.name)}</b><br><small>${esc(p.type || 'Other')}${p.farm ? ' · ' + esc(p.farm) : ''}</small>`, { direction: 'top', offset: [0, -26] })
+      m.on('click', (e) => { L.DomEvent.stopPropagation(e); onPinRef.current(p.id) })
       pts.addLayer(m)
     })
-  }, [ready, points, layers.points])
+  }, [ready, points, layers.points, pinId, pinDraft && pinDraft.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!ready || !pinId) return
+    const p = points.find((x) => x.id === pinId)
+    const { map } = st.current
+    if (p && isFinite(p.lat) && !map.getBounds().pad(-0.1).contains([p.lat, p.lng])) map.setView([p.lat, p.lng], Math.max(map.getZoom(), 14))
+  }, [ready, pinId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // adding / moving a pin: click the map to place it, drag to adjust
+  useEffect(() => {
+    if (!ready) return
+    const { L, map } = st.current
+    if (st.current.draftLayer) { map.removeLayer(st.current.draftLayer); st.current.draftLayer = null }
+    st.current.onPinClick = null
+    if (!pinDraft) { if (!edit) map.getContainer().style.cursor = ''; return }
+    if (pinDraft.lat == null) {
+      map.getContainer().style.cursor = 'crosshair'
+      if (map.getZoom() < 10) map.setZoom(12)
+      st.current.onPinClick = (e) => setPinDraft((d) => (d ? { ...d, lat: e.latlng.lat, lng: e.latlng.lng } : d))
+      return
+    }
+    map.getContainer().style.cursor = ''
+    const m = L.marker([pinDraft.lat, pinDraft.lng], { draggable: true, zIndexOffset: 1200, icon: pinIcon(L, pinInfo(pinDraft.type), true) }).addTo(map)
+    m.on('dragend', (e) => { const q = e.target.getLatLng(); setPinDraft((d) => (d ? { ...d, lat: q.lat, lng: q.lng } : d)) })
+    st.current.draftLayer = m
+    st.current.onPinClick = (e) => setPinDraft((d) => (d ? { ...d, lat: e.latlng.lat, lng: e.latlng.lng } : d))
+  }, [ready, pinDraft]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // drawing / editing
   useEffect(() => {
@@ -414,7 +491,8 @@ function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onS
     if (edit.mode === 'circle' && edit.pts.length === 1) {
       L.circleMarker(ll[0], { radius: 5, color: '#fff', fillColor: '#E8801A', fillOpacity: 1 }).addTo(g)
     } else if (ll.length) {
-      ;(ll.length >= 3 ? L.polygon(ll, { color: '#FFD54F', weight: 2, fillOpacity: 0.15 }) : L.polyline(ll, { color: '#FFD54F', weight: 2 })).addTo(g)
+      const col = edit.measure ? '#4FC3F7' : '#FFD54F'
+      ;(ll.length >= 3 ? L.polygon(ll, { color: col, weight: 2, fillOpacity: edit.measure ? 0.25 : 0.15, interactive: false }) : L.polyline(ll, { color: col, weight: 2, dashArray: edit.measure ? '6 4' : null, interactive: false })).addTo(g)
     }
     // corner handles: drag to move, double-click to remove; midpoints add a corner
     if (edit.mode !== 'circle' || edit.pts.length > 2) {
@@ -438,8 +516,14 @@ function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onS
       const pt = [e.latlng.lng, e.latlng.lat]
       setEdit((ed) => {
         if (!ed) return ed
-        if (ed.mode === 'circle') return ed.pts.length === 0 ? { ...ed, pts: [pt] } : ed.pts.length === 1 ? { ...ed, mode: 'edit', pts: circleRing(ed.pts[0], pt) } : ed
-        if (ed.mode === 'draw') return { ...ed, pts: [...ed.pts, pt] }
+        if (ed.mode === 'circle') {
+          if (ed.pts.length === 0) return { ...ed, pts: [pt] }
+          if (ed.pts.length !== 1) return ed
+          const [cx, cy] = ed.pts[0]
+          const k = Math.cos(cy * Math.PI / 180)
+          return { ...ed, mode: 'edit', pts: circleRing(ed.pts[0], pt), circleR: Math.hypot((pt[0] - cx) * k, pt[1] - cy) * 364567.2 }
+        }
+        if (ed.mode === 'draw') return { ...ed, pts: [...ed.pts, pt], circleR: null }
         return ed
       })
     }
@@ -451,7 +535,106 @@ function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onS
     </div>
   )
 }
-const POINT_COLOR = { Cellar: '#C17A3B', 'Beet dump': '#097138', Shop: '#5B5F66', Fuel: '#D23B3B', Housing: '#2A6FD6', Office: '#7B4FC9', 'Jug drop': '#0F8C8C', Transload: '#E8801A', Pump: '#185FA5', Other: '#333' }
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+function pinIcon(L, t, on) {
+  return L.divIcon({ className: `fm-pin${on ? ' on' : ''}`, iconSize: [30, 38], iconAnchor: [15, 36], html: `<span style="background:${t.color}"><i>${t.icon}</i></span>` })
+}
+
+// One pin: details (anyone) or the add / edit form (Admin, Owner).
+function PinCard({ pin, draft, setDraft, canEdit, farms, onClose, onEdit, onDelete, onSave, onCancel }) {
+  if (draft) {
+    const set = (patch) => setDraft((d) => ({ ...d, ...patch }))
+    const placed = draft.lat != null
+    return (
+      <div className="fm-card fm-pincard">
+        <div className="fm-card-name">{draft.id ? (draft.moving ? 'Move pin' : 'Edit pin') : 'New pin'}</div>
+        <div className="contracts-sub" style={{ marginTop: 0 }}>{placed ? 'Drag the pin to fine-tune, or click the map to move it.' : 'Click the map where it goes.'}</div>
+        <div className="fm-pin-types">
+          {PIN_TYPES.map((t) => (
+            <button key={t.type} className={draft.type === t.type ? 'active' : ''} onClick={() => set({ type: t.type })} style={{ '--pin': t.color }}>
+              <span>{t.icon}</span>{t.type}
+            </button>
+          ))}
+        </div>
+        <label className="hd-field"><span>Name</span><input value={draft.name} placeholder={draft.type} onChange={(e) => set({ name: e.target.value })} /></label>
+        <label className="hd-field"><span>Farm</span><input list="fm-pin-farms" value={draft.farm} onChange={(e) => set({ farm: e.target.value })} /></label>
+        <datalist id="fm-pin-farms">{(farms || []).map((f) => <option key={f} value={f} />)}</datalist>
+        <label className="hd-field"><span>Notes</span><textarea rows={2} value={draft.notes} placeholder="Gate code, who lives there, hours…" onChange={(e) => set({ notes: e.target.value })} /></label>
+        {placed && <div className="contracts-sub">{draft.lat.toFixed(5)}, {draft.lng.toFixed(5)}</div>}
+        <div className="fm-card-actions">
+          <button className="save" disabled={!placed} onClick={() => onSave(draft)}>Save pin</button>
+          <button onClick={onCancel}>Cancel</button>
+        </div>
+      </div>
+    )
+  }
+  const t = pinInfo(pin.type)
+  const ll = `${pin.lat},${pin.lng}`
+  return (
+    <div className="fm-card fm-pincard">
+      <button className="fm-x" onClick={onClose} aria-label="Close">×</button>
+      <div className="fm-card-name"><span className="fm-pin-chip" style={{ background: t.color }}>{t.icon}</span> {pin.name}</div>
+      <div className="contracts-sub" style={{ marginTop: 0 }}>{[pin.type || 'Other', pin.farm].filter(Boolean).join(' · ')}</div>
+      {pin.notes && <div className="fm-pin-notes">{pin.notes}</div>}
+      <div className="contracts-sub">{Number(pin.lat).toFixed(5)}, {Number(pin.lng).toFixed(5)}</div>
+      <div className="fm-card-actions">
+        <a className="fm-linkbtn" href={`https://www.google.com/maps/dir/?api=1&destination=${ll}`} target="_blank" rel="noreferrer">Directions</a>
+        <a className="fm-linkbtn" href={`https://www.google.com/maps/search/?api=1&query=${ll}`} target="_blank" rel="noreferrer">Open in Google Maps</a>
+      </div>
+      {canEdit && (
+        <div className="fm-card-actions">
+          <button onClick={() => onEdit(false)}>Edit</button>
+          <button onClick={() => onEdit(true)}>Move</button>
+          <button onClick={onDelete}>Delete</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Measuring: any shape, acres and distances live; nothing is saved unless an
+// Admin / Owner turns it into a field.
+function lineFeet(pts, closed) {
+  let ft = 0
+  const n = closed ? pts.length : pts.length - 1
+  for (let i = 0; i < n; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length]
+    const k = Math.cos(((y1 + y2) / 2) * Math.PI / 180)
+    ft += Math.hypot((x2 - x1) * k, y2 - y1) * 364567.2 // feet per degree of latitude
+  }
+  return ft
+}
+const fmtFt = (ft) => (ft >= 5280 ? `${(ft / 5280).toFixed(2)} mi` : `${Math.round(ft).toLocaleString()} ft`)
+function MeasureBar({ edit, setEdit, canEdit }) {
+  const pts = edit.pts
+  const area = pts.length >= 3 ? shapeAcres([{ pts }]) : 0
+  const circle = edit.mode === 'circle'
+  const hint = circle
+    ? (pts.length === 0 ? 'Click the pivot point.' : 'Click the edge of the circle.')
+    : edit.mode === 'edit' ? 'Drag the dots to reshape it.'
+    : pts.length === 0 ? 'Click each corner of the area — inside fields is fine.'
+      : 'Keep clicking corners. Drag a corner to move it, double-click to remove it, click a small dot to add one.'
+  const across = pts.length >= 3 && edit.circleR ? edit.circleR * 2 : null
+  return (
+    <div className="fm-editbar fm-measure">
+      <div><strong>📐 Measure</strong> · {hint}</div>
+      {pts.length >= 2 && !circle && (
+        <div className="fm-measure-nums">
+          {area > 0 && <span><b>{area.toLocaleString()}</b> ac</span>}
+          {pts.length >= 3 ? <span>around {fmtFt(lineFeet(pts, true))}</span> : <span><b>{fmtFt(lineFeet(pts, false))}</b> long</span>}
+          {across && <span>{fmtFt(across)} across</span>}
+          {!edit.circleR && <span className="contracts-sub" style={{ marginTop: 0 }}>{pts.length} corners</span>}
+        </div>
+      )}
+      <div className="fm-row">
+        {edit.mode === 'draw' && pts.length > 0 && <button onClick={() => setEdit({ ...edit, pts: pts.slice(0, -1), circleR: null })}>Undo corner</button>}
+        {pts.length > 0 && <button onClick={() => setEdit({ ...edit, mode: circle ? 'circle' : 'draw', pts: [], circleR: null })}>Start over</button>}
+        {canEdit && pts.length >= 3 && <button onClick={() => setEdit({ ...edit, measure: false, mode: 'edit', name: '' })} title="Keep this shape as a new field outline">Save as a field…</button>}
+        <button className="save" onClick={() => setEdit(null)}>Done</button>
+      </div>
+    </div>
+  )
+}
 
 function EditBar({ edit, setEdit, farms, onSave }) {
   const isNew = !edit.id
