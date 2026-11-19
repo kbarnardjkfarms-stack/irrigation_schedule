@@ -24,15 +24,32 @@ const BAD = '#A32D2D'
 // Fixed column widths (px) so every column has the same breathing room and nothing stretches with the window.
 // Groups: pivot info | package and flow | alerts and machine.
 const COLS = { pivot: 236, acres: 98, steel: 114, src: 104, len: 90, wiper: 124, travel: 96, pkg: 200, gpm: 220, gpmAc: 112, noPrint: 96, stuck: 110, corner: 104, cornerLen: 120, lap: 100 }
-const TABLE_W = Object.values(COLS).reduce((a, b) => a + b, 0)
+// On a phone the pivot-name column is made narrow (it stays pinned while the rest scrolls sideways).
+const PHONE_PIVOT_COL = 116
 const GROUP_EDGE = `1px solid ${LINE}`
-const th = { textAlign: 'center', padding: '8px 12px', fontSize: 11.5, color: MUTED, fontWeight: 600, borderBottom: `1px solid ${LINE}`, background: '#f4f2ec', position: 'sticky', top: 30, zIndex: 3, lineHeight: 1.25 }
+const TH0 = { textAlign: 'center', padding: '8px 12px', fontSize: 11.5, color: MUTED, fontWeight: 600, borderBottom: `1px solid ${LINE}`, background: '#f4f2ec', position: 'sticky', top: 30, zIndex: 3, lineHeight: 1.25 }
 const thGroup = { textAlign: 'left', padding: '7px 12px', fontSize: 10.5, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#8a8979', fontWeight: 600, background: '#ece9df', position: 'sticky', top: 0, zIndex: 3, height: 30, boxSizing: 'border-box' }
-const td = { padding: '8px 12px', height: 62, boxSizing: 'border-box', fontSize: 13, borderBottom: '0.5px solid #eee', verticalAlign: 'middle', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }
+const TD0 = { padding: '8px 12px', height: 62, boxSizing: 'border-box', fontSize: 13, borderBottom: '0.5px solid #eee', verticalAlign: 'middle', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }
 const inputStyle = { width: 84, padding: '5px 6px', fontSize: 13, border: `1px solid #ccc`, borderRadius: 5, background: '#fff', textAlign: 'center' }
 const small = { fontSize: 11, color: MUTED }
 
 const EDIT_ROLES = ['admin', 'owner', 'farm_manager', 'irrigation_manager']
+
+// True on a phone-width screen (stays in step if the phone is turned).
+function useNarrow() {
+  const q = '(max-width: 640px)'
+  const get = () => (typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(q).matches : false)
+  const [narrow, setNarrow] = useState(get)
+  useEffect(() => {
+    if (!window.matchMedia) return undefined
+    const m = window.matchMedia(q)
+    const on = () => setNarrow(m.matches)
+    on()
+    if (m.addEventListener) { m.addEventListener('change', on); return () => m.removeEventListener('change', on) }
+    m.addListener(on); return () => m.removeListener(on)
+  }, [])
+  return narrow
+}
 
 function whoAmI() { return (auth.currentUser && auth.currentUser.email) || 'unknown' }
 
@@ -96,6 +113,11 @@ function wiperText(pivot) {
 
 export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesByGuid, pivotGuidByFieldId, baseFieldsById, seasonDataByField, userRole, userProfile, selectedFarmId, onOpenProfile }) {
   const canEdit = EDIT_ROLES.includes(userRole)
+  const narrow = useNarrow()
+  const cols = narrow ? { ...COLS, pivot: PHONE_PIVOT_COL } : COLS
+  const tableW = Object.values(cols).reduce((a, b) => a + b, 0)
+  const th = narrow ? { ...TH0, padding: '8px 8px' } : TH0
+  const td = narrow ? { ...TD0, padding: '6px 8px', height: 56 } : TD0
   const isFarmManager = userRole === 'farm_manager'
   const canDelete = ['admin', 'owner', 'farm_manager'].includes(userRole) // same as the profile page
   const availableFarms = useMemo(() => {
@@ -306,21 +328,30 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
         </select>
         <span style={small}>{rows.length} pivots</span>
       </div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+      <div style={narrow ? { display: 'flex', gap: 8, overflowX: 'auto', whiteSpace: 'nowrap', marginBottom: 8, paddingBottom: 2 } : { display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
         {chip('all', 'All', rows.length)}
         {chip('noGpm', 'No GPM yet', counts.noGpm)}
         {chip('noPkg', 'No package', counts.noPkg)}
         {chip('confirm', 'GPM to confirm', counts.confirm)}
       </div>
       {!canEdit && <p style={{ ...small, color: WARN }}>You can look at these but not change them.</p>}
+      {narrow ? (
+        <details data-testid="sheet-help" style={{ margin: '0 0 8px' }}>
+          <summary style={{ ...small, cursor: 'pointer' }}>How this page works</summary>
+          <p style={{ ...small, margin: '6px 0 0' }}>
+        Click a box and type. It saves when you leave the box or press Enter. You can upload, replace or delete a package PDF here, or tap the camera icon to scan the printout with your phone. The pivot&rsquo;s own profile page (click the pivot name) also has a Scan with camera button. A GPM can only be typed when &ldquo;No printout&rdquo; is ticked, or when the package couldn&rsquo;t be read; otherwise confirm the number read from the package.
+      </p>
+        </details>
+      ) : (
       <p style={{ ...small, margin: '0 0 8px', maxWidth: '90ch' }}>
         Click a box and type. It saves when you leave the box or press Enter. You can upload, replace or delete a package PDF here, or tap the camera icon to scan the printout with your phone. The pivot&rsquo;s own profile page (click the pivot name) also has a Scan with camera button. A GPM can only be typed when &ldquo;No printout&rdquo; is ticked, or when the package couldn&rsquo;t be read; otherwise confirm the number read from the package.
       </p>
+      )}
 
-      <div style={{ width: 'fit-content', maxWidth: '100%', overflowX: 'auto', border: `0.5px solid ${LINE}`, borderRadius: 10, background: '#fff', maxHeight: 'calc(100vh - 230px)', overflowY: 'auto' }}>
-        <table style={{ width: TABLE_W, tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
+      <div style={{ width: 'fit-content', maxWidth: '100%', overflowX: 'auto', border: `0.5px solid ${LINE}`, borderRadius: 10, background: '#fff', maxHeight: narrow ? 'calc(100dvh - 190px)' : 'calc(100vh - 230px)', overflowY: 'auto' }}>
+        <table style={{ width: tableW, tableLayout: 'fixed', borderCollapse: 'separate', borderSpacing: 0 }}>
           <colgroup>
-            {Object.values(COLS).map((w, i) => <col key={i} style={{ width: w }} />)}
+            {Object.values(cols).map((w, i) => <col key={i} style={{ width: w }} />)}
           </colgroup>
           <thead>
             <tr>
@@ -356,8 +387,8 @@ export default function PivotProfilesSheet({ farms, pivotsByGuid, pivotProfilesB
               return (
                 <tr key={r.guid}>
                   <td style={{ ...td, background: zebra, textAlign: 'left', position: 'sticky', left: 0, zIndex: 2 }}>
-                    <button type="button" onClick={() => onOpenProfile(r.guid)} title="Open this pivot's full profile" style={{ border: 'none', background: 'none', padding: 0, textAlign: 'left', cursor: 'pointer', color: INK, fontWeight: 600, fontSize: 13 }}>{r.name}</button>
-                    {r.baseName && <div style={small}>{r.baseName}</div>}
+                    <button type="button" onClick={() => onOpenProfile(r.guid)} title="Open this pivot's full profile" style={{ border: 'none', background: 'none', padding: 0, textAlign: 'left', cursor: 'pointer', color: INK, fontWeight: 600, fontSize: narrow ? 12 : 13, lineHeight: 1.2, overflowWrap: 'anywhere' }}>{r.name}</button>
+                    {r.baseName && !narrow && <div style={small}>{r.baseName}</div>}
                   </td>
                   <td style={{ ...td, background: zebra, borderLeft: GROUP_EDGE }}>{r.acres != null ? r.acres.toFixed(1) : '—'}</td>
                   <td data-testid="steel-acres" style={{ ...td, background: zebra, color: r.steel > 0 ? INK : MUTED }}>
