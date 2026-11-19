@@ -7,7 +7,9 @@ import {
   Fan, Snowflake, Power, WifiOff, Wifi, Wind,
 } from "lucide-react";
 import { doc, getDoc, setDoc, deleteDoc, collection, collectionGroup, query, where, getDocs, onSnapshot, Timestamp } from "firebase/firestore";
-import { db } from "./firebase.js"; // AIO's existing Firebase project — same login, no second sign-in
+import { db, storage } from "./firebase.js"; // AIO's existing Firebase project — same login, no second sign-in
+import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import PackageScanner from "./PackageScanner.jsx"; // same camera scanner the pivot package upload uses
 import { customerKey } from "./customerKey.js";
 /* =================================================================
    NORLAND CELLARS — seed data (pulled from the 2025 storage workbook)
@@ -3664,10 +3666,57 @@ function NotesTab({ bays, dataById, onAddNote, onDeleteNote, readOnly }) {
   const [bayId, setBayId] = useState(bays[0]?.id);
   const [date, setDate] = useState(todayStr());
   const [text, setText] = useState("");
+  // Attachments (PDF, photo, or a camera scan turned into a PDF) are
+  // uploaded to Firebase Storage the moment they're picked and held here
+  // until the note is saved; the note then just carries their links.
+  const [pending, setPending] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [attachError, setAttachError] = useState(null);
+  const MAX_ATTACH_BYTES = 25 * 1024 * 1024;
+  const saveAttachment = async (file) => {
+    if (!file) return false;
+    const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+    const isImage = (file.type || "").startsWith("image/");
+    if (!isPdf && !isImage) { setAttachError("Attach a PDF or a photo."); return false; }
+    if (file.size > MAX_ATTACH_BYTES) { setAttachError("That file is over 25 MB — try a smaller one."); return false; }
+    setUploading(true); setAttachError(null);
+    try {
+      const safeName = (file.name || (isPdf ? "note.pdf" : "photo.jpg")).replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `potatoNotes/${bayId}/${Date.now()}_${safeName}`;
+      const fileRef = storageRef(storage, path);
+      await uploadBytes(fileRef, file);
+      const downloadUrl = await getDownloadURL(fileRef);
+      setPending((p) => [...p, { fileName: file.name || safeName, downloadUrl, storagePath: path, kind: isPdf ? "pdf" : "image" }]);
+      return true;
+    } catch (err) {
+      setAttachError("Couldn't upload that — check your signal and try again." + (err?.code ? ` (${err.code})` : ""));
+      return false;
+    } finally {
+      setUploading(false);
+    }
+  };
+  const onPickFile = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    for (const f of files) await saveAttachment(f);
+  };
+  const removePending = async (att) => {
+    setPending((p) => p.filter((a) => a.storagePath !== att.storagePath));
+    try { await deleteObject(storageRef(storage, att.storagePath)); } catch (e) { /* already gone */ }
+  };
   const submit = () => {
-    if (!text.trim()) return;
-    onAddNote(bayId, { id: uid("note"), date, text: text.trim(), createdAt: Date.now() });
-    setText("");
+    if (!text.trim() && !pending.length) return;
+    onAddNote(bayId, {
+      id: uid("note"), date, text: text.trim(), createdAt: Date.now(),
+      ...(pending.length ? { attachments: pending } : {}),
+    });
+    setText(""); setPending([]); setAttachError(null);
+  };
+  const deleteNoteAndFiles = async (note) => {
+    for (const a of note.attachments || []) {
+      try { await deleteObject(storageRef(storage, a.storagePath)); } catch (e) { /* already gone is fine */ }
+    }
+    onDeleteNote(note.bay.id, note.id);
   };
   // Every note across every bay at this site, newest first — same
   // "log entry + site-wide history" pattern as Sprout Nip, so reviewing
@@ -3700,7 +3749,30 @@ function NotesTab({ bays, dataById, onAddNote, onDeleteNote, readOnly }) {
             placeholder="e.g. Noticed condensation on the north wall — checked fans, running fine."
           />
         </Field>
-        <Button onClick={submit} disabled={readOnly || !text.trim()}><Plus size={14} /> Save note</Button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+          <PackageScanner onPdf={saveAttachment} disabled={readOnly || uploading} onError={setAttachError}
+            label="Scan with camera" title="Scan a page" fileLabel="Note scan" replaceStyle />
+          <label style={{ display: "inline-flex", alignItems: "center", fontSize: 12, padding: "6px 10px", border: "1px solid #ccc", borderRadius: 6, cursor: readOnly || uploading ? "default" : "pointer", background: "#fff", color: "#2b2b26", opacity: readOnly || uploading ? 0.5 : 1 }}>
+            Take photo
+            <input type="file" accept="image/*" capture="environment" onChange={onPickFile} disabled={readOnly || uploading} style={{ display: "none" }} />
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", fontSize: 12, padding: "6px 10px", border: "1px dashed #8790a3", borderRadius: 6, cursor: readOnly || uploading ? "default" : "pointer", color: "#c7cede", opacity: readOnly || uploading ? 0.5 : 1 }}>
+            {uploading ? "Uploading…" : "Attach PDF or photo"}
+            <input type="file" accept="application/pdf,image/*" multiple onChange={onPickFile} disabled={readOnly || uploading} style={{ display: "none" }} />
+          </label>
+        </div>
+        {pending.length > 0 && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            {pending.map((a) => (
+              <span key={a.storagePath} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#0e1420", border: "1px solid #232d40", borderRadius: 6, padding: "4px 8px", fontSize: 12, color: "#c7cede" }}>
+                {a.kind === "pdf" ? "📄" : "📷"} {a.fileName}
+                <button type="button" onClick={() => removePending(a)} title="Remove" style={{ border: "none", background: "transparent", color: "#e08787", cursor: "pointer", padding: 0, fontSize: 14, lineHeight: 1 }}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+        {attachError && <div style={{ fontSize: 12.5, color: "#e08787", marginBottom: 10 }}>{attachError}</div>}
+        <Button onClick={submit} disabled={readOnly || uploading || (!text.trim() && !pending.length)}><Plus size={14} /> Save note</Button>
       </div>
       <div>
         <div style={{ fontWeight: 700, marginBottom: 10, color: "#eef1f6" }}>Notes — every bay at this site</div>
@@ -3715,11 +3787,25 @@ function NotesTab({ bays, dataById, onAddNote, onDeleteNote, readOnly }) {
                 {!readOnly && (
                   <DeleteButton
                     confirmMessage={`Delete this note on ${n.bay.name} from ${n.date}? This can't be undone.`}
-                    onConfirm={() => onDeleteNote(n.bay.id, n.id)}
+                    onConfirm={() => deleteNoteAndFiles(n)}
                   />
                 )}
               </div>
-              <div style={{ fontSize: 13, color: "#c7cede", marginTop: 6, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{n.text}</div>
+              {n.text && <div style={{ fontSize: 13, color: "#c7cede", marginTop: 6, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{n.text}</div>}
+              {(n.attachments || []).length > 0 && (
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8, alignItems: "flex-start" }}>
+                  {n.attachments.map((a) => a.kind === "image" ? (
+                    <a key={a.storagePath} href={a.downloadUrl} target="_blank" rel="noopener noreferrer" title={a.fileName}>
+                      <img src={a.downloadUrl} alt={a.fileName} style={{ height: 90, width: "auto", borderRadius: 6, border: "1px solid #232d40", display: "block" }} />
+                    </a>
+                  ) : (
+                    <a key={a.storagePath} href={a.downloadUrl} target="_blank" rel="noopener noreferrer"
+                      style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "#0e1420", border: "1px solid #232d40", borderRadius: 6, padding: "6px 10px", fontSize: 12.5, color: "#f2c14e", textDecoration: "none" }}>
+                      📄 {a.fileName}
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
