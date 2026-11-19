@@ -4,10 +4,10 @@ import { httpsCallable } from 'firebase/functions'
 import { db, functions } from './firebase.js'
 import {
   mergeJobs, lanes, dayLabel, inRange, todayYmd, addDays, fmtDay, kindOf, KIND_LABEL, cropEmoji,
-  weatherUrl, summarizeWeather, windLevel, mapKey, isMine, normName
+  weatherUrl, summarizeWeather, windLevel, mapKey, isMine, normName, RAIN_SHOW_PCT
 } from './sprayMath.js'
 import jkLogo from './jk-farms-logo.png'
-import { FileText, Navigation, Phone, Check, Undo2 } from 'lucide-react'
+import { FileText, Navigation, Phone, PhoneCall, Check, Undo2, UserRound, Trash2, MapPin, CircleCheck } from 'lucide-react'
 import { pushState, turnOn, turnOff, refresh as refreshPush, sendTest } from './sprayPush.js'
 
 // Spray schedule module (drone crew + Ag Rows) — jobs come from AgWorld through
@@ -249,6 +249,10 @@ function JobCard({ j, today, wx, ops, isAdmin, canDone, open, onToggle, actions 
   const kind = kindOf(j)
   const mayDone = canDone === undefined ? isAdmin : canDone   // crew links: Done without the admin details
   const phone = j.manager_phone   // from the Spray Managers tab
+  // The operator's phone (Operators tab), so a farm manager can call whoever is on the job
+  const opRow = j.operator ? (ops || []).find((o) => normName(o.name) === normName(j.operator) ||
+    String(o.aliases || '').split(',').some((a) => normName(a) && normName(a) === normName(j.operator))) : null
+  const opPhone = opRow && opRow.phone ? String(opRow.phone) : ''
   const [busy, setBusy] = useState(false)
   const guard = (fn) => async (e) => {
     if (e) e.stopPropagation()
@@ -260,88 +264,147 @@ function JobCard({ j, today, wx, ops, isAdmin, canDone, open, onToggle, actions 
   return (
     <div className={'spray-card k-' + kind + (j.done ? ' done' : '') + (late ? ' late' : '')}>
       <div className="spray-card-main" onClick={onToggle}>
-        <div className="spray-card-top">
-          <span className={'spray-tag k-' + kind}>{KIND_LABEL[kind]}</span>
-          <span className="spray-muted">{fmtDay(j.planned_date)}{j.moved ? ' (moved)' : ''}</span>
-          {j.done && <span className="spray-donetag">✓ Done {j.done.completed_date ? fmtDay(j.done.completed_date, { weekday: undefined }) : ''}</span>}
+        <div className="spray-card-head">
+          <div className="spray-field">{cropEmoji(j.crop)} {j.field}</div>
+          <div className="spray-card-corner">
+            <span className={'spray-tag k-' + kind}>{KIND_LABEL[kind]}</span>
+            {isAdmin && !j.done && actions.hide && <button className="spray-trash" title="Remove from schedule" aria-label="Remove from schedule" disabled={busy} onClick={guard(() => actions.hide(j))}><Trash2 size={18} /></button>}
+          </div>
         </div>
-        <div className="spray-field">{cropEmoji(j.crop)} {j.field}</div>
-        <div className="spray-meta">{[j.crop, (Number(j.acres) || 0).toLocaleString() + ' ac', j.manager].filter(Boolean).join(' · ')}</div>
-        <div className={'spray-op' + (j.operator ? '' : ' none')}>{j.operator ? j.operator + (j.source === 'drone' && j.rig ? ' · ' + j.rig : '') : 'No operator yet'}</div>
-        {wx && <Weather w={wx} />}
+        <div className="spray-meta">{[j.crop, (Number(j.acres) || 0).toLocaleString() + ' ac', j.manager].filter(Boolean).join(' · ')}{j.moved ? ' · moved' : ''}</div>
+        {!j.done && <div className={'spray-op' + (j.operator ? '' : ' none')}><UserRound size={15} /> {j.operator ? j.operator + (j.source === 'drone' && j.rig ? ' · ' + j.rig : '') : 'No operator yet'}</div>}
+        {j.done && <div className="spray-donetag">✓ Done {j.done.completed_date ? fmtDay(j.done.completed_date) : ''}{j.done.operator ? ' · ' + j.done.operator : ''}{j.done.entered_by === 'App (waiting on AgWorld)' ? ' · waiting on AgWorld' : ''}</div>}
+        {wx && !j.done && <Weather w={wx} today={today} />}
       </div>
       <div className="spray-actions">
         {j.agworld_link && <a className="spray-btn" href={j.agworld_link} target="_blank" rel="noreferrer"><FileText size={18} />PDF</a>}
         {j.pin_url && <a className="spray-btn" href={j.pin_url} target="_blank" rel="noreferrer"><Navigation size={18} />Directions</a>}
-        {phone && <a className="spray-btn" href={'tel:' + phone.replace(/[^\d+]/g, '')}><Phone size={18} />{String(j.manager).split(' ')[0]}</a>}
-        {mayDone && !j.done && <button className="spray-btn save" disabled={busy} onClick={guard(() => actions.done(j))}><Check size={18} strokeWidth={3} />Done</button>}
+        {phone && <a className="spray-btn" href={'tel:' + phone.replace(/[^\d+]/g, '')} title={'Call ' + j.manager + ' (farm manager)'}><Phone size={18} />Call {String(j.manager).split(' ')[0]}</a>}
+        {opPhone && !j.done && <a className="spray-btn" href={'tel:' + opPhone.replace(/[^\d+]/g, '')} title={'Call ' + j.operator + ' (operator)'}><PhoneCall size={18} />Call {String(j.operator).split(' ')[0]}</a>}
+        {mayDone && !j.done && <button className="spray-btn save" disabled={busy} onClick={guard(() => actions.done(j))}><CircleCheck size={18} />Done</button>}
         {mayDone && j.done && j.done.entered_by === 'App (waiting on AgWorld)' && <button className="spray-btn" disabled={busy} onClick={guard(() => actions.undo(j))}><Undo2 size={18} />Undo</button>}
       </div>
-      {open && <Details j={j} ops={ops} isAdmin={isAdmin} actions={actions} busy={busy} guard={guard} />}
+      {open && <Details j={j} ops={ops} wx={wx} today={today} isAdmin={isAdmin} opPhone={opPhone} actions={actions} busy={busy} guard={guard} />}
     </div>
   )
 }
 
-function Weather({ w }) {
-  const lvlNow = w.now ? windLevel(w.now.wind, w.now.gust) : 0
-  const lvlMax = windLevel(w.maxWind, w.maxGust)
+// Weather boxes on a card, like the Google app: NOW (today), the day's MAX wind with its main
+// direction and gusts, and RAIN when the chance is worth noticing.
+function Weather({ w, today }) {
+  const lvl = (l) => (l === 2 ? ' bad' : l === 1 ? ' warn' : '')
+  const day = w.date && w.date !== today ? fmtDay(w.date).split(',')[0].toUpperCase() + ' MAX' : 'TODAY MAX'
   return (
-    <div className="spray-wx">
-      {w.now && <span className={'wx l' + lvlNow}><b>NOW</b> {w.now.wind} mph {w.now.dir} · gust {w.now.gust} · {w.now.temp}°</span>}
-      <span className={'wx l' + lvlMax}><b>{w.now ? 'TODAY MAX' : 'MAX'}</b> {w.maxWind} mph{w.maxGust != null ? ' · gust ' + w.maxGust : ''}</span>
+    <div className="spray-wxb">
+      {w.now && <div className={'wb' + lvl(windLevel(w.now.wind, w.now.gust))}><small>NOW</small><b>{w.now.wind} {w.now.dir} · G{w.now.gust}</b></div>}
+      <div className={'wb' + lvl(windLevel(w.maxWind, w.maxGust))}><small>{day}</small><b>{w.maxWind}{!w.now && w.dir ? ' ' + w.dir : ''}{w.maxGust != null ? ' · G' + w.maxGust : ''}</b></div>
+      {w.rain != null && w.rain >= RAIN_SHOW_PCT && <div className="wb warn"><small>RAIN</small><b>{w.rain}%</b></div>}
     </div>
   )
 }
 
-function Details({ j, ops, isAdmin, actions, busy, guard }) {
+// The opened card: panels like the Google app (Date, Weather, Job, Farm manager, Operator, Remove).
+function Details({ j, ops, wx, today, isAdmin, opPhone, actions, busy, guard }) {
   const crewOps = ops.filter((o) => o.active !== false && (o.crew === 'drone') === (j.source === 'drone'))
-  const [op, setOp] = useState(j.operator)
-  useEffect(() => { setOp(j.operator) }, [j.operator])
   // Drone jobs carry the pilot's drone (Operators tab); Ag Rows jobs carry just the operator.
   const droneOf = (name) => { const o = ops.find((x) => x.name === name); return j.source === 'drone' && o ? (o.rig || '') : '' }
+  const tel = (p) => 'tel:' + String(p).replace(/[^\d+]/g, '')
   const products = Array.isArray(j.product_detail) && j.product_detail.length ? j.product_detail : String(j.products || '').split(',').filter(Boolean).map((n) => ({ name: n.trim() }))
+  const fields = j.fields && j.fields.length ? j.fields : [{ name: j.field, acres: j.acres, pin: j.pin_url }]
+  const pickOp = (name) => guard(() => actions.assign(j, name, droneOf(name)))()
   return (
-    <div className="spray-details">
-      {j.title && <div><span className="spray-muted">AgWorld:</span> {j.title}</div>}
-      {products.length > 0 && (
-        <div className="spray-products">
-          {products.map((p, i) => <div key={i}>{p.name}{p.rate ? <span className="spray-muted"> · {p.rate}</span> : null}</div>)}
-        </div>
-      )}
-      {j.fields && j.fields.length > 1 && <div className="spray-muted">{j.fields.map((f) => f.name + ' ' + f.acres + ' ac').join(' · ')}</div>}
-      {j.done && (
-        <div className="spray-box">
-          <b>{j.done.entered_by === 'App (waiting on AgWorld)' ? 'Marked done in the app, waiting on AgWorld' : 'Closed in AgWorld'}</b>
-          <div>{[j.done.completed_date && fmtDay(j.done.completed_date), j.done.acres_done && j.done.acres_done + ' ac',
-            j.done.gallons && Math.round(j.done.gallons).toLocaleString() + ' gal', j.done.gpa && j.done.gpa + ' GPA', j.done.operator].filter(Boolean).join(' · ')}</div>
-          {j.done.conditions && <div className="spray-muted">{j.done.conditions}</div>}
-        </div>
-      )}
-      {isAdmin && (
-        <>
-          <div className="spray-row">
-            <select value={op} onChange={(e) => setOp(e.target.value)}>
-              <option value="">No operator</option>
-              {op && !crewOps.some((o) => o.name === op) && <option value={op}>{op}</option>}
-              {crewOps.map((o) => <option key={o.id} value={o.name}>{o.name}</option>)}
-            </select>
-            {j.source === 'drone' && op && droneOf(op) && <span className="spray-muted">{droneOf(op)}</span>}
-            <button className="save" disabled={busy || op === j.operator} onClick={guard(() => actions.assign(j, op, droneOf(op)))}>Save</button>
+    <div className="spray-panels">
+      {isAdmin && !j.done && (
+        <div className="spray-panel">
+          <h4>Date</h4>
+          <input type="date" defaultValue={j.planned_date} key={j.planned_date} onChange={(e) => e.target.value && e.target.value !== j.planned_date && guard(() => actions.move(j, e.target.value))()} />
+          <div className="spray-row" style={{ marginTop: 6 }}>
+            <button disabled={busy} onClick={guard(() => actions.move(j, addDays(j.planned_date, 1)))}>+1 day</button>
+            <button disabled={busy} onClick={guard(() => actions.move(j, addDays(j.planned_date, 2)))}>+2 days</button>
+            {j.moved && <button disabled={busy} onClick={guard(() => actions.move(j, ''))}>Back to AgWorld date</button>}
           </div>
-          {!j.done && (
-            <div className="spray-row">
-              <span className="spray-muted">Move to</span>
-              <input type="date" defaultValue={j.planned_date} onChange={(e) => e.target.value && guard(() => actions.move(j, e.target.value))()} />
-              <button disabled={busy} onClick={guard(() => actions.move(j, addDays(j.planned_date, 1)))}>+1 day</button>
-              <button disabled={busy} onClick={guard(() => actions.move(j, addDays(j.planned_date, 2)))}>+2 days</button>
-              {j.moved && <button disabled={busy} onClick={guard(() => actions.move(j, ''))}>Back to AgWorld date ({fmtDay(j.agworld_date)})</button>}
+          <div className="spray-muted">{j.moved ? 'AgWorld still has ' + fmtDay(j.agworld_date) + '.' : 'Moves it on the schedule only. AgWorld keeps its date.'}</div>
+        </div>
+      )}
+      {!isAdmin && j.moved && !j.done && (
+        <div className="spray-panel"><h4>Date</h4><div>{fmtDay(j.planned_date)}</div><div className="spray-muted">Moved from {fmtDay(j.agworld_date)} (AgWorld's date).</div></div>
+      )}
+      {!j.done && (
+        <div className="spray-panel">
+          {!wx ? <><h4>Weather</h4><div className="spray-muted">{j.lat == null ? 'No map pin for this field yet, so no weather.' : 'Loading…'}</div></> : <>
+            <h4>Weather at the field · {fmtDay(wx.date || j.planned_date)}</h4>
+            {wx.now && <div>Right now: <b>{wx.now.wind} mph {wx.now.dir}</b>, gusts {wx.now.gust}, {wx.now.temp}°F</div>}
+            <div>{wx.now ? 'Rest of today' : 'Forecast'}: wind up to <b>{wx.maxWind} mph</b>{wx.dir ? ', mostly ' + wx.dir : ''}{wx.maxGust != null ? <>, gusts up to <b>{wx.maxGust}</b></> : null}</div>
+            {(wx.rain != null || wx.lo != null) && <div>{wx.rain != null ? 'Rain chance ' + wx.rain + '%' : ''}{wx.rain != null && wx.lo != null ? ' · ' : ''}{wx.lo != null ? wx.lo + '–' + wx.hi + '°F' : ''}</div>}
+          </>}
+        </div>
+      )}
+      <div className="spray-panel">
+        <h4>Job · {fmtDay(j.planned_date)}</h4>
+        {j.title && <div className="spray-muted" style={{ marginBottom: 6 }}>{j.title}</div>}
+        {j.agworld_link ? <a className="spray-linkbtn" href={j.agworld_link} target="_blank" rel="noreferrer"><FileText size={16} /> Open work order PDF</a> : <div className="spray-muted">No AgWorld link</div>}
+        <div style={{ marginTop: 10 }}>
+          {fields.map((f, i) => (
+            <div className="spray-fieldrow" key={i}>
+              <span>{f.name} <span className="spray-muted">{f.acres} ac</span></span>
+              {f.pin ? <a href={f.pin} target="_blank" rel="noreferrer"><MapPin size={15} /> Pin</a> : <span className="spray-muted">no pin</span>}
             </div>
-          )}
-          <div className="spray-row">
-            <button className="spray-danger" disabled={busy} onClick={guard(() => actions.hide(j))}>Remove from schedule</button>
-            {j.agworld_page && <a href={j.agworld_page} target="_blank" rel="noreferrer">Open in AgWorld</a>}
+          ))}
+        </div>
+        {products.length > 0 && (
+          <div className="spray-products">
+            {products.map((p, i) => <div key={i}>{p.name}{p.rate ? <span className="spray-muted"> · {p.rate}</span> : null}</div>)}
           </div>
-        </>
+        )}
+      </div>
+      <div className="spray-panel">
+        <h4>Farm manager</h4>
+        {j.manager ? <>
+          <div style={{ fontWeight: 600 }}>{j.manager}</div>
+          {j.manager_phone ? <a className="spray-linkbtn" href={tel(j.manager_phone)}><Phone size={16} /> Call {j.manager_phone}</a>
+            : <div className="spray-muted">No phone on file. Add it on the Managers tab.</div>}
+        </> : <div className="spray-muted">No manager on this job. Put it on the first line of the AgWorld comment, or give the farm a manager on the Managers tab.</div>}
+        {j.farm && <div className="spray-muted" style={{ marginTop: 6 }}>{j.farm}</div>}
+      </div>
+      {isAdmin && !j.done ? (
+        <div className="spray-panel">
+          <h4>Operator</h4>
+          <div className="spray-muted" style={{ marginBottom: 6 }}>Pick who's doing it. Saves right away.</div>
+          <select value={j.operator || ''} disabled={busy} onChange={(e) => pickOp(e.target.value)} style={{ width: '100%' }}>
+            <option value="">No operator</option>
+            {j.operator && !crewOps.some((o) => o.name === j.operator) && <option value={j.operator}>{j.operator}</option>}
+            {crewOps.map((o) => <option key={o.id} value={o.name}>{o.name}{j.source === 'drone' && o.rig ? ' · ' + o.rig : ''}</option>)}
+          </select>
+          {opPhone && <a className="spray-linkbtn" href={tel(opPhone)}><PhoneCall size={16} /> Call {opPhone}</a>}
+          {!crewOps.length && <div className="spray-muted" style={{ marginTop: 6 }}>No names yet. Add them on the Operators tab.</div>}
+        </div>
+      ) : j.operator && !j.done ? (
+        <div className="spray-panel">
+          <h4>Operator</h4>
+          <div style={{ fontWeight: 600 }}>{j.operator}{j.source === 'drone' && j.rig ? <span className="spray-muted"> · {j.rig}</span> : null}</div>
+          {opPhone && <a className="spray-linkbtn" href={tel(opPhone)}><PhoneCall size={16} /> Call {opPhone}</a>}
+        </div>
+      ) : null}
+      {j.done && (j.done.entered_by === 'App (waiting on AgWorld)' ? (
+        <div className="spray-panel">
+          <h4>Marked done · waiting on AgWorld</h4>
+          <div>{[fmtDay(j.done.completed_date), j.done.operator].filter(Boolean).join(' · ')}</div>
+          <div className="spray-muted">Gallons and conditions fill in once it's closed as an actual in AgWorld.</div>
+        </div>
+      ) : (
+        <div className="spray-panel">
+          <h4>Applied · closed in AgWorld</h4>
+          <div>{[fmtDay(j.done.completed_date), j.done.operator].filter(Boolean).join(' · ')}</div>
+          <div>{[j.done.acres_done && j.done.acres_done + ' ac', j.done.gallons && Math.round(j.done.gallons).toLocaleString() + ' gal', j.done.gpa && j.done.gpa + ' GPA'].filter(Boolean).join(' · ')}</div>
+          {j.done.conditions && <div className="spray-muted" style={{ marginTop: 4 }}>Applied in: {j.done.conditions}</div>}
+        </div>
+      ))}
+      {isAdmin && !j.done && (
+        <div className="spray-panel">
+          <h4>Not supposed to be here?</h4>
+          <div className="spray-muted" style={{ marginBottom: 8 }}>Takes it off the schedule. AgWorld isn't changed.</div>
+          <button className="spray-danger" disabled={busy} onClick={guard(() => actions.hide(j))}><Trash2 size={15} /> Remove from schedule</button>
+        </div>
       )}
     </div>
   )

@@ -106,30 +106,44 @@ export const compass = (deg) => (deg == null || !isFinite(deg) ? '' : COMPASS[Ma
 export function weatherUrl(lat, lng) {
   return 'https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lng +
     '&current=wind_speed_10m,wind_gusts_10m,wind_direction_10m,temperature_2m' +
-    '&hourly=wind_speed_10m,wind_gusts_10m' +
+    '&hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m,precipitation_probability,temperature_2m' +
     '&wind_speed_unit=mph&temperature_unit=fahrenheit&timezone=' + encodeURIComponent(TZ) + '&forecast_days=16'
 }
 
-/** Open-Meteo answer -> what a card shows for one day: { now?, maxWind, maxGust } (now only for today). */
+/** Open-Meteo answer -> what a card shows for one day (like the Google app):
+ *  { date, maxWind, maxGust, dir (most common direction in working hours), rain (highest chance, %),
+ *    lo, hi (°F, whole day), now? } (now only for today). */
 export function summarizeWeather(data, ymd, today) {
   if (!data || !data.hourly || !data.hourly.time) return null
   const h = data.hourly
-  let maxWind = null, maxGust = null
+  let maxWind = null, maxGust = null, rain = null, lo = null, hi = null
+  const dirs = {}
   h.time.forEach((t, i) => {
     if (String(t).slice(0, 10) !== ymd) return
+    const tmp = h.temperature_2m ? h.temperature_2m[i] : null
+    if (tmp != null) { lo = lo == null ? tmp : Math.min(lo, tmp); hi = hi == null ? tmp : Math.max(hi, tmp) }
     const hr = Number(String(t).slice(11, 13))
     if (hr < 6 || hr > 20) return                                  // daylight working hours
     if (h.wind_speed_10m[i] != null) maxWind = Math.max(maxWind == null ? 0 : maxWind, h.wind_speed_10m[i])
     if (h.wind_gusts_10m[i] != null) maxGust = Math.max(maxGust == null ? 0 : maxGust, h.wind_gusts_10m[i])
+    const rp = h.precipitation_probability ? h.precipitation_probability[i] : null
+    if (rp != null) rain = Math.max(rain == null ? 0 : rain, rp)
+    const d = h.wind_direction_10m ? compass(h.wind_direction_10m[i]) : ''
+    if (d) dirs[d] = (dirs[d] || 0) + 1
   })
   if (maxWind == null) return null
-  const out = { maxWind: Math.round(maxWind), maxGust: maxGust == null ? null : Math.round(maxGust) }
+  const dir = Object.keys(dirs).sort((a, b) => dirs[b] - dirs[a])[0] || ''
+  const out = { date: ymd, maxWind: Math.round(maxWind), maxGust: maxGust == null ? null : Math.round(maxGust), dir,
+    rain: rain == null ? null : Math.round(rain), lo: lo == null ? null : Math.round(lo), hi: hi == null ? null : Math.round(hi) }
   if (ymd === today && data.current) {
     const c = data.current
     out.now = { wind: Math.round(c.wind_speed_10m), gust: Math.round(c.wind_gusts_10m), dir: compass(c.wind_direction_10m), temp: Math.round(c.temperature_2m) }
   }
   return out
 }
+
+/** Rain chance worth showing on the card (the Google app showed it from 30%). */
+export const RAIN_SHOW_PCT = 30
 
 /** Wind level for coloring: 0 ok, 1 watch, 2 too windy (same lines as the Google app). */
 export const WIND_MPH = [10, 15]

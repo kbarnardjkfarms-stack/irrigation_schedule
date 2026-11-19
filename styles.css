@@ -1294,6 +1294,28 @@ body.spray-dark { background: #0c0f11; }
 .spray-btn { font-size: 13px; padding: 8px 13px; border-radius: 7px; text-decoration: none; display: inline-block; }
 .spray .spray-actions a.spray-btn { color: var(--sp-tx); }
 .spray-details { border-top: 1px solid var(--sp-line); padding: 10px 13px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 8px; background: var(--sp-card2); }
+/* Card head + weather boxes + opened-card panels, like the old Google spray app */
+.spray-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.spray-card-corner { display: flex; align-items: center; gap: 6px; flex: none; }
+.spray .spray-trash { background: transparent; border: 0; padding: 4px; color: var(--sp-tx3); line-height: 0; }
+.spray .spray-trash:hover { color: var(--sp-red); }
+.spray-op { display: flex; align-items: center; gap: 5px; }
+.spray-wxb { display: flex; gap: 6px; margin-top: 10px; }
+.spray-wxb .wb { flex: 1; min-width: 0; background: var(--sp-card2); border-radius: 10px; padding: 5px 9px; }
+.spray-wxb .wb small { display: block; font-size: 10px; font-weight: 700; color: var(--sp-tx3); letter-spacing: 1px; }
+.spray-wxb .wb b { font-family: var(--sp-cond); font-weight: 700; font-size: 18px; letter-spacing: .3px; white-space: nowrap; }
+.spray-wxb .wb.bad { background: var(--sp-redBg); } .spray-wxb .wb.bad b { color: var(--sp-red); }
+.spray-wxb .wb.warn { background: var(--sp-amberBg); } .spray-wxb .wb.warn b { color: var(--sp-amber); }
+.spray-panels { border-top: 1px solid var(--sp-line); padding: 12px 13px 13px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; font-size: 14px; }
+.spray-panel { border: 1px solid var(--sp-line); border-radius: 8px; padding: 10px; min-width: 0; }
+.spray-panel h4 { margin: 0 0 6px; font-size: 13px; color: var(--sp-tx2); font-weight: 600; }
+.spray-panel input[type=date], .spray-panel select { width: 100%; box-sizing: border-box; }
+.spray-panel .spray-muted { font-size: 13px; }
+.spray .spray-linkbtn { display: inline-flex; gap: 6px; align-items: center; margin-top: 6px; padding: 8px 12px; border-radius: 8px; background: var(--sp-accent); color: var(--sp-bg); text-decoration: none; font-weight: 600; }
+.spray-fieldrow { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-top: 1px solid var(--sp-line); }
+.spray-fieldrow a { display: inline-flex; align-items: center; gap: 3px; color: var(--sp-accent); }
+.spray-panel .spray-products { margin-top: 8px; }
+.spray-panel .spray-danger { display: inline-flex; align-items: center; gap: 6px; }
 .spray-products div { padding: 1px 0; }
 .spray-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .spray-box { background: var(--sp-card); border: 1px solid var(--sp-line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px; }
