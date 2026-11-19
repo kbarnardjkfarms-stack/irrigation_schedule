@@ -1,6 +1,24 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    // Potato storage notes: PDFs, photos and camera scans attached to a bay
+    // note. Same audience as the Potato storage module itself - signed in,
+    // not a customer login or planting crew, and (when a profile carries a
+    // module list) 'potato-storage' is in it. Admin/Owner always. Uploads
+    // are limited to PDFs and images under 25 MB.
+    match /potatoNotes/{bayId}/{allPaths=**} {
+      function potatoStaff() {
+        let me = firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+        return request.auth != null
+          && (me.role in ['admin', 'owner']
+            || (me.role != 'customer' && me.role != 'planting_staff'
+                && (me.get('modules', null) == null || 'potato-storage' in me.modules)));
+      }
+      allow read, delete: if potatoStaff();
+      allow create, update: if potatoStaff()
+        && request.resource.size < 25 * 1024 * 1024
+        && (request.resource.contentType == 'application/pdf' || request.resource.contentType.matches('image/.*'));
+    }
     match /pivotProfiles/{pivotId}/{allPaths=**} {
       allow read: if request.auth != null;
       // Upload / replace: same people as before. Deleting a package file
