@@ -15,9 +15,9 @@ import Spray from './Spray.jsx'
 // planting late spring, harvest otherwise).
 
 const SECTIONS = [
-  { id: 'planting', label: 'Planting', sub: 'Planting crews' },
+  { id: 'spray', label: 'Spray Schedule', sub: 'Drone Crew & Ag Rows' },
   { id: 'ground', label: 'Ground work', sub: 'Tillage passes by machine' },
-  { id: 'spray', label: 'Spray', sub: 'Drone crew & Ag Rows' },
+  { id: 'planting', label: 'Planting', sub: 'Planting crews' },
   { id: 'harvest', label: 'Harvest', sub: 'Harvest teams' }
 ]
 const KEY = 'aio.operations.section'
