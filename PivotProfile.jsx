@@ -75,6 +75,8 @@ export default function PivotProfile({ pivotGuid, onBack }) {
   const [showHistory, setShowHistory] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleting, setDeleting] = useState(false)
+  const [clearGpmOpen, setClearGpmOpen] = useState(false)
+  const [clearingGpm, setClearingGpm] = useState(false)
   const [thresholdSaved, setThresholdSaved] = useState(false)
   const [currentSeasonId, setCurrentSeasonId] = useState(null)
   const [currentSeasonName, setCurrentSeasonName] = useState(null)
@@ -266,6 +268,22 @@ export default function PivotProfile({ pivotGuid, onBack }) {
     await writeGpm(pendingGpm.newGpm, pendingGpm.source, pendingGpm.extra, choice)
     setPendingBusy(false)
     setPendingGpm(null)
+  }
+
+  // Clears a GPM that has no package behind it (typed by hand, or left over from a package that was deleted).
+  // The number that was in use is kept in gpmCleared.
+  async function handleClearGpm() {
+    setClearingGpm(true)
+    setError(null)
+    try {
+      await setDoc(doc(db, 'pivotProfiles', pivotGuid), clearedGpmFields(profile, { by: (auth.currentUser && auth.currentUser.email) || 'unknown', now: new Date().toISOString() }), { merge: true })
+      setGpmInput('')
+    } catch (err) {
+      setError(err.message || 'Could not clear the GPM.')
+    } finally {
+      setClearingGpm(false)
+      setClearGpmOpen(false)
+    }
   }
 
   // Deletes a package for good: the PDF file itself, then its entry on the
@@ -636,7 +654,11 @@ export default function PivotProfile({ pivotGuid, onBack }) {
                   {confirming ? 'Confirming…' : `Confirm ${scan.gpm} GPM`}
                 </button>
               </div>
-              <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>Not used for scheduled inches until confirmed.</div>
+              <div style={{ fontSize: '10px', color: '#888', marginTop: '6px' }}>
+                {currentGpm != null
+                  ? `Still using the ${currentGpm} GPM (${gpmSourceText}) for scheduled inches until you confirm.`
+                  : 'Not used for scheduled inches until confirmed.'}
+              </div>
             </div>
           ) : (
             <div>
@@ -668,6 +690,12 @@ export default function PivotProfile({ pivotGuid, onBack }) {
         ) : (
           <div style={{ fontSize: '12px', color: '#888' }}>
             Upload the sprinkler package PDF above and confirm the GPM AIO reads from it. If there's no printout, tick &ldquo;No package printout available&rdquo; to type the GPM in by hand.
+          </div>
+        )}
+        {currentGpm != null && !pkg && ['admin', 'owner', 'farm_manager', 'irrigation_manager'].includes(role) && (
+          <div style={{ marginTop: '12px' }}>
+            <button data-testid="clear-gpm" onClick={() => setClearGpmOpen(true)} style={{ fontSize: '12px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: '#A32D2D' }}>Clear GPM</button>
+            <div style={{ fontSize: '10px', color: '#888', marginTop: '4px' }}>Removes the {currentGpm} GPM. This pivot will have no GPM until you type one (with &ldquo;No package printout available&rdquo; ticked) or confirm one from a package.</div>
           </div>
         )}
         {describeHistory(profile).length > 0 && (
@@ -851,6 +879,22 @@ export default function PivotProfile({ pivotGuid, onBack }) {
 
       {pendingGpm && (
         <GpmChangeDialog profile={profile} newGpm={pendingGpm.newGpm} busy={pendingBusy} onCancel={() => setPendingGpm(null)} onChoose={handleChooseGpmChange} />
+      )}
+
+      {clearGpmOpen && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div role="dialog" aria-label="Clear GPM" style={{ background: '#fff', borderRadius: '10px', padding: '20px', width: '320px', maxWidth: '92vw', boxShadow: '0 4px 20px rgba(0,0,0,0.2)' }}>
+            <div style={{ fontSize: '15px', fontWeight: 600, marginBottom: '8px', color: '#2b2b26' }}>Clear this GPM?</div>
+            <div style={{ fontSize: '13px', color: '#2b2b26', fontWeight: 600 }}>{currentGpm} GPM</div>
+            <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.5, margin: '8px 0 16px' }}>
+              This pivot will have no GPM until you tick &ldquo;No package printout available&rdquo; and type one, or upload a package and confirm its GPM.
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setClearGpmOpen(false)} disabled={clearingGpm} style={{ fontSize: '13px' }}>Cancel</button>
+              <button onClick={handleClearGpm} disabled={clearingGpm} style={{ fontSize: '13px', background: '#FBEAEA', border: '1px solid #E8B4B4', color: '#A32D2D' }}>{clearingGpm ? 'Clearing\u2026' : 'Clear GPM'}</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {deleteTarget && (
