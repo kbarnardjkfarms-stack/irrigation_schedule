@@ -15,7 +15,8 @@
 
 @media (prefers-color-scheme: dark) {
   html:not([data-theme="light"]) {
-    filter: invert(0.92) hue-rotate(180deg);
+    /* saturate/brightness: flipped colours come out dull, so dark mode lifts them */
+    filter: invert(0.92) hue-rotate(180deg) saturate(1.7) brightness(1.08);
     background: #f7f5f0; /* flips to the dark page colour */
   }
   /* flip real-world content back */
@@ -27,8 +28,13 @@
   html:not([data-theme="light"]) .leaflet-container,
   html:not([data-theme="light"]) .spray,
   html:not([data-theme="light"]) .keep-colors {
-    filter: invert(1) hue-rotate(180deg);
+    /* the page filter undone in reverse order */
+    filter: brightness(0.926) saturate(0.588) hue-rotate(180deg) invert(1);
   }
+  /* Spray keeps its own dark colours but sits on the same page background
+     as the rest of AIO (#0d0b04 comes out the same as the page once it goes
+     through the page filter and back). */
+  html:not([data-theme="light"]) .spray { --sp-bg: #0d0b04; }
   /* already flipped back by a parent above — don't flip twice */
   html:not([data-theme="light"]) :is(.leaflet-container, .spray, .keep-colors) :is(img, video, canvas, picture, iframe, .leaflet-container, .keep-colors) {
     filter: none;
