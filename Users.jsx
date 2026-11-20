@@ -9,12 +9,30 @@ const ROLE_LABELS = {
   admin: 'Admin',
   owner: 'Owner',
   farm_manager: 'Farm manager',
+  operations: 'Operations',
   irrigation_manager: 'Irrigation manager',
   irrigator: 'Irrigator',
+  trucking: 'Trucking',
+  mart_produce: 'Mart Produce',
   planting_staff: 'Potato planting staff',
   customer: 'Customer'
 }
-const FARM_SCOPED_ROLES = ['farm_manager', 'irrigation_manager', 'irrigator']
+// Operations (e.g. Robby) has a Farm manager's access (firestore.rules' myRole()); tick every farm.
+const FARM_SCOPED_ROLES = ['farm_manager', 'operations', 'irrigation_manager', 'irrigator']
+// Trucking and Mart Produce (fresh pack shed) see only their ticked modules. Their farms are optional:
+// they're for alerts and for looking people up by farm (work orders), not for access.
+const FARM_OPTIONAL_ROLES = ['trucking', 'mart_produce', 'admin', 'owner']
+// A starting module list when one of these roles is picked (changeable with the boxes).
+const ROLE_DEFAULT_MODULES = { mart_produce: ['potato-storage'], trucking: ['potato-storage', 'map'] }
+// Phone-app alerts (same as the Spray schedule's field-done alerts; not texts). users/{uid}.alerts
+const ALERT_CHOICES = {
+  spray: [['', 'Off'], ['farms', 'Their farms'], ['all', 'All jobs'], ['spreads', 'Ag Rows spreads']],
+  irrigation: [['', 'Off'], ['farms', 'Their farms'], ['all', 'All farms']]
+}
+const alertsSummary = (a) => {
+  const t = (k) => (ALERT_CHOICES[k].find((c) => c[0] === ((a && a[k]) || '')) || ['', 'Off'])[1]
+  return a && (a.spray || a.irrigation) ? 'Spray: ' + t('spray') + ' \u00b7 Irrigation: ' + t('irrigation') : ''
+}
 // Which AIO modules a person can use. Ids must match firestore.rules'
 // hasModule() and App.jsx's hasModule(). Admin/Owner always get everything,
 // so the checklist is hidden for them. A profile with no `modules` list means
@@ -45,13 +63,15 @@ function modulesToSave(role, modules) {
   return allChecked ? null : modules
 }
 
-const EMPTY_FORM = { name: '', email: '', phone: '', receiveTextAlerts: false, role: 'irrigator', farmIds: [], canEditSchedule: false, sprayAdmin: false, modules: ALL_MODULE_IDS, customers: [] }
+const EMPTY_FORM = { name: '', email: '', phone: '', receiveTextAlerts: false, role: 'irrigator', farmIds: [], canEditSchedule: false, sprayAdmin: false, modules: ALL_MODULE_IDS, customers: [], alerts: { spray: '', irrigation: '' } }
 
 function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabel, onCancel, onSubmit }) {
   const [form, setForm] = useState(initial)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const farmScoped = FARM_SCOPED_ROLES.includes(form.role)
+  const farmPick = farmScoped || FARM_OPTIONAL_ROLES.includes(form.role)
+  const setAlert = (k, v) => setForm((f) => ({ ...f, alerts: { ...(f.alerts || {}), [k]: v } }))
 
   function toggleCustomer(name) {
     setForm((f) => ({ ...f, customers: f.customers.includes(name) ? f.customers.filter((c) => c !== name) : [...f.customers, name] }))
@@ -149,16 +169,19 @@ function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabe
       <div className="editor-label">Role</div>
       <select
         value={form.role}
-        onChange={(e) => setForm((f) => ({ ...f, role: e.target.value }))}
+        onChange={(e) => { const role = e.target.value; setForm((f) => ({ ...f, role, ...(ROLE_DEFAULT_MODULES[role] ? { modules: ROLE_DEFAULT_MODULES[role] } : {}) })) }}
         style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #ccc', marginBottom: '10px' }}
       >
         {Object.entries(ROLE_LABELS).map(([val, label]) => (
           <option key={val} value={val}>{label}</option>
         ))}
       </select>
-      {farmScoped && (
+      {farmPick && (
         <>
-          <div className="editor-label">Assigned farms</div>
+          <div className="editor-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{farmScoped ? 'Assigned farms' : 'Their farms (optional)'}</span>
+            <button type="button" onClick={() => setForm((f) => ({ ...f, farmIds: f.farmIds.length === farms.length ? [] : farms.map((x) => x.id) }))} style={{ fontSize: '11px', padding: '2px 8px' }}>{form.farmIds.length === farms.length ? 'Clear' : 'All farms'}</button>
+          </div>
           <div style={{ maxHeight: '180px', overflowY: 'auto', border: '1px solid #ddd8cc', borderRadius: '8px', padding: '8px 10px', marginBottom: '4px' }}>
             {farms.map((farm) => (
               <label key={farm.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '4px 0' }}>
@@ -170,7 +193,10 @@ function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabe
           <p style={{ fontSize: '11px', color: '#888', margin: '0 0 12px' }}>
             {form.role === 'irrigator'
               ? 'They can only see these farms. First one checked is their default view.'
-              : "They can edit these farms; they can still view every other farm, just can't edit it. First one checked is their default view."}
+              : FULL_ACCESS_ROLES.includes(form.role) ? 'Doesn\'t limit anything. Makes them the farm manager on these farms\' spray jobs (name, Call button, shown first) and sets their "Their farms" alerts.'
+              : !farmScoped ? 'Doesn\'t limit what they see (that\'s the modules below). Used for "Their farms" alerts and for finding who covers a farm (work orders).'
+                : form.role === 'operations' ? 'Operations works like a farm manager on these farms; tick All farms for the whole operation.'
+                  : "They can edit these farms; they can still view every other farm, just can't edit it. First one checked is their default view."}
           </p>
         </>
       )}
@@ -231,6 +257,24 @@ function ProfileForm({ initial, farms, customerRoster, emailEditable, submitLabe
               Spray schedule admin <span style={{ fontSize: '11px', color: '#888' }}>(assign operators, Done, move and remove jobs, crew list). Nobody else can, Admin and Owner included; they can view.</span>
             </label>
           )}
+      {form.role !== CUSTOMER_ROLE && form.role !== PLANTING_ROLE && (
+        <>
+          <div className="editor-label">Phone alerts</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 10px', alignItems: 'center', fontSize: '13px', marginBottom: '4px' }}>
+            <span>Spray schedule</span>
+            <select value={(form.alerts && form.alerts.spray) || ''} onChange={(e) => setAlert('spray', e.target.value)} style={{ padding: '6px', borderRadius: '8px', border: '1px solid #ccc' }}>
+              {ALERT_CHOICES.spray.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+            <span>Irrigation</span>
+            <select value={(form.alerts && form.alerts.irrigation) || ''} onChange={(e) => setAlert('irrigation', e.target.value)} style={{ padding: '6px', borderRadius: '8px', border: '1px solid #ccc' }}>
+              {ALERT_CHOICES.irrigation.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <p style={{ fontSize: '11px', color: '#888', margin: '0 0 12px' }}>
+            Alerts on their phone through the AIO app (they turn them on once from the account menu). Spray: field done; "All jobs" also gets license, FAA, medical and drone warranty reminders. Irrigation: a pivot parked wet. "Their farms" uses the farms ticked above.
+          </p>
+        </>
+      )}
       {error && <p style={{ color: '#A32D2D', fontSize: '13px', margin: '0 0 10px' }}>{error}</p>}
       <div style={{ display: 'flex', gap: '8px' }}>
         <button type="submit" className="save" disabled={busy} style={{ flex: 1 }}>{busy ? 'Saving\u2026' : submitLabel}</button>
@@ -399,6 +443,13 @@ export default function Users() {
     } else if (form.sprayAdmin && result.data && result.data.uid && form.role !== PLANTING_ROLE) {
       await updateDoc(doc(db, 'users', result.data.uid), { sprayAdmin: true })
     }
+    // alerts, and farms for roles where farms are optional (createUser only stores farms for scoped roles)
+    if (result.data && result.data.uid && form.role !== CUSTOMER_ROLE && form.role !== PLANTING_ROLE) {
+      const extra = {}
+      if (form.alerts && (form.alerts.spray || form.alerts.irrigation)) extra.alerts = { spray: form.alerts.spray || '', irrigation: form.alerts.irrigation || '' }
+      if (FARM_OPTIONAL_ROLES.includes(form.role) && form.farmIds.length) extra.farmIds = form.farmIds.map(String)
+      if (Object.keys(extra).length) await updateDoc(doc(db, 'users', result.data.uid), extra)
+    }
     let emailSent = true
     try {
       await sendPasswordResetEmail(auth, form.email.trim())
@@ -416,11 +467,13 @@ export default function Users() {
       phone: form.phone.trim(),
       receiveTextAlerts: !!form.phone && !!form.receiveTextAlerts
     }
-    if (FARM_SCOPED_ROLES.includes(form.role)) {
+    if (FARM_SCOPED_ROLES.includes(form.role) || (FARM_OPTIONAL_ROLES.includes(form.role) && form.farmIds.length)) {
       update.farmIds = form.farmIds
     } else {
       update.farmIds = deleteField()
     }
+    update.alerts = form.role !== CUSTOMER_ROLE && form.role !== PLANTING_ROLE && form.alerts && (form.alerts.spray || form.alerts.irrigation)
+      ? { spray: form.alerts.spray || '', irrigation: form.alerts.irrigation || '' } : deleteField()
     if (form.role === 'irrigator') {
       update.canEditSchedule = form.canEditSchedule
     } else {
@@ -507,6 +560,7 @@ export default function Users() {
 
   function farmSummary(user) {
     if (user.role === CUSTOMER_ROLE) return '\u2014'
+    if (FARM_OPTIONAL_ROLES.includes(user.role)) return (user.farmIds || []).length ? (FULL_ACCESS_ROLES.includes(user.role) ? 'All farms (manages ' : '') + user.farmIds.map((id) => farmNameById[id] || id).join(', ') + (FULL_ACCESS_ROLES.includes(user.role) ? ')' : '') : 'All farms'
     if (!FARM_SCOPED_ROLES.includes(user.role)) return 'All farms'
     if (!user.farmIds || user.farmIds.length === 0) return '\u2014'
     return user.farmIds.map((id) => farmNameById[id] || id).join(', ')
@@ -521,8 +575,9 @@ export default function Users() {
 
   function scheduleAccessSummary(user) {
     if (user.role === CUSTOMER_ROLE) return '\u2014'
+    if (FARM_OPTIONAL_ROLES.includes(user.role) && !FULL_ACCESS_ROLES.includes(user.role)) return 'View only'
     if (!FARM_SCOPED_ROLES.includes(user.role)) return 'Edit'
-    if (user.role === 'farm_manager' || user.role === 'irrigation_manager') return 'Edit (own), view (rest)'
+    if (user.role === 'farm_manager' || user.role === 'operations' || user.role === 'irrigation_manager') return 'Edit (own), view (rest)'
     return user.canEditSchedule ? 'Edit' : 'View only'
   }
 
@@ -559,7 +614,7 @@ export default function Users() {
     if (f.farm) {
       if (f.farm === ALL_FARMS_FILTER) {
         if (user.role === CUSTOMER_ROLE || FARM_SCOPED_ROLES.includes(user.role)) return false
-      } else if (!(FARM_SCOPED_ROLES.includes(user.role) && (user.farmIds || []).includes(f.farm))) return false
+      } else if (!((FARM_SCOPED_ROLES.includes(user.role) || FARM_OPTIONAL_ROLES.includes(user.role)) && (user.farmIds || []).includes(f.farm))) return false
     }
     if (f.sched && scheduleAccessSummary(user) !== f.sched) return false
     if (f.module) {
@@ -733,7 +788,8 @@ export default function Users() {
                   {user.phone || '\u2014'}
                   {user.phone && <div style={{ fontSize: '10px', color: '#888' }}>Texts {user.receiveTextAlerts === true ? 'on' : 'off'}</div>}
                 </td>
-                <td style={{ padding: '8px', ...(user.disabled ? { opacity: 0.5 } : null) }}>{ROLE_LABELS[user.role] || user.role}</td>
+                <td style={{ padding: '8px', ...(user.disabled ? { opacity: 0.5 } : null) }}>{ROLE_LABELS[user.role] || user.role}
+                  {alertsSummary(user.alerts) && <div style={{ fontSize: '10px', color: '#888' }}>{'\ud83d\udd14 ' + alertsSummary(user.alerts)}</div>}</td>
                 <td style={{ padding: '8px', color: '#666', ...(user.disabled ? { opacity: 0.5 } : null) }}>{farmSummary(user)}</td>
                 <td style={{ padding: '8px', color: '#666', ...(user.disabled ? { opacity: 0.5 } : null) }}>{scheduleAccessSummary(user)}</td>
                 <td style={{ padding: '8px', color: '#666', ...(user.disabled ? { opacity: 0.5 } : null) }}>{moduleSummary(user)}</td>
@@ -764,7 +820,8 @@ export default function Users() {
                         canEditSchedule: !!user.canEditSchedule,
                         sprayAdmin: !!user.sprayAdmin,
                         modules: Array.isArray(user.modules) ? user.modules : ALL_MODULE_IDS,
-                        customers: user.customers || []
+                        customers: user.customers || [],
+                        alerts: { spray: (user.alerts && user.alerts.spray) || '', irrigation: (user.alerts && user.alerts.irrigation) || '' }
                       }}
                       farms={farms}
                       customerRoster={customerRoster}

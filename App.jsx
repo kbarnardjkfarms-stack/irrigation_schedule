@@ -163,10 +163,44 @@ const ROLE_LABELS = {
   admin: 'Admin',
   owner: 'Owner',
   farm_manager: 'Farm manager',
+  operations: 'Operations',
   irrigation_manager: 'Irrigation manager',
   irrigator: 'Irrigator',
+  trucking: 'Trucking',
+  mart_produce: 'Mart Produce',
   planting_staff: 'Potato planting staff',
   customer: 'Customer'
+}
+
+// Account menu: turn this phone's AIO alerts on/off (Spray field-done and Irrigation alerts,
+// whichever the Users screen switched on for this person). Same phone setup the Spray screen uses.
+function PhoneAlertsSwitch({ alerts }) {
+  const [state, setState] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  useEffect(() => { import('./sprayPush.js').then((m) => m.pushState()).then(setState).catch(() => setState('unsupported')) }, [])
+  const what = [alerts.spray && 'Spray', alerts.irrigation && 'Irrigation'].filter(Boolean).join(' + ')
+  const toggle = async () => {
+    setBusy(true); setMsg('')
+    try {
+      const m = await import('./sprayPush.js')
+      if (state === 'on') { await m.turnOff(); setState('off') }
+      else { const r = await m.turnOn(); if (r && r.ok === false) setMsg(r.error === 'blocked' ? 'Alerts are blocked for AIO in this phone\'s settings.' : r.error || 'Couldn\'t turn alerts on.'); setState(await m.pushState()) }
+    } catch (e) { setMsg(e.message || String(e)) }
+    setBusy(false)
+  }
+  return (
+    <div style={{ fontSize: '12px', color: '#555', marginBottom: '12px', borderTop: '1px solid #eee', paddingTop: '10px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+        <strong>Phone alerts</strong>
+        {state === 'on' || state === 'off'
+          ? <button disabled={busy} onClick={toggle} style={{ fontSize: '12px', padding: '3px 10px' }}>{busy ? '…' : state === 'on' ? 'On \u00b7 turn off' : 'Turn on'}</button>
+          : <span style={{ color: '#888' }}>{state === 'ios-home' ? 'Open AIO from the Home Screen icon' : state === 'blocked' ? 'Blocked in phone settings' : state ? 'Not on this device' : ''}</span>}
+      </div>
+      <div style={{ color: '#888', marginTop: '3px' }}>{what ? 'You get: ' + what : 'No alerts are switched on for you (Users screen).'}</div>
+      {msg && <div style={{ color: '#a3261e', marginTop: '3px' }}>{msg}</div>}
+    </div>
+  )
 }
 
 function mondayOf(d) {
@@ -618,7 +652,9 @@ export default function App() {
       // isn't proof the profile is missing — wait for the server to say so.
       if (!snap.exists() && snap.metadata.fromCache) return
       const data = snap.exists() ? snap.data() : null
-      setUserRole(data ? data.role : null)
+      // 'operations' has exactly a Farm manager's access (firestore.rules' myRole() does the same),
+      // so the app treats it as one; the account menu still shows "Operations".
+      setUserRole(data ? (data.role === 'operations' ? 'farm_manager' : data.role) : null)
       setUserProfile(data)
       setProfileStatus(data ? 'ready' : 'missing')
     }, (err) => {
@@ -1312,8 +1348,9 @@ export default function App() {
               <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: '6px', background: '#fff', border: '0.5px solid #ddd8cc', borderRadius: '10px', boxShadow: '0 4px 12px rgba(0,0,0,0.12)', minWidth: '220px', zIndex: 10, padding: '14px 16px' }}>
                 <div style={{ fontWeight: 600, fontSize: '14px' }}>{(userProfile && userProfile.name) || user.email}</div>
                 <div style={{ fontSize: '12px', color: '#888', marginBottom: '10px' }}>{user.email}</div>
-                <div style={{ fontSize: '12px', color: '#555', marginBottom: '3px' }}><strong>Role:</strong> {ROLE_LABELS[userRole] || '\u2014'}</div>
+                <div style={{ fontSize: '12px', color: '#555', marginBottom: '3px' }}><strong>Role:</strong> {ROLE_LABELS[(userProfile && userProfile.role) || userRole] || '\u2014'}</div>
                 <div style={{ fontSize: '12px', color: '#555', marginBottom: '12px' }}><strong>Farm:</strong> {myFarmSummary}</div>
+                {userRole !== 'customer' && <PhoneAlertsSwitch alerts={(userProfile && userProfile.alerts) || {}} />}
                 <button onClick={handleSignOut} style={{ width: '100%' }}>Sign out</button>
               </div>
             )}

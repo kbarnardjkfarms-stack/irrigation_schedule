@@ -24,9 +24,9 @@ service firebase.storage {
       // Upload / replace: same people as before. Deleting a package file
       // takes farm manager or above.
       allow create, update: if request.auth != null &&
-        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'owner', 'farm_manager', 'irrigation_manager'];
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'owner', 'farm_manager', 'operations', 'irrigation_manager'];
       allow delete: if request.auth != null &&
-        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'owner', 'farm_manager'];
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'owner', 'farm_manager', 'operations'];
     }
   }
 }

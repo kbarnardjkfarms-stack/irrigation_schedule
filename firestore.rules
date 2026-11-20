@@ -16,8 +16,9 @@ service cloud.firestore {
     function myData() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
+    // 'operations' (Users screen role, e.g. Robby) has exactly a Farm manager's access everywhere below.
     function myRole() {
-      return myData().role;
+      return myData().role == 'operations' ? 'farm_manager' : myData().role;
     }
     function isAdminOrOwner() {
       return myRole() == 'admin' || myRole() == 'owner';
