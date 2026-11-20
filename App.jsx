@@ -1894,10 +1894,10 @@ export default function App() {
                             <button className="gpm-warn" onClick={(e) => { e.stopPropagation(); setNoGpmFieldId(field.id) }} aria-label={`No GPM for ${field.fieldName}: applied inches can't be calculated. Tap for details.`}>
                               <svg width="30" height="28" viewBox="0 0 30 28" aria-hidden="true"><path d="M15 2 L28 25 H2 Z" fill="#D32F2F" stroke="#D32F2F" strokeWidth="2" strokeLinejoin="round" /><rect x="13.6" y="9" width="2.8" height="9" rx="1.2" fill="#fff" /><circle cx="15" cy="21.2" r="1.7" fill="#fff" /></svg>
                             </button>
-                          ) : applied.ok ? <>{applied.inches.toFixed(2)}<span className="et-mark">{applied.estimate ? '~' : ''}{applied.unknownMark ? '+?' : ''}</span></> : '—'}
+                          ) : applied.ok ? <>{applied.inches.toFixed(2)}<span className="et-mark">{applied.unknownMark ? '+?' : ''}</span></> : '—'}
                         </td>
                         <td className="inches-cell et-cell" onClick={() => setEtDetailFieldId(field.id)}>
-                          {etInfo.et ? <>{etInfo.et.inches.toFixed(2)}<span className="et-mark">{etInfo.stationInfo && etInfo.stationInfo.codes.length > 1 ? '*' : ''}{etInfo.et.approximate ? '~' : ''}</span></> : '—'}
+                          {etInfo.et ? <>{etInfo.et.inches.toFixed(2)}<span className="et-mark">{etInfo.et.approximate ? '~' : ''}</span></> : '—'}
                         </td>
                       </tr>
                     </Fragment>
