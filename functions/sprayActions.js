@@ -20,6 +20,7 @@ const { _internal: S } = require('./spraySync');
 const alerts = require('./sprayAlerts');
 const contacts = require('./sprayContacts');
 const records = require('./sprayRecords');
+const costs = require('./sprayCosts');
 const OPS = 'sprayOperators';
 
 /** What a role may do in the Spray module. */
@@ -82,7 +83,7 @@ async function act(db, me, data) {
     // Idaho applicator license (both crews) + FAA details (drone pilots only), copied into each
     // application record when it's saved (functions/sprayRecords.js).
     const papers = records.cleanPilotPapers(data);
-    if (crew !== 'drone') { delete papers.faa_cert; delete papers.part137_date; delete papers.address; }
+    if (crew !== 'drone') { delete papers.faa_cert; delete papers.part137_date; delete papers.address; delete papers.faa_recurrent; delete papers.medical_issued; delete papers.medical_over40; delete papers.chief; }
     Object.assign(row, papers);
     await ref.set(row, { merge: true });
     return { ok: true, id: ref.id };
@@ -133,6 +134,9 @@ async function act(db, me, data) {
     if (clean(data.reason, 300).length < 4) throw new HttpsError('invalid-argument', 'Say why it\'s being voided (it stays on file with the reason).');
     return records.voidFlight(db, me, clean(data.id, 80), data.reason);
   }
+
+  // ---- Costs tab (Spray admin): weekly hours, pay rates, expenses, cost per acre (functions/sprayCosts.js) ----
+  if (costs.COST_ACTIONS.indexOf(action) >= 0) return costs.costAction(db, me, action, data || {});
 
   // ---- farm managers (Spray admin): Spray > Managers tab ----
   if (action === 'listManagers' || action === 'saveManager' || action === 'deleteManager') {

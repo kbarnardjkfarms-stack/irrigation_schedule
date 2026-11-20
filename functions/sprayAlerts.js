@@ -126,10 +126,15 @@ async function checkLicenses(db, now) {
       n++;
     }
     for (const w of warn) {
-      const ref = db.collection(ALERTS).doc(('license-' + w.id + '-' + w.exp + '-' + w.stage).replace(/[^A-Za-z0-9_-]/g, ''));
+      const ref = db.collection(ALERTS).doc(((w.kind === 'license' || !w.kind ? 'license-' : w.kind + '-') + w.id + '-' + w.exp + '-' + w.stage).replace(/[^A-Za-z0-9_-]/g, ''));
       if ((await ref.get()).data()) continue;
-      const when = w.stage === 'expired' ? 'expired ' + w.exp : 'expires ' + w.exp + ' (in ' + w.days + ' day' + (w.days === 1 ? '' : 's') + ')';
-      await ref.set({ jobKey: ref.id, how: 'license', people, title: '⚠ ' + w.name + '\'s applicator license', body: 'Idaho license ' + (w.license_no || '') + ' ' + when + '. Update it on Spray > Operators.',
+      const late = w.stage === 'expired';
+      const inDays = ' (in ' + w.days + ' day' + (w.days === 1 ? '' : 's') + ')';
+      const body = w.kind === 'faa' ? 'FAA recurrent training (the free online course) ' + (late ? 'was due ' + w.exp + '. Not current until it\'s done.' : 'is due by ' + w.exp + inDays + '.')
+        : w.kind === 'medical' ? 'Third-class medical ' + (late ? 'ran out ' + w.exp + '.' : 'runs out ' + w.exp + inDays + '.')
+          : 'Idaho license ' + (w.license_no || '') + ' ' + (late ? 'expired ' + w.exp : 'expires ' + w.exp + inDays) + '.';
+      const title = '⚠ ' + w.name + '\'s ' + (w.kind === 'faa' ? 'FAA recurrent training' : w.kind === 'medical' ? 'third-class medical' : 'applicator license');
+      await ref.set({ jobKey: ref.id, how: 'license', people, title, body: body + ' Update it on Spray > Operators.',
         createdAt: now, sendAfter: now, status: people.length ? 'queued' : 'no_one' });
       n++;
     }

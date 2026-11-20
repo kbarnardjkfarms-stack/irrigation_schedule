@@ -158,16 +158,46 @@ function cleanPilotPapers(d) {
   const ymd = (v) => (YMD.test(clean(v, 10)) ? clean(v, 10) : '');
   return {
     license_no: clean(d.license_no, 40), license_type: LICENSE_TYPES[d.license_type] ? d.license_type : '',
-    license_cats: clean(d.license_cats, 80).toUpperCase(), license_exp: ymd(d.license_exp),
-    supervisor: d.license_type === 'apprentice' ? clean(d.supervisor, 120) : '',
-    faa_cert: clean(d.faa_cert, 40), part137_date: ymd(d.part137_date), address: clean(d.address, 160)
+    license_cats: clean(d.license_cats, 80).toUpperCase(), license_exp: ymd(d.license_exp), license_issued: ymd(d.license_issued),
+    // who supervises them: a Professional Applicator on the Operators tab (picked by name), for an
+    // apprentice or someone with no license yet. The record spells out that person's license.
+    supervisor: d.license_type === 'apprentice' || !clean(d.license_no, 40) ? clean(d.supervisor, 120) : '',
+    // the chief supervisor named in the Part 137 certificate paperwork (shown on the FAA reports)
+    chief: d.chief === true,
+    faa_cert: clean(d.faa_cert, 40), part137_date: ymd(d.part137_date), address: clean(d.address, 160),
+    // FAA remote pilot: the certificate doesn't expire, but the online recurrent course is due every 24 calendar months
+    faa_recurrent: ymd(d.faa_recurrent),
+    // third-class medical: 60 calendar months if under 40 on the exam date, 24 if 40 or older
+    medical_issued: ymd(d.medical_issued), medical_over40: d.medical_over40 === true
   };
 }
+
+// ---- renewal dates ---------------------------------------------------------------------------
+/** Last day of the month n calendar months after ymd's month (FAA "calendar months"). */
+function calMonthsEnd(ymd, n) {
+  if (!YMD.test(String(ymd || ''))) return '';
+  const [y, m] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1 + n + 1, 0)).toISOString().slice(0, 10);
+}
+const plusYears = (ymd, n) => { if (!YMD.test(String(ymd || ''))) return ''; const [y, m, d] = ymd.split('-').map(Number); const e = new Date(Date.UTC(y + n, m - 1, d)); if (e.getUTCMonth() !== m - 1) e.setUTCDate(0); return e.toISOString().slice(0, 10); };
+/** An operator's renewal dates: [{ kind, label, due, figured }]. The license date printed on the card
+ *  wins; without it, Idaho's terms (July 2026 rule): Professional/Private 5 years from renewal,
+ *  Commercial Apprentice 2 years from issue (not renewable). */
+function renewals(o) {
+  const out = [];
+  const lic = o.license_exp || (o.license_issued ? plusYears(o.license_issued, o.license_type === 'apprentice' ? 2 : 5) : '');
+  if (lic) out.push({ kind: 'license', label: 'Idaho applicator license', due: lic, figured: !o.license_exp });
+  if (o.crew === 'drone' && o.faa_recurrent) out.push({ kind: 'faa', label: 'FAA recurrent training (online course)', due: calMonthsEnd(o.faa_recurrent, 24), figured: true });
+  if (o.crew === 'drone' && o.medical_issued) out.push({ kind: 'medical', label: 'Third-class medical', due: calMonthsEnd(o.medical_issued, o.medical_over40 ? 24 : 60), figured: true });
+  return out;
+}
 /** What goes into a record about the pilot (a copy, so later edits don't change old records). */
+const dueOf = (p, kind) => ((renewals(Object.assign({ crew: 'drone' }, p)).find((r) => r.kind === kind) || {}).due || '');
 function pilotSnap(p) {
   return {
     name: p.name, license_no: p.license_no || '', license_type: LICENSE_TYPES[p.license_type] || '', license_cats: p.license_cats || '',
-    license_exp: p.license_exp || '', faa_cert: p.faa_cert || '', part137_date: p.part137_date || '',
+    license_exp: dueOf(p, 'license'), faa_cert: p.faa_cert || '', part137_date: p.part137_date || '',
+    faa_current_until: dueOf(p, 'faa'), medical_until: dueOf(p, 'medical'),
     address: p.address || COMPANY.address, supervisor: p.supervisor || ''
   };
 }
@@ -177,11 +207,23 @@ function pilotGaps(pilot, date, ground) {
   if (!pilot.license_no) out.push(who + '\'s Idaho license number');
   if (!ground && pilot.license_no && !/\bAU\b/.test(pilot.license_cats || '')) out.push('AU (Aerial UAS) category on the pilot\'s license');
   if (pilot.license_exp && pilot.license_exp < date) out.push(who + '\'s Idaho license was expired on the ' + (ground ? 'date applied' : 'date flown'));
-  if (pilot.license_type === LICENSE_TYPES.apprentice && !pilot.supervisor) out.push('supervising Professional Applicator (apprentice)');
+  if (!ground && pilot.faa_current_until && pilot.faa_current_until < date) out.push('pilot\'s FAA recurrent training was past due on the date flown');
+  if (!ground && pilot.medical_until && pilot.medical_until < date) out.push('pilot\'s third-class medical had run out on the date flown');
+  if ((pilot.license_type === LICENSE_TYPES.apprentice || !pilot.license_no) && !pilot.supervisor) out.push('supervising Professional Applicator');
   if (ground) return out;
   if (!pilot.faa_cert) out.push('pilot\'s FAA certificate number');
   if (!pilot.part137_date) out.push('pilot\'s Part 137 knowledge/skill date');
   return out;
+}
+
+/** "Name · Professional Applicator #PA-1" for a supervisor picked by name (older free-text kept as is). */
+async function withSupervisor(db, op, allOps) {
+  if (!op || !op.supervisor) return op;
+  let list = allOps;
+  if (!list) { list = []; (await db.collection('sprayOperators').get()).forEach((d) => list.push(d.data() || {})); }
+  const s = list.find((o) => normName(o.name) && normName(o.name) === normName(op.supervisor));
+  if (s) op.supervisor = s.name + ' · ' + (LICENSE_TYPES[s.license_type] || 'Idaho license') + ' #' + (s.license_no || '—');
+  return op;
 }
 
 async function findPilot(db, name) {
@@ -238,7 +280,7 @@ function buildRecord(job, jobKey, input, pilot, drone, weather, me) {
 async function logFlight(db, me, job, jobKey, data, deps) {
   if (!job || job.source !== 'drone') throw new HttpsError('invalid-argument', 'Flight records are for drone jobs.');
   const input = cleanFlightInput(data, job);
-  const [pilot, drone] = await Promise.all([findPilot(db, input.pilot), findDrone(db, input.drone)]);
+  const [pilot, drone] = await Promise.all([findPilot(db, input.pilot).then((p) => withSupervisor(db, p)), findDrone(db, input.drone)]);
   const weather = await stampWeather(job.lat, job.lng, { date: input.date, start: input.start, end: input.end }, deps);
   const record = buildRecord(job, jobKey, input, pilot, drone, weather, me);
   const ref = db.collection(FLIGHTS).doc();
@@ -268,7 +310,7 @@ async function editFlight(db, me, data, deps) {
   if (!Object.keys(changes).length) return { ok: true, unchanged: true };
   const upd = { date: next.date, start: next.start, end: next.end, minutes: minutesBetween(next.start, next.end), flights: next.flights, acres: next.acres, notes: next.notes };
   if (changes.pilot) {
-    const p = await findPilot(db, next.pilot);
+    const p = await withSupervisor(db, await findPilot(db, next.pilot));
     upd.pilot = pilotSnap(p);
   }
   if (changes.drone) {
@@ -340,7 +382,7 @@ async function findOperator(db, name) {
 }
 function groundRecord(job, jobKey, operator, opRow, date, end, weather, me) {
   const op = opRow ? pilotSnap(opRow) : { name: operator || '', license_no: '', license_type: '', license_cats: '', license_exp: '', supervisor: '' };
-  delete op.faa_cert; delete op.part137_date;
+  delete op.faa_cert; delete op.part137_date; delete op.faa_current_until; delete op.medical_until;
   const missing = operator ? pilotGaps(op, date, true) : ['operator (nobody assigned on the schedule)'];
   if (operator && !opRow) missing.push(operator + ' isn\'t on the Operators tab');
   if (!weather.ok) missing.push('weather');
@@ -359,7 +401,7 @@ function groundRecord(job, jobKey, operator, opRow, date, end, weather, me) {
 async function logGround(db, me, job, jobKey, operator, deps) {
   try {
     const date = todayYmd(), end = hmNow();
-    const opRow = operator ? await findOperator(db, operator) : null;
+    const opRow = operator ? await withSupervisor(db, await findOperator(db, operator)) : null;
     const weather = await stampWeather(job.lat, job.lng, { date, start: minusHour(end), end }, deps);
     const rec = groundRecord(job, jobKey, operator, opRow, date, end, weather, me);
     const ref = db.collection(GROUND).doc();
@@ -387,7 +429,8 @@ async function listGround(db, data, opts) {
   const jobs = {}, states = {}, ops = {};
   jSnap.forEach((d) => { jobs[d.id] = d.data() || {}; });
   sSnap.forEach((d) => { states[d.id] = d.data() || {}; });
-  oSnap.forEach((d) => { const o = d.data() || {}; if (o.crew !== 'drone') ops[normName(o.name)] = o; });
+  const allOps = [];
+  oSnap.forEach((d) => { const o = d.data() || {}; allOps.push(o); if (o.crew !== 'drone') ops[normName(o.name)] = o; });
   const actual = (k) => {
     const dn = (states[k] || {}).done;
     if (!dn || !String(dn.entered_by || '').startsWith('AgWorld')) return null;
@@ -408,8 +451,9 @@ async function listGround(db, data, opts) {
     if (day < from || day > to || !String(dn.entered_by || '').startsWith('AgWorld')) return;
     const opName = (st.assign && st.assign.operator) || dn.operator || '';
     const o = ops[normName(opName)];
-    const op = o ? pilotSnap(o) : { name: opName, license_no: '', license_type: '', license_cats: '', supervisor: '' };
-    delete op.faa_cert; delete op.part137_date;
+    const op = o ? pilotSnap(Object.assign({}, o, { supervisor: o.supervisor })) : { name: opName, license_no: '', license_type: '', license_cats: '', supervisor: '' };
+    if (o && o.supervisor) { const sv = allOps.find((x) => normName(x.name) === normName(o.supervisor)); if (sv) op.supervisor = sv.name + ' · ' + (LICENSE_TYPES[sv.license_type] || 'Idaho license') + ' #' + (sv.license_no || '—'); }
+    delete op.faa_cert; delete op.part137_date; delete op.faa_current_until; delete op.medical_until;
     const missing = ['time of day (closed in AgWorld, no Done in the app)'].concat(opName ? pilotGaps(op, day, true) : ['operator (nobody assigned on the schedule)']);
     recs.push({ id: 'agworld-' + k, from_agworld_only: true, job_key: k, job_type: j.job_type || '', status: 'active',
       applied_for: { name: COMPANY.name, address: COMPANY.address, farm: j.farm || '' },
@@ -494,10 +538,12 @@ function licenseWarnings(opsList, today) {
   const t = today || todayYmd();
   const out = [];
   (opsList || []).forEach((o) => {
-    if (!o || o.active === false || !YMD.test(String(o.license_exp || ''))) return;
-    const days = Math.round((Date.parse(o.license_exp + 'T12:00:00Z') - Date.parse(t + 'T12:00:00Z')) / 86400000);
-    const stage = days < 0 ? 'expired' : days <= 7 ? '7' : days <= 30 ? '30' : '';
-    if (stage) out.push({ id: o.id || normName(o.name), name: o.name, crew: o.crew, license_no: o.license_no || '', exp: o.license_exp, days, stage });
+    if (!o || o.active === false) return;
+    renewals(o).forEach((r) => {
+      const days = Math.round((Date.parse(r.due + 'T12:00:00Z') - Date.parse(t + 'T12:00:00Z')) / 86400000);
+      const stage = days < 0 ? 'expired' : days <= 7 ? '7' : days <= 30 ? '30' : '';
+      if (stage) out.push({ id: o.id || normName(o.name), name: o.name, crew: o.crew, kind: r.kind, label: r.label, license_no: r.kind === 'license' ? o.license_no || '' : '', exp: r.due, days, stage });
+    });
   });
   return out;
 }
@@ -542,6 +588,6 @@ async function listDrones(db) {
 module.exports = {
   COMPANY, FLIGHTS, DRONES,
   LICENSE_TYPES, MAINT_KINDS, GROUND, MAINT, logFlight, editFlight, voidFlight, cleanDrone, listDrones, listFlights, cleanPilotPapers,
-  useApiKey, logGround, voidGround, listGround, addMaint, voidMaint, listMaint, licenseWarnings, warrantyEnd, warrantyWarnings,
+  renewals, calMonthsEnd, useApiKey, logGround, voidGround, listGround, addMaint, voidMaint, listMaint, licenseWarnings, warrantyEnd, warrantyWarnings,
   _internal: { parseRate, productLines, cleanFlightInput, buildRecord, stampWeather, compass16, minutesBetween, pilotSnap, pilotGaps, meanDir, weatherUrl, groundRecord, minusHour }
 };

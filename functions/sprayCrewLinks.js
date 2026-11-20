@@ -92,7 +92,7 @@ async function crewCall(db, data) {
   if (out.crew === 'drone') {
     // for the flight log on Done: drone pilots and the drones list (names only); the drone is picked per job
     const pilots = [];
-    (await db.collection('sprayOperators').get()).forEach((d) => { const o = d.data() || {}; if (o.crew === 'drone' && o.active !== false) pilots.push({ name: o.name, license_exp: o.license_exp || '' }); });
+    (await db.collection('sprayOperators').get()).forEach((d) => { const o = d.data() || {}; if (o.crew === 'drone' && o.active !== false) pilots.push({ name: o.name, dues: records.renewals(o).map((r) => ({ label: r.label, due: r.due })) }); });
     out.pilots = pilots.sort((a, b) => a.name.localeCompare(b.name));
     out.drones = (await records.listDrones(db)).filter((d) => d.active !== false).map((d) => ({ name: d.name, model: d.model || '' }));
   }
