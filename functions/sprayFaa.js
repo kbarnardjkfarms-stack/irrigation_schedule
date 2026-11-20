@@ -50,6 +50,15 @@ const problemText = (p) => (!p ? '' : [p.lost_links ? p.lost_links + ' lost link
   p.malfunction ? p.malfunction + ' malfunction' : '', p.damage ? 'damage' : '', p.notes].filter(Boolean).join(' · '));
 
 // ---- monthly operations report ---------------------------------------------------------------
+const cityKey = (farm) => clean(farm, 80).toLowerCase().replace(/[^a-z0-9]+/g, '_') || '_';
+/** The nearest town for each farm (for the monthly report): { farm: city }. */
+async function saveCities(db, me, list) {
+  const ref = db.collection('sprayMeta').doc('faaCities');
+  const cur = (await ref.get()).data() || {};
+  (Array.isArray(list) ? list : []).slice(0, 200).forEach((c) => { const k = cityKey(c && c.farm); if (k !== '_') cur[k] = clean(c.city, 60); });
+  await ref.set(cur);
+  return { ok: true };
+}
 async function monthlyReport(db, ym) {
   if (!/^\d{4}-\d{2}$/.test(ym || '')) throw new HttpsError('invalid-argument', 'Pick the month.');
   const by = {};
@@ -72,10 +81,15 @@ async function monthlyReport(db, ym) {
       a.events.push({ date: r.date, field: s.field || '', pilot: (r.pilot || {}).name || '', text: problemText(p) });
     }
   });
-  const aircraft = Object.keys(by).sort().map((k) => { const a = by[k]; a.hours = round1(a.minutes / 60); a.locations = Object.keys(a.locations).map((x) => a.locations[x]).sort((x, y) => (x.farm + x.field).localeCompare(y.farm + y.field)); return a; });
+  // COA F.2.c asks for the city name with each location: the nearest town set for each farm
+  const cities = (await db.collection('sprayMeta').doc('faaCities').get()).data() || {};
+  const farms = new Set();
+  const aircraft = Object.keys(by).sort().map((k) => { const a = by[k]; a.hours = round1(a.minutes / 60); a.locations = Object.keys(a.locations).map((x) => a.locations[x]).sort((x, y) => (x.farm + x.field).localeCompare(y.farm + y.field));
+    a.locations.forEach((l) => { l.city = cities[cityKey(l.farm)] || ''; farms.add(l.farm); }); return a; });
   const sent = ((await db.collection('sprayMeta').doc('faaMonthly').get()).data() || {})[ym] || null;
   return { ok: true, ym, month: monthName(ym), operator: OPERATOR, send_to: REPORT_TO, aircraft, zero: !aircraft.length,
-    totals: { flights: aircraft.reduce((t, a) => t + a.flights, 0), hours: round1(aircraft.reduce((t, a) => t + a.minutes, 0) / 60) }, sent };
+    totals: { flights: aircraft.reduce((t, a) => t + a.flights, 0), hours: round1(aircraft.reduce((t, a) => t + a.minutes, 0) / 60) }, sent,
+    farms: [...farms].filter(Boolean).sort().map((f) => ({ farm: f, city: cities[cityKey(f)] || '' })) };
 }
 async function markSent(db, me, ym, sent) {
   if (!/^\d{4}-\d{2}$/.test(ym || '')) throw new HttpsError('invalid-argument', 'Which month?');
@@ -205,10 +219,10 @@ async function markIncident(db, me, id, how) {
 async function saveNotamSettings(db, me, d) {
   const hm = (v, def) => (/^([01]\d|2[0-3]):[0-5]\d$/.test(clean(v, 5)) ? clean(v, 5) : def);
   const alt = Math.round(numOr(d && d.altitude_ft, 100));
-  const val = { coa: clean(d && d.coa, 60), altitude_ft: Math.min(400, Math.max(10, alt)), start: hm(d && d.start, '06:00'), end: hm(d && d.end, '20:00'), updated_by: me.name, updated_at: nowIso() };
+  const val = { coa: clean(d && d.coa, 60), altitude_ft: Math.min(200, Math.max(10, alt)), start: hm(d && d.start, '06:00'), end: hm(d && d.end, '20:00'), updated_by: me.name, updated_at: nowIso() };
   await db.collection('sprayMeta').doc('faaNotam').set(val);
   return val;
 }
 
-module.exports = { overview, markIncident, saveNotamSettings, OPERATOR, REPORT_TO, MALFUNCTIONS, cleanProblems, incidentReason, problemText, monthlyReport, markSent, getPapers, savePapers, dailyAlerts,
+module.exports = { overview, markIncident, saveNotamSettings, saveCities, OPERATOR, REPORT_TO, MALFUNCTIONS, cleanProblems, incidentReason, problemText, monthlyReport, markSent, getPapers, savePapers, dailyAlerts,
   _internal: { paperWarnings, prevMonth, PAPER_DEFAULTS } };

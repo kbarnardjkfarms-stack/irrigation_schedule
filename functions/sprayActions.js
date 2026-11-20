@@ -136,13 +136,14 @@ async function act(db, me, data) {
   }
 
   // ---- FAA side (Exemption 26422; functions/sprayFaa.js): monthly report, paperwork dates, incidents ----
-  if (['faaOverview', 'faaIncident', 'faaMonthly', 'faaMarkSent', 'faaPapers', 'saveFaaPapers', 'saveFaaNotam'].indexOf(action) >= 0) {
+  if (['faaOverview', 'faaIncident', 'faaMonthly', 'faaMarkSent', 'faaPapers', 'saveFaaPapers', 'saveFaaNotam', 'saveFaaCities'].indexOf(action) >= 0) {
     if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can see the FAA reports.');
     const faa = require('./sprayFaa');
     if (action === 'faaOverview') return faa.overview(db, S.today());
     if (action === 'saveFaaNotam') { await faa.saveNotamSettings(db, me, data); return faa.overview(db, S.today()); }
     if (action === 'faaIncident') { await faa.markIncident(db, me, data.id, clean(data.how, 20)); return faa.overview(db, S.today()); }
     if (action === 'faaMonthly') return faa.monthlyReport(db, clean(data.ym, 7));
+    if (action === 'saveFaaCities') { await faa.saveCities(db, me, data.cities); return faa.monthlyReport(db, clean(data.ym, 7)); }
     if (action === 'faaMarkSent') { await faa.markSent(db, me, clean(data.ym, 7), data.sent !== false); return faa.monthlyReport(db, clean(data.ym, 7)); }
     if (action === 'faaPapers') return { ok: true, items: await faa.getPapers(db) };
     if (action === 'saveFaaPapers') return { ok: true, items: await faa.savePapers(db, me, data.items) };
