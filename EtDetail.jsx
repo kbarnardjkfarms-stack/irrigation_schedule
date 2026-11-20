@@ -43,11 +43,12 @@ const OM_S = {
   box: { borderTop: '0.5px solid #ddd8cc', marginTop: 10, paddingTop: 8, fontSize: 12 },
   title: { fontWeight: 600, fontSize: 12 },
   small: { fontSize: 11, color: '#777', lineHeight: 1.4, margin: '2px 0 6px' },
-  table: { width: '100%', borderCollapse: 'collapse', fontSize: 12, fontVariantNumeric: 'tabular-nums' },
-  th: { textAlign: 'right', fontWeight: 500, color: '#888', padding: '2px 0', fontSize: 11 },
+  // The schedule's global table rules (min-width, fixed layout, max-content) must not apply here.
+  table: { width: '100%', minWidth: 0, tableLayout: 'auto', borderCollapse: 'collapse', fontSize: 12, fontVariantNumeric: 'tabular-nums' },
+  th: { textAlign: 'right', fontWeight: 500, color: '#888', padding: '2px 0 2px 8px', fontSize: 11 },
   thL: { textAlign: 'left', fontWeight: 500, color: '#888', padding: '2px 0', fontSize: 11 },
   tdL: { textAlign: 'left', padding: '2px 0' },
-  td: { textAlign: 'right', padding: '2px 0' },
+  td: { textAlign: 'right', padding: '2px 0 2px 8px', whiteSpace: 'nowrap' },
   tag: { color: '#888', fontSize: 10, marginLeft: 4 },
   total: { borderTop: '0.5px solid #ddd8cc', fontWeight: 600 }
 }
