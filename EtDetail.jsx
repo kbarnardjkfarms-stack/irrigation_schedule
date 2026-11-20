@@ -34,7 +34,99 @@ function blankReason(field, info) {
   return 'AIO has not saved any AgriMet weather for this station yet.'
 }
 
-export default function EtDetail({ field, info, weekStart, todayIso, onClose }) {
+// ---- Open-Meteo check (testing) -------------------------------------------
+// A side-by-side of today's AgriMet-based daily numbers and Open-Meteo's
+// forecast scaled to alfalfa by the station's bump-up ratio. It is for
+// comparison only; the ET number above does not use it. Styles are inline so
+// this section needs no CSS changes.
+const OM_S = {
+  box: { borderTop: '0.5px solid #ddd8cc', marginTop: 10, paddingTop: 8, fontSize: 12 },
+  title: { fontWeight: 600, fontSize: 12 },
+  small: { fontSize: 11, color: '#777', lineHeight: 1.4, margin: '2px 0 6px' },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: 12, fontVariantNumeric: 'tabular-nums' },
+  th: { textAlign: 'right', fontWeight: 500, color: '#888', padding: '2px 0', fontSize: 11 },
+  thL: { textAlign: 'left', fontWeight: 500, color: '#888', padding: '2px 0', fontSize: 11 },
+  tdL: { textAlign: 'left', padding: '2px 0' },
+  td: { textAlign: 'right', padding: '2px 0' },
+  tag: { color: '#888', fontSize: 10, marginLeft: 4 },
+  total: { borderTop: '0.5px solid #ddd8cc', fontWeight: 600 }
+}
+const OM_LABELS = { measured: 'measured', forecast: 'forecast', average: 'avg', real: 'real' }
+
+function dayLabel(iso) {
+  const d = new Date(`${iso}T12:00:00`)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+}
+
+function omStationText(s) {
+  const name = STATION_NAMES[s.code] || s.code
+  const miles = typeof s.miles === 'number' ? `, ${s.miles} mi away` : ''
+  let bump
+  if (typeof s.ratio !== 'number') bump = 'no bump-up number yet'
+  else if (s.ratioSource === 'rolling') bump = `bump-up ×${s.ratio.toFixed(2)} (measured over the last 30 days${s.ratioAsOf ? `, as of ${s.ratioAsOf}` : ''})`
+  else bump = `bump-up ×${s.ratio.toFixed(2)} (backup table)`
+  return `${name}${miles} · ${bump}`
+}
+
+function OpenMeteoCheck({ omInfo }) {
+  if (!omInfo) return null
+  const week = omInfo.week
+  const cell = (v, src) => (v == null ? <span style={{ color: '#aaa' }}>—</span> : (
+    <>{v.toFixed(2)}{src && OM_LABELS[src] && <span style={OM_S.tag}>{OM_LABELS[src]}</span>}</>
+  ))
+  const diff = week && week.agrimetInches > 0 && week.omInches != null
+    ? Math.round(((week.omInches - week.agrimetInches) / week.agrimetInches) * 100) : null
+  return (
+    <div style={OM_S.box}>
+      <div style={OM_S.title}>Open-Meteo check (testing)</div>
+      <p style={OM_S.small}>For comparison only. The ET number above does not use this yet.</p>
+      {omInfo.failed && <p style={OM_S.small}>Not available right now.</p>}
+      {!omInfo.failed && !omInfo.stations.length && <p style={OM_S.small}>No weather station is chosen for this field yet.</p>}
+      {omInfo.stations.map((s) => <div key={s.code} style={OM_S.small}>{omStationText(s)}</div>)}
+      {omInfo.note && /low confidence/.test(omInfo.note) && (
+        <p style={OM_S.small}>This field is more than 25 miles from any station, so treat both numbers as rough.</p>
+      )}
+      {!omInfo.failed && omInfo.stations.length > 0 && !week && (
+        <p style={OM_S.small}>Nothing to compare: this field has no crop curve or plant date yet.</p>
+      )}
+      {week && (
+        <>
+          <table style={OM_S.table}>
+            <thead>
+              <tr><th style={OM_S.thL}>Day (weather ET, inches)</th><th style={OM_S.th}>AgriMet</th><th style={OM_S.th}>Open-Meteo</th></tr>
+            </thead>
+            <tbody>
+              {week.days.map((d) => (
+                <tr key={d.date} style={d.kc == null ? { opacity: 0.5 } : undefined}>
+                  <td style={OM_S.tdL}>{dayLabel(d.date)}</td>
+                  <td style={OM_S.td}>{cell(d.agrimet.value, d.agrimet.source)}</td>
+                  <td style={OM_S.td}>{cell(d.om.value, d.om.source)}</td>
+                </tr>
+              ))}
+              <tr style={OM_S.total}>
+                <td style={OM_S.tdL}>Week, this crop</td>
+                <td style={OM_S.td}>{week.agrimetInches != null ? `${week.agrimetInches.toFixed(2)} in` : '—'}</td>
+                <td style={OM_S.td}>{week.omInches != null ? `${week.omInches.toFixed(2)} in` : '—'}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p style={OM_S.small}>
+            {diff != null ? `Open-Meteo is ${Math.abs(diff)}% ${diff >= 0 ? 'above' : 'below'} the AgriMet-based number this week. ` : ''}
+            {week.comparedDays < week.growingDays
+              ? `Totals only count the ${week.comparedDays} of ${week.growingDays} growing days where both have a number. `
+              : ''}
+            "Real" is Open-Meteo's own look at a finished day. No forecast rain is used.
+          </p>
+        </>
+      )}
+      <p style={OM_S.small}>
+        Weather forecast: <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo.com</a>
+      </p>
+    </div>
+  )
+}
+
+export default function EtDetail({ field, info, omInfo, weekStart, todayIso, onClose }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
@@ -98,6 +190,8 @@ export default function EtDetail({ field, info, weekStart, todayIso, onClose }) 
           {field.plantDate && <div><span>Plant date</span>{field.plantDate}</div>}
           <div><span>As of</span>{todayIso}</div>
         </div>
+
+        <OpenMeteoCheck omInfo={omInfo} />
 
         <p className="et-foot">
           These are estimates. The weather comes from AgriMet, which labels its data preliminary, and the crop curves are drafts being checked.
