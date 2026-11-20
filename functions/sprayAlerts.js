@@ -135,9 +135,10 @@ async function checkLicenses(db, now) {
     const drones = [];
     (await db.collection('sprayDrones').get()).forEach((d) => drones.push(Object.assign({ id: d.id }, d.data())));
     const wWarn = rec.warrantyWarnings(drones, day);
-    if (!warn.length && !wWarn.length) return 0;
     const people = (await alertContacts(db)).list.filter((c) => c.notify === 'all').map((c) => ({ name: c.name, email: c.email || '', uid: c.uid || '' }));
-    let n = 0;
+    // FAA paperwork dates, drone registrations, and the monthly report reminder (sprayFaa.js)
+    let n = await require('./sprayFaa').dailyAlerts(db, day, now, people, ALERTS);
+    if (!warn.length && !wWarn.length) return n;
     // drone warranties: one alert per drone, about 30 days before the year is up
     for (const w of wWarn) {
       const ref = db.collection(ALERTS).doc(('warranty-' + w.id + '-' + w.ends).replace(/[^A-Za-z0-9_-]/g, ''));

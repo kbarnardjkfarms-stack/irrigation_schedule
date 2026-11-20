@@ -135,6 +135,19 @@ async function act(db, me, data) {
     return records.voidFlight(db, me, clean(data.id, 80), data.reason);
   }
 
+  // ---- FAA side (Exemption 26422; functions/sprayFaa.js): monthly report, paperwork dates, incidents ----
+  if (['faaOverview', 'faaIncident', 'faaMonthly', 'faaMarkSent', 'faaPapers', 'saveFaaPapers'].indexOf(action) >= 0) {
+    if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can see the FAA reports.');
+    const faa = require('./sprayFaa');
+    if (action === 'faaOverview') return faa.overview(db, S.today());
+    if (action === 'faaIncident') { await faa.markIncident(db, me, data.id, clean(data.how, 20)); return faa.overview(db, S.today()); }
+    if (action === 'faaMonthly') return faa.monthlyReport(db, clean(data.ym, 7));
+    if (action === 'faaMarkSent') { await faa.markSent(db, me, clean(data.ym, 7), data.sent !== false); return faa.monthlyReport(db, clean(data.ym, 7)); }
+    if (action === 'faaPapers') return { ok: true, items: await faa.getPapers(db) };
+    if (action === 'saveFaaPapers') return { ok: true, items: await faa.savePapers(db, me, data.items) };
+    throw new HttpsError('invalid-argument', 'Unknown action: ' + action);
+  }
+
   // ---- year-end archive (Spray > Reports > Archive; functions/sprayArchive.js) ----
   if (action === 'listArchives' || action === 'archiveYear' || action === 'getArchiveFile') {
     if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can see or make archives.');
@@ -244,6 +257,13 @@ async function act(db, me, data) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpsError('invalid-argument', 'Pick a date.');
       await stateRef.set({ move: { date, from: job.planned_date, by: me.name, at: nowIso() } }, { merge: true });
       return { ok: true, planned_date: date, moved: true };
+    }
+    case 'notam': {
+      // drone jobs: the D-NOTAM is filed 24-72 hours before and cancelled when done (Exemption 26422)
+      if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can mark the NOTAM.');
+      if (job.source !== 'drone') throw new HttpsError('invalid-argument', 'NOTAMs are for drone jobs.');
+      await stateRef.set({ notam: data.filed === false ? admin.firestore.FieldValue.delete() : { by: me.name, at: nowIso() } }, { merge: true });
+      return { ok: true };
     }
     case 'hide': {
       if (!me.admin) throw new HttpsError('permission-denied', 'Only an Admin can remove jobs.');

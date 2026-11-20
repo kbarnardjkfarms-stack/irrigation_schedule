@@ -30,6 +30,10 @@ const { HttpsError } = require('firebase-functions/v2/https');
 
 const FLIGHTS = 'sprayFlights', DRONES = 'sprayDrones';
 const COMPANY = { name: 'JK Farms', address: '20511 F Street, Rupert, ID 83350' };
+// The FAA side (Part 137 records, pilot and aircraft logbooks) is under the company that holds the
+// drone exemption: JK Equipment LLC, Exemption No. 26422 (docket FAA-2024-0943).
+const faa = require('./sprayFaa');
+const FAA_OPERATOR = faa.OPERATOR;
 const TZ = 'America/Denver';
 const nowIso = () => new Date().toISOString();
 const clean = (v, n) => String(v == null ? '' : v).trim().slice(0, n || 120);
@@ -147,7 +151,8 @@ function cleanFlightInput(data, job) {
   const drone = clean(f.drone, 60);
   if (!pilot) throw new HttpsError('invalid-argument', 'Pick the pilot.');
   if (!drone) throw new HttpsError('invalid-argument', 'Pick the drone.');
-  return { date, start, end, flights, acres: round(acres, 2), pilot, drone, notes: clean(f.notes, 500) };
+  // anything that went wrong (lost link, malfunction, damage): goes in the FAA monthly report
+  return { date, start, end, flights, acres: round(acres, 2), pilot, drone, notes: clean(f.notes, 500), problems: faa.cleanProblems(f.problems) };
 }
 
 // ---- pilot papers (Operators tab > Drone pilots) ------------------------------------------
@@ -270,6 +275,7 @@ function buildRecord(job, jobKey, input, pilot, drone, weather, me) {
     pilot: pSnap,
     drone: { name: drone.name, make: drone.make || '', model: drone.model || '', faa_reg: drone.faa_reg || '', serial: drone.serial || '' },
     notes: input.notes,
+    problems: input.problems || null, incident: faa.incidentReason(input.problems),
     missing,
     entered_by: me.name, entered_via: me.crewLink ? 'crew link' : 'AIO login', entered_at: nowIso(),
     history: [{ at: nowIso(), by: me.name, what: 'created' }]
@@ -288,7 +294,8 @@ async function logFlight(db, me, job, jobKey, data, deps) {
   return { id: ref.id, record };
 }
 
-const EDITABLE = ['date', 'start', 'end', 'flights', 'acres', 'pilot', 'drone', 'notes'];
+const EDITABLE = ['date', 'start', 'end', 'flights', 'acres', 'pilot', 'drone', 'notes', 'problems'];
+const same = (a, b) => (a && typeof a === 'object') || (b && typeof b === 'object') ? JSON.stringify(a || null) === JSON.stringify(b || null) : String(a) === String(b);
 
 /** Spray admin correction. Needs a reason; adds a history entry with old -> new. */
 async function editFlight(db, me, data, deps) {
@@ -303,12 +310,13 @@ async function editFlight(db, me, data, deps) {
   if (rec.status === 'void') throw new HttpsError('failed-precondition', 'That record was voided. Add a new one instead.');
   const job = (await db.collection('sprayJobs').doc(rec.job_key).get()).data() ||
     { source: 'drone', acres: rec.job_acres, product_detail: rec.products.map((p) => ({ name: p.name, rate: p.rate, epa: p.epa_reg_no, total: p.total_applied })), lat: rec.site.lat, lng: rec.site.lng, field: rec.site.field, farm: rec.site.farm, crop: rec.site.crop };
-  const cur = { date: rec.date, start: rec.start, end: rec.end, flights: rec.flights, acres: rec.acres, pilot: rec.pilot.name, drone: rec.drone.name, notes: rec.notes };
+  const cur = { date: rec.date, start: rec.start, end: rec.end, flights: rec.flights, acres: rec.acres, pilot: rec.pilot.name, drone: rec.drone.name, notes: rec.notes, problems: rec.problems || null };
   const next = cleanFlightInput(Object.assign({}, cur, data.changes || {}), job);
   const changes = {};
-  EDITABLE.forEach((k) => { if (String(cur[k]) !== String(next[k])) changes[k] = [cur[k], next[k]]; });
+  EDITABLE.forEach((k) => { if (!same(cur[k], next[k])) changes[k] = [cur[k], next[k]]; });
   if (!Object.keys(changes).length) return { ok: true, unchanged: true };
-  const upd = { date: next.date, start: next.start, end: next.end, minutes: minutesBetween(next.start, next.end), flights: next.flights, acres: next.acres, notes: next.notes };
+  const upd = { date: next.date, start: next.start, end: next.end, minutes: minutesBetween(next.start, next.end), flights: next.flights, acres: next.acres, notes: next.notes,
+    problems: next.problems || null, incident: faa.incidentReason(next.problems) };
   if (changes.pilot) {
     const p = await withSupervisor(db, await findPilot(db, next.pilot));
     upd.pilot = pilotSnap(p);
@@ -373,7 +381,7 @@ async function listFlights(db, data) {
       entered_by: dn.entered_by || '', operator: dn.operator || '', product_detail: j.product_detail || [], off_schedule: true });
   });
   unlogged.sort((a, b) => a.completed_date.localeCompare(b.completed_date));
-  return { ok: true, from, to, company: COMPANY, flights, unlogged, maint };
+  return { ok: true, from, to, company: COMPANY, faa_operator: FAA_OPERATOR, flights, unlogged, maint };
 }
 
 // ---- Ag Rows (ground) application records ------------------------------------------------------
@@ -640,6 +648,8 @@ function cleanDrone(d) {
     // what was paid for the drone (comes with 3 batteries and a charging station), for the Costs tab
     purchase_price: n(d.purchase_price),
     // the day it was activated: the warranty runs one year from it (warrantyEnd)
+    // FAA registration is good 3 years: the date it runs out (alert 30 and 7 days before)
+    reg_exp: YMD.test(clean(d.reg_exp, 10)) ? clean(d.reg_exp, 10) : '',
     activated: YMD.test(clean(d.activated, 10)) && clean(d.activated, 10) <= todayYmd() ? clean(d.activated, 10) : '',
     active: d.active !== false, notes: clean(d.notes, 300)
   };
@@ -665,7 +675,7 @@ async function listDrones(db) {
 }
 
 module.exports = {
-  COMPANY, FLIGHTS, DRONES,
+  COMPANY, FAA_OPERATOR, FLIGHTS, DRONES,
   LICENSE_TYPES, MAINT_KINDS, GROUND, MAINT, logFlight, editFlight, voidFlight, cleanDrone, listDrones, listFlights, cleanPilotPapers,
   renewals, calMonthsEnd, useApiKey, logGround, saveAgworldGround, keepUnlogged, NOLOG, voidGround, listGround, addMaint, voidMaint, listMaint, licenseWarnings, warrantyEnd, warrantyWarnings,
   _internal: { parseRate, productLines, cleanFlightInput, buildRecord, stampWeather, compass16, minutesBetween, pilotSnap, pilotGaps, meanDir, weatherUrl, groundRecord, minusHour }

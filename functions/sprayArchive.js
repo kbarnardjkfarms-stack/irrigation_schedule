@@ -37,7 +37,7 @@ async function collectYear(db, year) {
   (await db.collection('sprayDrones').get()).forEach((d) => drones.push(Object.assign({ id: d.id }, d.data())));
   const maint = await records.listMaint(db, { from, to });
   return {
-    year: String(year), from, to, generated_at: nowIso(), company: records.COMPANY,
+    year: String(year), from, to, generated_at: nowIso(), company: records.COMPANY, faa_operator: records.FAA_OPERATOR,
     flights: fl.flights, ground: gr.records, maintenance: maint,
     chief_supervisors: ops.filter((o) => o.crew === 'drone' && o.chief).map((o) => ({ name: o.name, faa_cert: o.faa_cert || '', part137_date: o.part137_date || '', license_no: o.license_no || '' })),
     drones: drones.map((d) => ({ name: d.name, make: d.make || '', model: d.model || '', faa_reg: d.faa_reg || '', serial: d.serial || '', activated: d.activated || '' })),
@@ -79,6 +79,7 @@ function recBlock(r, ground) {
     (ground ? g('Method', 'Ground application (Ag Rows)') : g('Equipment', esc(r.drone.name + ' · ' + [r.drone.make, r.drone.model].filter(Boolean).join(' ') + (r.drone.faa_reg ? ' · FAA ' + r.drone.faa_reg : '')))) +
     '</div>' + productTable(r.products) +
     (r.notes ? '<div class="n">Notes: ' + esc(r.notes) + '</div>' : '') +
+    (r.problems ? '<div class="m">Problem: ' + esc(require('./sprayFaa').problemText(r.problems)) + '</div>' : '') +
     (r.missing && r.missing.length ? '<div class="m">Missing: ' + esc(r.missing.join(', ')) + '</div>' : '') +
     '<div class="n">Record ' + esc(r.id) + ' · entered by ' + esc(r.entered_by) + (r.entered_via ? ' (' + esc(r.entered_via) + ')' : '') + ' ' + esc(r.entered_at || '') +
     ((r.history || []).length > 1 ? ' · history: ' + esc(r.history.map((h) => h.at + ' ' + h.by + ' ' + h.what + (h.reason ? ' (' + h.reason + ')' : '')).join('; ')) : '') + '</div></div>';
@@ -91,13 +92,14 @@ function logbook(title, sub, rows, kind, extra) {
     '<table><tr><th>Date</th><th>Field</th><th>' + (kind === 'pilot' ? 'Aircraft' : 'Pilot') + '</th><th>Time</th><th>Hrs</th><th>Flights</th><th>Acres</th><th>Notes</th></tr>' +
     rows.map((r) => '<tr class="' + (r.status === 'void' ? 'void' : '') + '"><td>' + esc(day(r.date)) + '</td><td>' + esc(r.site.field + ', ' + r.site.farm) + '</td><td>' +
       esc(kind === 'pilot' ? r.drone.name + (r.drone.faa_reg ? ' · ' + r.drone.faa_reg : '') : r.pilot.name) + '</td><td>' + esc(t12(r.start) + '–' + t12(r.end)) + '</td><td>' + hrs(r.minutes) +
-      '</td><td>' + esc(r.flights) + '</td><td>' + ac(r.acres) + '</td><td>' + esc(r.status === 'void' ? 'VOID' : r.notes || '') + '</td></tr>').join('') +
+      '</td><td>' + esc(r.flights) + '</td><td>' + ac(r.acres) + '</td><td>' + esc(r.status === 'void' ? 'VOID' : [r.notes, require('./sprayFaa').problemText(r.problems)].filter(Boolean).join(' · ')) + '</td></tr>').join('') +
     '<tr class="t"><td colspan="4">Totals</td><td>' + hrs(sum('minutes')) + '</td><td>' + sum('flights') + '</td><td>' + ac(sum('acres')) + '</td><td></td></tr></table>' + (extra || '') +
     '<div class="sign">Reviewed by ______________________ &nbsp; Date __________</div></section>';
 }
 function buildHtml(s) {
   const co = s.company;
-  const head = (t, sub) => '<header><div><b class="co">' + esc(co.name) + '</b><div>' + esc(co.address) + '</div></div><div class="r"><b>' + esc(t) + '</b><div>' + esc(sub) + '</div><div>' + esc(day(s.from) + ' – ' + day(s.to)) + '</div></div></header>';
+  const faa = s.faa_operator || co;
+  const head = (t, sub, who) => '<header><div><b class="co">' + esc((who || co).name) + '</b><div>' + esc((who || co).address) + '</div></div><div class="r"><b>' + esc(t) + '</b><div>' + esc(sub) + '</div><div>' + esc(day(s.from) + ' – ' + day(s.to)) + '</div></div></header>';
   const liveF = s.flights.filter((r) => r.status !== 'void'), liveG = s.ground.filter((r) => r.status !== 'void');
   const pilots = [...new Set(s.flights.map((r) => r.pilot.name))].sort();
   const drones = [...new Set(s.flights.map((r) => r.drone.name))].sort();
@@ -107,11 +109,11 @@ function buildHtml(s) {
     'table{width:100%;border-collapse:collapse;margin-top:6px;font-size:12px}th{text-align:left;font-size:10px;text-transform:uppercase;color:#7a7d81;border-bottom:1px solid #bdbab2;padding:3px 5px}td{border-bottom:1px solid #e4e2db;padding:4px 5px;vertical-align:top}tr.t td{font-weight:700;border-top:2px solid #1c1d1f}' +
     '.void{opacity:.55;text-decoration:line-through}.m{color:#a3261e;font-weight:600;font-size:12px;margin-top:4px}.n{color:#7a7d81;font-size:11px;margin-top:4px}.tot{margin:6px 0;color:#55585c}.sign{margin-top:12px;color:#55585c}.book,.part{break-before:page}.cover{border:1px solid #d8d6cf;border-radius:8px;padding:14px}@media print{body{margin:0}}';
   const pilotBooks = pilots.map((n) => { const rows = s.flights.filter((r) => r.pilot.name === n); const p = rows[rows.length - 1].pilot;
-    return logbook('Pilot Logbook · ' + n, 'FAA ' + (p.faa_cert || '—') + ' · Part 137 ' + (p.part137_date ? day(p.part137_date) : '—') + ' · Idaho ' + (p.license_no || '—'), rows, 'pilot'); }).join('');
+    return logbook('Pilot Logbook · ' + n, faa.name + ' · FAA ' + (p.faa_cert || '—') + ' · Part 137 ' + (p.part137_date ? day(p.part137_date) : '—') + ' · Idaho ' + (p.license_no || '—'), rows, 'pilot'); }).join('');
   const droneBooks = drones.map((n) => { const rows = s.flights.filter((r) => r.drone.name === n); const d = rows[rows.length - 1].drone;
     const ml = s.maintenance.filter((m) => m.drone === n);
     const mt = '<h3>Maintenance (' + ml.filter((m) => m.status !== 'void').length + ')</h3>' + (ml.length ? '<table><tr><th>Date</th><th>Type</th><th>What was done</th><th>By</th><th>Cost</th></tr>' + ml.slice().reverse().map((m) => '<tr class="' + (m.status === 'void' ? 'void' : '') + '"><td>' + esc(day(m.date)) + '</td><td>' + esc(m.kind) + '</td><td>' + esc(m.what) + '</td><td>' + esc(m.by) + '</td><td>' + (m.cost != null ? '$' + esc(m.cost) : '') + '</td></tr>').join('') + '</table>' : '<div class="n">None logged.</div>');
-    return logbook('Aircraft Logbook · ' + n, [d.make, d.model].filter(Boolean).join(' ') + ' · FAA ' + (d.faa_reg || '—') + (d.serial ? ' · S/N ' + d.serial : ''), rows, 'drone', mt); }).join('');
+    return logbook('Aircraft Logbook · ' + n, faa.name + ' · ' + [d.make, d.model].filter(Boolean).join(' ') + ' · FAA ' + (d.faa_reg || '—') + (d.serial ? ' · S/N ' + d.serial : ''), rows, 'drone', mt); }).join('');
   return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + esc(co.name + ' spray records ' + s.year) + '</title><style>' + css + '</style></head><body>' +
     '<div class="cover"><h1>' + esc(co.name) + ' · Spray application records ' + esc(s.year) + '</h1><div class="sub">' + esc(co.address) + '</div>' +
     '<p>Archived ' + esc(new Date(s.generated_at).toLocaleString('en-US', { timeZone: TZ })) + ' (Mountain). Drone: ' + liveF.length + ' applications, ' + ac(liveF.reduce((t, r) => t + (r.acres || 0), 0)) + ' acres. Ag Rows: ' + liveG.length + ' applications.' +
@@ -119,7 +121,7 @@ function buildHtml(s) {
     '<p class="n">Idaho IDAPA 02.03.03 records are kept 2 years; FAA 14 CFR 137.71 records 12 months or more. This file is a frozen copy; its SHA-256 fingerprint is stored in AIO (Spray › Reports › Archive).</p></div>' +
     '<section class="part">' + head('Pesticide Application Records', 'Idaho · IDAPA 02.03.03 · Drone (aerial, unmanned aircraft)') + (s.flights.map((r) => recBlock(r, false)).join('') || '<p>None.</p>') + '</section>' +
     '<section class="part">' + head('Pesticide Application Records', 'Idaho · IDAPA 02.03.03 · Ag Rows (ground)') + (s.ground.map((r) => recBlock(r, true)).join('') || '<p>None.</p>') + '</section>' +
-    '<section class="part">' + head('Agricultural Aircraft Operator Records', '14 CFR 137.71') +
+    '<section class="part">' + head('Agricultural Aircraft Operator Records', '14 CFR 137.71' + (faa.exemption ? ' · Exemption No. ' + faa.exemption : ''), faa) +
     '<p>Chief supervisor: ' + esc(s.chief_supervisors.map((c) => c.name + (c.faa_cert ? ' (FAA ' + c.faa_cert + (c.part137_date ? ', 137.19(e) ' + day(c.part137_date) : '') + ')' : '')).join('; ') || 'not set') + '</p>' +
     '<h3>Pilots</h3><table><tr><th>Name</th><th>Address</th><th>FAA certificate #</th><th>137.19(e) date</th></tr>' + roster.map((p) => '<tr><td>' + esc(p.name) + '</td><td>' + esc(p.address) + '</td><td>' + esc(p.faa_cert || '—') + '</td><td>' + esc(p.part137_date ? day(p.part137_date) : '—') + '</td></tr>').join('') + '</table>' +
     '<h3>Operations</h3><table><tr><th>Date</th><th>Customer</th><th>Field</th><th>Material &amp; quantity</th><th>Pilot</th><th>Aircraft</th></tr>' + s.flights.map((r) => '<tr class="' + (r.status === 'void' ? 'void' : '') + '"><td>' + esc(day(r.date)) + '</td><td>' + esc(r.applied_for.name + ', ' + r.applied_for.address) + '</td><td>' + esc(r.site.field + ', ' + r.site.farm + ' · ' + ac(r.acres) + ' ac') + '</td><td>' + (r.products || []).map((p) => esc(p.name + ': ' + (p.total_applied || '—'))).join('<br>') + '</td><td>' + esc(r.pilot.name) + '</td><td>' + esc(r.drone.name + (r.drone.faa_reg ? ' · ' + r.drone.faa_reg : '')) + '</td></tr>').join('') + '</table></section>' +
