@@ -28,7 +28,7 @@ function permsFor(role, sprayAdmin) {
   if (role === 'customer' || role === 'planting_staff') return null;
   // Only logins with Spray admin checked run the schedule. AIO Admin/Owner and Farm managers can look.
   if (sprayAdmin === true) return { see: ['drone', 'ground'], assign: ['drone', 'ground'], complete: ['drone', 'ground'], admin: true };
-  if (role === 'admin' || role === 'owner' || role === 'farm_manager') return { see: ['drone', 'ground'], assign: [], complete: [], admin: false };
+  if (role === 'admin' || role === 'owner' || role === 'farm_manager' || role === 'operations') return { see: ['drone', 'ground'], assign: [], complete: [], admin: false };
   return null;
 }
 

@@ -1,11 +1,11 @@
 // =============================================================================
 // Spray schedule — "field is done" alerts on phones (Firebase Cloud Messaging, web push)
 // =============================================================================
-// Who: the people on the Spray module's Managers tab (functions/sprayContacts.js donePeople):
-//   notify "all" (the person running the spray operation), the job's farm manager, and notify
-//   "spreads" on Ag Rows spread jobs. A phone gets it only if that person turned alerts on in
-//   AIO (Spray screen) and their AIO login matches their Managers-tab row by email (or by name).
-//   AIO logins not on the Managers tab never get alerts.
+// Who: AIO users by their Users-screen Alerts switch for Spray (functions/sprayContacts.js):
+//   "All jobs", "Their farms" (jobs on the farms ticked for them), "Ag Rows spreads". A phone gets
+//   it only if that person turned phone alerts on in AIO (account menu or the Spray screen).
+//   Until anyone has a Spray alert switched on, the old Spray > Managers tab still decides.
+// Irrigation (functions/pivotWatcher.js) uses pushToPeople below with each user's Irrigation switch.
 //
 // When: Done in the app (sprayAct) or the job closed in AgWorld (spraySync). The alert waits
 //   SEND_DELAY_SEC so the app's Undo can take it back; sprayAlerter (every 2 minutes) sends
@@ -19,7 +19,7 @@
 //   sprayPushTokens/{token}    one per phone with alerts on: uid, name, email, at
 
 const admin = require('firebase-admin');
-const { donePeople } = require('./sprayContacts');
+const { donePeople, alertContacts } = require('./sprayContacts');
 
 const ALERTS = 'sprayAlerts', TOKENS = 'sprayPushTokens';
 const SEND_DELAY_SEC = 90;
@@ -45,7 +45,8 @@ async function readAll(db, coll) {
 /** Queue the alert for a Done. how: 'app' | 'agworld'. Never throws. */
 async function queueDoneAlert(db, jobKey, job, done, how) {
   try {
-    const people = donePeople(Object.assign({}, job, done), await readAll(db, 'sprayContacts'));
+    const who = await alertContacts(db);
+    const people = donePeople(Object.assign({}, job, done), who.list, who.fromUsers);
     const { title, body } = buildAlert(job, done);
     const now = Date.now();
     await db.collection(ALERTS).doc(String(jobKey)).set({
@@ -68,14 +69,35 @@ async function cancelDoneAlert(db, jobKey) {
   } catch (err) { console.error('cancelDoneAlert', err); }
 }
 
-/** Phones for a list of people: tokens whose owner matches by email, or by name. */
+/** Phones for a list of people: tokens whose owner matches by login (uid), email, or name. */
 function tokensFor(people, tokens) {
+  const uids = people.map((p) => p.uid).filter(Boolean);
   const emails = people.map((p) => String(p.email || '').toLowerCase()).filter(Boolean);
   const names = people.map((p) => personKey(p.name)).filter(Boolean);
   return Object.keys(tokens).filter((t) => {
     const o = tokens[t] || {};
-    return (o.email && emails.indexOf(String(o.email).toLowerCase()) >= 0) || (o.name && names.indexOf(personKey(o.name)) >= 0);
+    return (o.uid && uids.indexOf(o.uid) >= 0) || (o.email && emails.indexOf(String(o.email).toLowerCase()) >= 0) || (o.name && names.indexOf(personKey(o.name)) >= 0);
   });
+}
+
+/** Does a user's alert switch ('' | 'farms' | 'all') cover something on these farm ids? */
+function wantsAlert(setting, user, farmIds) {
+  if (setting === 'all') return true;
+  if (setting !== 'farms') return false;
+  const mine = (Array.isArray(user && user.farmIds) ? user.farmIds : []).map(String);
+  return (farmIds || []).some((f) => mine.indexOf(String(f)) >= 0);
+}
+/** Push one alert to these users' phones now (no Undo wait). users: [{ uid, name, email }]. Never throws. */
+async function pushToPeople(db, users, msg, messaging) {
+  try {
+    if (!users || !users.length) return { sent: 0, phones: 0 };
+    const list = tokensFor(users, await readAll(db, TOKENS));
+    const r = await push(db, messaging || admin.messaging(), list, msg);
+    return { sent: r.sent, phones: list.length };
+  } catch (err) {
+    console.error('pushToPeople', err.message);
+    return { sent: 0, phones: 0, error: err.message };
+  }
 }
 
 /** Push to phones. Drops phones FCM says are gone. Returns { sent, failed }. */
@@ -114,7 +136,7 @@ async function checkLicenses(db, now) {
     (await db.collection('sprayDrones').get()).forEach((d) => drones.push(Object.assign({ id: d.id }, d.data())));
     const wWarn = rec.warrantyWarnings(drones, day);
     if (!warn.length && !wWarn.length) return 0;
-    const people = Object.values(await readAll(db, 'sprayContacts')).filter((c) => c.notify === 'all').map((c) => ({ name: c.name, email: c.email || '' }));
+    const people = (await alertContacts(db)).list.filter((c) => c.notify === 'all').map((c) => ({ name: c.name, email: c.email || '', uid: c.uid || '' }));
     let n = 0;
     // drone warranties: one alert per drone, about 30 days before the year is up
     for (const w of wWarn) {
@@ -191,9 +213,11 @@ async function pushSetup(db, messaging, auth, data) {
   if (token && data.on === false) { await db.collection(TOKENS).doc(token).delete(); return { ok: true, on: false }; }
   if (token) await db.collection(TOKENS).doc(token).set({ uid: me.uid, name: me.name, email: me.email, ua: String(data.ua || '').slice(0, 200), at: Date.now() });
   const out = { ok: true, on: !!token };
-  // Is this person on the Spray Managers tab? (otherwise they won't get Done alerts)
-  const contacts = await readAll(db, 'sprayContacts');
-  out.onSheet = Object.values(contacts).some((c) => (me.email && String(c.email || '').toLowerCase() === me.email) || personKey(c.name) === personKey(me.name));
+  // Is any alert switched on for this person (Users screen > Alerts)? Otherwise the phone is on but nothing is sent to it.
+  const prof = (await db.collection('users').doc(me.uid).get()).data() || {};
+  const al = prof.alerts || {};
+  out.onSheet = !!(al.spray || al.irrigation);
+  out.alerts = { spray: al.spray || '', irrigation: al.irrigation || '' };
   if (data && data.test) {
     const tokens = await readAll(db, TOKENS);
     const mine = Object.keys(tokens).filter((t) => tokens[t].uid === me.uid);
@@ -249,6 +273,6 @@ function makeExports() {
 }
 
 module.exports = {
-  makeExports, queueDoneAlert, cancelDoneAlert,
-  _internal: { buildAlert, queueDoneAlert, cancelDoneAlert, tokensFor, sendQueued, pushSetup, alertLog, checkLicenses, SEND_DELAY_SEC, STALE_HOURS }
+  makeExports, queueDoneAlert, cancelDoneAlert, pushToPeople, wantsAlert,
+  _internal: { buildAlert, queueDoneAlert, cancelDoneAlert, tokensFor, sendQueued, pushSetup, alertLog, checkLicenses, pushToPeople, wantsAlert, SEND_DELAY_SEC, STALE_HOURS }
 };

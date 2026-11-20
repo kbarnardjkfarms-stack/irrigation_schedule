@@ -1,6 +1,18 @@
 // =============================================================================
-// Spray schedule — farm managers (Spray > Managers tab) and who hears about a Done
+// Spray schedule — who the farm managers are, and who hears about a Done
 // =============================================================================
+// FROM AIO USERS (Users screen) now: each person's role, farms, phone, and their
+// "Alerts" switches (users/{uid}.alerts = { spray, irrigation }, each '' | 'farms' | 'all',
+// spray also 'spreads'). A Farm manager login's farms make them the farm manager on that
+// farm's jobs (their name on the job, their phone on the Call button); so does an Admin/Owner login
+// with farms ticked (e.g. Devin on Acequia). Operations, Trucking
+// and Mart Produce logins never become a job's farm manager; they only get alerts they switch on.
+//
+// Bridge from the old Spray > Managers tab (sprayContacts): until at least one AIO user has a
+// Spray alert switched on, Done alerts still follow the Managers tab; a farm with no Farm manager
+// login, or a manager login with no phone, still takes the name / phone from it.
+//
+// Old notes below describe the Managers tab, kept for the bridge.
 // Managers live in sprayContacts/{id}: name, phone, email, farms [farm names], notify.
 // They're kept in the Spray module's Managers tab (Spray admins), separate from AIO's Users list,
 // so outside people with AIO logins never end up on a job, a Call button or an alert.
@@ -39,18 +51,53 @@ function cleanManager(data) {
 
 /** Who hears about a Done: the "all" people, the job's farm manager, and the "spreads" people on
  *  Ag Rows spread jobs. Returns [{ name, email }] from the Managers tab (no duplicates). */
-function donePeople(job, contacts) {
+function donePeople(job, contacts, fromUsers) {
   const list = Object.values(contacts || {});
   const out = [];
-  const add = (c) => { if (c && !out.some((o) => personKey(o.name) === personKey(c.name))) out.push({ name: c.name, email: c.email || '' }); };
+  const add = (c) => { if (c && !out.some((o) => personKey(o.name) === personKey(c.name))) out.push({ name: c.name, email: c.email || '', uid: c.uid || '' }); };
   list.filter((c) => c.notify === 'all').forEach(add);
+  if (job && job.source !== 'drone' && job.job_type === 'Spread') list.filter((c) => c.notify === 'spreads').forEach(add);
+  if (fromUsers) {
+    // AIO users: "Their farms" means a job on one of the farms ticked for them
+    const fk = mapKey(job && job.farm);
+    if (fk) list.filter((c) => c.notify === 'farms' && (c.farms || []).some((f) => mapKey(f) === fk)).forEach(add);
+    return out;
+  }
   const mgr = personKey(job && job.manager);
   if (mgr) {
     const m = list.filter((c) => personKey(c.name) === mgr);
     if (m.length) m.forEach(add); else add({ name: job.manager, email: '' });   // AgWorld comment names someone not on the Managers tab
   }
-  if (job && job.source !== 'drone' && job.job_type === 'Spread') list.filter((c) => c.notify === 'spreads').forEach(add);
   return out;
+}
+
+// ---- AIO Users as the people list ---------------------------------------------------------------
+const ALERT_SETTINGS = ['', 'farms', 'all', 'spreads'];
+const MANAGER_ROLES = ['farm_manager'];
+/** Users -> contact-shaped rows: { uid, name, email, phone, role, farms: [farm names], notify } where
+ *  notify is the person's Spray alert switch ('off' | 'farms' | 'all' | 'spreads'). */
+async function loadUsers(db) {
+  const [uSnap, fSnap] = await Promise.all([db.collection('users').get(), db.collection('farms').get()]);
+  const farmName = {};
+  fSnap.forEach((d) => { const f = d.data() || {}; farmName[String(d.id)] = f.name || ''; });
+  const out = [];
+  uSnap.forEach((d) => {
+    const u = d.data() || {};
+    if (!u.name || u.role === 'customer' || u.disabled === true) return;
+    const sp = u.alerts && ALERT_SETTINGS.indexOf(u.alerts.spray) >= 0 ? u.alerts.spray : '';
+    out.push({ uid: d.id, name: String(u.name), email: String(u.email || '').toLowerCase(), phone: String(u.phone || ''), role: u.role || '',
+      farms: (Array.isArray(u.farmIds) ? u.farmIds : []).map((id) => farmName[String(id)]).filter(Boolean), notify: sp || 'off' });
+  });
+  return out;
+}
+/** Who can get Done alerts: AIO users once anyone has a Spray alert switched on; until then the
+ *  old Managers tab. Returns { list, fromUsers }. */
+async function alertContacts(db) {
+  const users = await loadUsers(db);
+  if (users.some((u) => u.notify !== 'off')) return { list: users, fromUsers: true };
+  const old = [];
+  (await db.collection('sprayContacts').get()).forEach((d) => old.push(d.data() || {}));
+  return { list: old, fromUsers: false };
 }
 
 /** Just the email addresses of donePeople (for email, if that's added later). */
@@ -58,16 +105,26 @@ function doneRecipients(job, contacts) {
   return donePeople(job, contacts).map((p) => p.email).filter((e, i, a) => e && a.indexOf(e) === i);
 }
 
-/** For the job sync: { byFarm: {farmKey: [names]}, phoneByName: {personKey: phone} } from sprayContacts. */
+/** For the job sync: { byFarm: {farmKey: [names]}, phoneByName: {personKey: phone} }.
+ *  Farm manager logins in AIO Users first (their farms, their phone); the old Managers tab fills in
+ *  a farm with no Farm manager login and a phone a login doesn't have. */
 async function loadPeopleFromContacts(db) {
-  const snap = await db.collection('sprayContacts').get().catch(() => ({ forEach: () => {} }));
   const byFarm = {}, phoneByName = {};
+  const users = await loadUsers(db).catch(() => []);
+  users.forEach((u) => {
+    if (u.phone) phoneByName[personKey(u.name)] = u.phone;
+    // Farm manager logins, and Admin/Owner logins with farms ticked (e.g. an admin who runs one farm)
+    if (MANAGER_ROLES.indexOf(u.role) >= 0 || ((u.role === 'admin' || u.role === 'owner') && u.farms.length)) u.farms.forEach((f) => { const k = mapKey(f); if (k) (byFarm[k] = byFarm[k] || []).push(u.name); });
+  });
+  const snap = await db.collection('sprayContacts').get().catch(() => ({ forEach: () => {} }));
+  const oldFarm = {};
   snap.forEach((d) => {
     const c = d.data() || {};
     if (!c.name) return;
-    if (c.phone) phoneByName[personKey(c.name)] = String(c.phone);
-    (c.farms || []).forEach((f) => { const k = mapKey(f); if (k) (byFarm[k] = byFarm[k] || []).push(String(c.name)); });
+    if (c.phone && !phoneByName[personKey(c.name)]) phoneByName[personKey(c.name)] = String(c.phone);
+    (c.farms || []).forEach((f) => { const k = mapKey(f); if (k) (oldFarm[k] = oldFarm[k] || []).push(String(c.name)); });
   });
+  Object.keys(oldFarm).forEach((k) => { if (!byFarm[k]) byFarm[k] = oldFarm[k]; });
   Object.keys(byFarm).forEach((k) => { byFarm[k] = byFarm[k].filter((x, i, a) => a.indexOf(x) === i).sort(); });
   return { byFarm, phoneByName };
 }
@@ -90,8 +147,10 @@ function makeExports() {
 module.exports = {
   makeExports,
   loadPeopleFromContacts,
+  loadUsers,
+  alertContacts,
   doneRecipients,
   donePeople,
   cleanManager,
-  _internal: { cleanManager, donePeople, doneRecipients, loadPeopleFromContacts, syncContacts, personKey, mapKey }
+  _internal: { cleanManager, donePeople, doneRecipients, loadPeopleFromContacts, loadUsers, alertContacts, syncContacts, personKey, mapKey }
 };

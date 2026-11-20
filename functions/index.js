@@ -638,8 +638,10 @@ exports.chirpstackWebhook = onRequest(async (req, res) => {
 // 'customer' = an outside buyer's login: no staff access, just the read-only
 // customer portal (their customers/customerKeys are set by Users.jsx right
 // after the account is created). Not farm-scoped, so it needs no farmIds.
-const VALID_ROLES = ['admin', 'owner', 'farm_manager', 'irrigation_manager', 'irrigator', 'planting_staff', 'customer'];
-const FARM_SCOPED_ROLES = ['farm_manager', 'irrigation_manager', 'irrigator'];
+// 'operations' (e.g. Robby) has the same access as a Farm manager (firestore.rules' myRole() treats it as one);
+// 'trucking' and 'mart_produce' (fresh pack shed) are staff roles that see only the modules ticked for them.
+const VALID_ROLES = ['admin', 'owner', 'farm_manager', 'operations', 'irrigation_manager', 'irrigator', 'trucking', 'mart_produce', 'planting_staff', 'customer'];
+const FARM_SCOPED_ROLES = ['farm_manager', 'operations', 'irrigation_manager', 'irrigator'];
 
 // Confirms the calling user's own Firestore profile says admin or owner.
 // Used by both functions below instead of trusting anything the client
@@ -849,7 +851,7 @@ async function requireAgronomyAccess(auth) {
   }
   const snap = await admin.firestore().doc(`users/${auth.uid}`).get();
   const role = snap.exists ? snap.data().role : null;
-  if (role !== 'admin' && role !== 'owner' && role !== 'farm_manager') {
+  if (role !== 'admin' && role !== 'owner' && role !== 'farm_manager' && role !== 'operations') {
     throw new HttpsError('permission-denied', 'Only Admin, Owner, or Farm manager can edit agronomy sample matches.');
   }
 }

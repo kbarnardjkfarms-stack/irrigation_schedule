@@ -374,6 +374,14 @@ async function checkStuckPivotsOnce(accountSid, authToken, fromNumber) {
     const fieldIds = fieldIdsByPivotGuid[guid] || [];
     const farmIds = [...new Set(fieldIds.map((fid) => farmIdByFieldId[fid]).filter((f) => f != null).map(String))];
 
+    // AIO phone-app alert (Users screen > Alerts > Irrigation: "Their farms" or "All farms"), the same
+    // way the Spray schedule's field-done alerts reach phones. Separate from the opt-in texts below.
+    {
+      const { pushToPeople, wantsAlert } = require('./sprayAlerts');
+      const appPeople = users.filter((u) => u.role !== 'customer' && wantsAlert(u.alerts && u.alerts.irrigation, u, farmIds));
+      await pushToPeople(db, appPeople, { title: '⚠ ' + (pivot.name || guid) + ' may be parked wet', body: 'No movement for over ' + stuckThreshold + ' min while running. Check it out.', tag: 'pivot-' + guid });
+    }
+
     const recipients = optedInTextUsers(users).filter((u) => {
       if (u.role === 'admin' || u.role === 'owner') return true;
       if ((u.role === 'farm_manager' || u.role === 'irrigation_manager') && Array.isArray(u.farmIds)) {
