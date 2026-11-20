@@ -356,6 +356,7 @@ export default function Users() {
   const [lastLink, setLastLink] = useState(null)
   const [copiedKey, setCopiedKey] = useState(null)
   const [busyUid, setBusyUid] = useState(null)
+  const [testNote, setTestNote] = useState(null)   // result of "Send test alert": { ok, text }
   const [sort, setSort] = useState({ key: 'name', dir: 'asc' })
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const [deleteTarget, setDeleteTarget] = useState(null)
@@ -546,6 +547,22 @@ export default function Users() {
     }
   }
 
+  // One test alert to this person's phones (through the same app alerts the Spray schedule uses).
+  async function handleTestAlert(user) {
+    setBusyUid(user.uid); setTestNote(null)
+    try {
+      const r = (await httpsCallable(functions, 'sprayAlertLog', { timeout: 60000 })({ testUser: user.uid })).data
+      const who = r.name || user.name || user.email
+      setTestNote(r.phones
+        ? { ok: true, text: `Test alert sent to ${who}'s ${r.phones === 1 ? 'phone' : r.phones + ' phones'}${r.sent < r.phones ? ` (${r.phones - r.sent} didn't take; that phone may need alerts turned on again)` : ''}. Ask them if it popped up.` }
+        : { ok: false, text: `${who} hasn't turned on phone alerts yet. They open AIO on their phone, tap their initials (top right), then Turn on next to Phone alerts${(r.alerts && (r.alerts.spray || r.alerts.irrigation)) ? '' : '. Also switch on their Spray or Irrigation alerts here first'}.` })
+    } catch (err) {
+      setTestNote({ ok: false, text: 'Test alert failed: ' + (err.message || err) })
+    } finally {
+      setBusyUid(null)
+    }
+  }
+
   async function handleResend(user) {
     setBusyUid(user.uid)
     try {
@@ -680,6 +697,13 @@ export default function Users() {
         </div>
       )}
 
+      {testNote && (
+        <div className="mode-bar" style={{ background: testNote.ok ? '#3c5a3f' : '#8a5a12' }}>
+          <div>{testNote.text}</div>
+          <div className="mode-bar-actions"><button className="cancel" onClick={() => setTestNote(null)}>Dismiss</button></div>
+        </div>
+      )}
+
       {lastLink && (
         <div className="mode-bar" style={{ background: '#3c5a3f' }}>
           <div>
@@ -798,6 +822,7 @@ export default function Users() {
                     label={`Actions for ${user.name || user.email}`}
                     items={[
                       { label: editingUid === user.uid ? 'Close editor' : 'Edit', onClick: () => setEditingUid(editingUid === user.uid ? null : user.uid) },
+                      user.role !== CUSTOMER_ROLE && user.role !== PLANTING_ROLE && !user.disabled ? { label: busyUid === user.uid ? 'Sending\u2026' : 'Send test alert', onClick: () => handleTestAlert(user), disabled: busyUid === user.uid } : null,
                       { label: 'Resend setup email', onClick: () => handleResend(user), disabled: busyUid === user.uid },
                       { label: copiedKey === user.uid ? 'Copied!' : 'Copy setup link', onClick: () => handleGetLink(user), disabled: busyUid === user.uid },
                       { label: user.disabled ? 'Enable' : 'Disable', onClick: () => handleToggleDisabled(user), disabled: busyUid === user.uid },

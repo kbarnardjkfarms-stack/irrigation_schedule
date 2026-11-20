@@ -17,6 +17,7 @@ import Login from './Login.jsx'
 
 import PotatoStorage from './PotatoStorage.jsx'
 import Users from './Users.jsx'
+import { PhoneAlertsSwitch } from './PhoneAlerts.jsx'
 import ScheduleImport from './ScheduleImport.jsx'
 import PivotProfile from './PivotProfile.jsx'
 import PivotProfilesSheet from './PivotProfilesSheet.jsx'
@@ -170,37 +171,6 @@ const ROLE_LABELS = {
   mart_produce: 'Mart Produce',
   planting_staff: 'Potato planting staff',
   customer: 'Customer'
-}
-
-// Account menu: turn this phone's AIO alerts on/off (Spray field-done and Irrigation alerts,
-// whichever the Users screen switched on for this person). Same phone setup the Spray screen uses.
-function PhoneAlertsSwitch({ alerts }) {
-  const [state, setState] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState('')
-  useEffect(() => { import('./sprayPush.js').then((m) => m.pushState()).then(setState).catch(() => setState('unsupported')) }, [])
-  const what = [alerts.spray && 'Spray', alerts.irrigation && 'Irrigation'].filter(Boolean).join(' + ')
-  const toggle = async () => {
-    setBusy(true); setMsg('')
-    try {
-      const m = await import('./sprayPush.js')
-      if (state === 'on') { await m.turnOff(); setState('off') }
-      else { const r = await m.turnOn(); if (r && r.ok === false) setMsg(r.error === 'blocked' ? 'Alerts are blocked for AIO in this phone\'s settings.' : r.error || 'Couldn\'t turn alerts on.'); setState(await m.pushState()) }
-    } catch (e) { setMsg(e.message || String(e)) }
-    setBusy(false)
-  }
-  return (
-    <div style={{ fontSize: '12px', color: '#555', marginBottom: '12px', borderTop: '1px solid #eee', paddingTop: '10px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-        <strong>Phone alerts</strong>
-        {state === 'on' || state === 'off'
-          ? <button disabled={busy} onClick={toggle} style={{ fontSize: '12px', padding: '3px 10px' }}>{busy ? '…' : state === 'on' ? 'On \u00b7 turn off' : 'Turn on'}</button>
-          : <span style={{ color: '#888' }}>{state === 'ios-home' ? 'Open AIO from the Home Screen icon' : state === 'blocked' ? 'Blocked in phone settings' : state ? 'Not on this device' : ''}</span>}
-      </div>
-      <div style={{ color: '#888', marginTop: '3px' }}>{what ? 'You get: ' + what : 'No alerts are switched on for you (Users screen).'}</div>
-      {msg && <div style={{ color: '#a3261e', marginTop: '3px' }}>{msg}</div>}
-    </div>
-  )
 }
 
 function mondayOf(d) {
