@@ -98,7 +98,6 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
         {isAdmin && <button className={view === 'reports' ? 'active' : ''} onClick={() => setView('reports')}>Reports</button>}
         {isAdmin && <button className={view === 'faa' ? 'active' : ''} onClick={() => setView('faa')}>FAA</button>}
         {isAdmin && <button className={view === 'costs' ? 'active' : ''} onClick={() => setView('costs')}>Costs</button>}
-        {isAdmin && <button className={view === 'alerts' ? 'active' : ''} onClick={() => setView('alerts')}>Alerts</button>}
       </div>
       {view === 'schedule' && <Schedule jobs={jobs} ops={ops} isAdmin={isAdmin} run={run} say={say} openFlight={openFlight}
         mine={mineFirst ? (j) => isMine(j, myName, myFarmKeys) : null} />}
@@ -110,7 +109,6 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
       {view === 'faa' && isAdmin && <FaaTab run={run} say={say} ops={ops} jobs={jobs} />}
       {flightFor && <FlightForm job={flightFor.job} pilots={pilots} drones={drones.filter((d) => d.active !== false)}
         onSave={flightFor.save} onClose={() => setFlightFor(null)} />}
-      {view === 'alerts' && isAdmin && <AlertLog say={say} />}
       {toast && (
         <div className="spray-toast">
           {toast.msg}
@@ -628,6 +626,7 @@ function Crew({ ops, run, say }) {
         </div>
         </>}
       </div>
+      <AlertLog say={say} />
       {list.length ? list.map((o) => (
         <div className={'spray-hidden' + (o.active === false ? ' off' : '')} key={o.id}>
           <div>
@@ -999,9 +998,12 @@ const ALERT_STATUS = {
   sent: 'Sent', queued: 'Waiting (Undo window / next send)', no_phones: 'No phone: nobody on it has turned on phone alerts in AIO',
   no_one: 'Nobody to send to (no farm manager on the job, nobody on All jobs)', stale: 'Too old, skipped', error: 'Failed'
 }
+// Operators > Recent alerts: a fold-up box with the 3 latest field-done alerts (who they were for,
+// whether they went out), for when someone says they didn't get one.
 function AlertLog({ say }) {
   const [log, setLog] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [open, setOpen] = useState(false)
   const load = async (sendNow, testLikeDone) => {
     setBusy(true)
     try {
@@ -1012,12 +1014,15 @@ function AlertLog({ say }) {
     } catch (e) { say(e.message || String(e)) }
     setBusy(false)
   }
-  useEffect(() => { load(false) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open && !log) load(false) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   const ago = (t) => { if (!t) return 'never'; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : new Date(t).toLocaleString() }
   return (
-    <div className="spray-box">
-      <div className="spray-row" style={{ justifyContent: 'space-between' }}>
-        <b>Recent field-done alerts</b>
+    <div className={'spray-box spray-fold' + (open ? ' open' : '')}>
+      <button type="button" className="spray-fold-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span>Recent alerts</span><span className="spray-fold-chev" aria-hidden="true">▾</span>
+      </button>
+      {open && <>
+      <div className="spray-row" style={{ justifyContent: 'flex-end', marginTop: 8 }}>
         <span className="spray-row" style={{ margin: 0 }}>
           <button disabled={busy} onClick={() => load(false)}>Refresh</button>
           <button disabled={busy} onClick={() => load(false, true)}>Test like a Done</button>
@@ -1028,7 +1033,7 @@ function AlertLog({ say }) {
         <div style={{ marginTop: 8 }}>
           <div className="spray-muted">Sender last ran {ago(log.lastRun)} (it runs every 2 minutes).
             Phones with alerts on: {log.phones.length ? log.phones.map((p) => p.who + (p.count > 1 ? ' ×' + p.count : '')).join(', ') : 'none'}</div>
-          {log.alerts.length ? log.alerts.map((a) => (
+          {log.alerts.length ? log.alerts.slice(0, 3).map((a) => (
             <div key={a.jobKey} className="spray-hidden" style={{ marginTop: 6 }}>
               <div>
                 <b>{a.title}</b> <span className="spray-muted">· {a.how === 'agworld' ? 'closed in AgWorld' : 'Done in AIO'} · {ago(a.createdAt)}</span>
@@ -1039,6 +1044,7 @@ function AlertLog({ say }) {
           )) : <div className="spray-empty">No alerts yet.</div>}
         </div>
       )}
+      </>}
     </div>
   )
 }
@@ -1735,119 +1741,210 @@ const FAA_RULES = [
   ]]
 ]
 
-// The FAA tab (Spray admins): everything Exemption 26422 has to be kept up on, in one place.
-// Needs attention first, then the monthly reports, every due date, problems on flights (24-hour
-// report check), pilots, and NOTAMs for the drone jobs coming up.
+// The FAA tab (Spray admins): what Exemption 26422 has to be kept up on, in four sub-tabs:
+// Monthly report (the one due + problems on flights), NOTAMs (prep + filed for the drone jobs
+// coming up), Due dates (company paperwork + pilots), Requirements (everything the exemption asks).
 function FaaTab({ run, say, ops, jobs }) {
   const [o, setO] = useState(null)
-  const [month, setMonth] = useState('')       // the monthly report that's open
+  const [sub, setSub] = useState('report')
+  const [month, setMonth] = useState('')       // a monthly report that's open
   const [busy, setBusy] = useState(false)
-  const load = async () => { try { setO(await run({ action: 'faaOverview' })) } catch (e) { setO({ months: [], papers: [], drones: [], incidents: [] }) } }
+  const load = async () => { try { setO(await run({ action: 'faaOverview' })) } catch (e) { setO({ months: [], papers: [], drones: [], incidents: [], current: null, notam: {}, operator: {} }) } }
   useEffect(() => { load() }, [])
-  const notam = jobActions(run, say, null).notam
-  const today = todayYmd()
   if (!o) return <div className="spray-empty">Loading the FAA tab…</div>
-  if (month) return (
-    <div>
-      <button className="spray-back" onClick={() => { setMonth(''); load() }}>← Back to the FAA tab</button>
-      <FaaMonthly run={run} say={say} start={month} onSent={load} />
-    </div>
-  )
-  const pilots = ops.filter((p) => p.crew === 'drone' && p.active !== false)
-  // every dated item, soonest first
-  const dates = []
-  o.papers.filter((i) => !i.done).forEach((i) => dates.push({ k: 'p' + i.key, what: i.label, due: i.due, note: i.note, need: !i.due }))
-  o.drones.forEach((d) => dates.push({ k: 'd' + d.id, what: d.name + ' FAA registration' + (d.faa_reg ? ' (' + d.faa_reg + ')' : ''), due: d.reg_exp, note: d.faa_reg ? 'Good 3 years. Set it on the Drones tab.' : 'No registration # on the Drones tab', need: !d.reg_exp }))
-  pilots.forEach((p) => renewalsOf(p).filter((r) => r.kind !== 'license').forEach((r) => dates.push({ k: 'r' + p.id + r.kind, what: p.name + ' · ' + r.label, due: r.due, note: '' })))
-  pilots.filter((p) => !p.faa_recurrent).forEach((p) => dates.push({ k: 'n' + p.id, what: p.name + ' · FAA recurrent course', due: '', note: 'Last completed date not on the Operators tab', need: true }))
-  dates.sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999'))
-  const unsent = o.months.filter((m) => !m.sent)
-  const openInc = o.incidents.filter((i) => !i.reported)
-  const soonJobs = jobs.filter((j) => j.source === 'drone' && !j.done && !j.hidden && j.planned_date <= addDays(today, 3)).sort((a, b) => a.planned_date.localeCompare(b.planned_date))
-  const notamDue = soonJobs.filter((j) => !j.notam && j.planned_date <= addDays(today, 1))
-  const dueSoon = dates.filter((d) => d.due && daysTo(d.due) <= 30)
-  const attention = [
-    ...unsent.map((m) => ({ k: 'm' + m.ym, txt: 'Monthly report for ' + m.month + ' not marked sent' + (m.flights ? '' : ' (zero-flight)'), act: () => setMonth(m.ym), btn: 'Open' })),
-    ...openInc.map((i) => ({ k: 'i' + i.id, txt: fmtDay(i.date) + ' · ' + i.field + ': ' + i.text + '. Check whether it needs the 24-hour report.' })),
-    ...dueSoon.map((d) => ({ k: 'a' + d.k, txt: d.what + (daysTo(d.due) < 0 ? ' · past due ' : ' · due ') + longDay(d.due) })),
-    ...notamDue.map((j) => ({ k: 'n' + j.job_key, txt: j.field + ' (' + fmtDay(j.planned_date) + '): NOTAM not filed' })),
-    ...dates.filter((d) => d.need && /AAOC|insurance|registration/i.test(d.what)).map((d) => ({ k: 'b' + d.k, txt: d.what + ': no date yet' }))
-  ]
+  const tabs = [['report', 'Monthly'], ['notams', 'NOTAMs'], ['dates', 'Dates'], ['rules', 'Requirements']]
   const mark = async (i, how) => { setBusy(true); try { setO(await run({ action: 'faaIncident', id: i.id, how })); say(how === 'clear' ? 'Unmarked' : 'Marked') } catch (e) { /* shown */ } setBusy(false) }
+  const due = o.months[0]
+  const olderUnsent = o.months.slice(1).filter((m) => !m.sent)
+  const pilots = ops.filter((p) => p.crew === 'drone' && p.active !== false)
   return (
     <div className="spray-faa">
-      <div className="spray-box">
-        <b>{o.operator.name} · Exemption No. {o.operator.exemption}</b>
-        <div className="spray-muted">Part 137 / 44807, docket {o.operator.docket}, with its blanket COA. Phone alerts go out for the dates below (30 and 7 days before) and for the monthly report on the 1st.</div>
+      <div className="spray-faa-head"><b>{o.operator.name}</b> <span className="spray-muted">· Exemption No. {o.operator.exemption} · blanket COA</span></div>
+      <div className="spray-subtabs">
+        {tabs.map(([k, l]) => <button key={k} className={sub === k ? 'active' : ''} onClick={() => { setSub(k); setMonth('') }}>{l}</button>)}
       </div>
 
-      <div className={'spray-box' + (attention.length ? ' spray-attn' : '')}>
-        <b>{attention.length ? 'Needs attention (' + attention.length + ')' : '✓ Nothing needs attention'}</b>
-        {attention.map((a) => <div className="spray-attn-row" key={a.k}><span>{a.txt}</span>{a.act && <button onClick={a.act}>{a.btn}</button>}</div>)}
-      </div>
-
-      <h3 className="spray-h3">Monthly reports</h3>
-      <div className="spray-box">
-        <div className="spray-muted" style={{ marginBottom: 6 }}>Email to {o.send_to} every month, zero-flight months too.</div>
-        {o.months.length ? o.months.map((m) => (
-          <div className="spray-mrow" key={m.ym}>
-            <div><b>{m.month}</b> <span className="spray-muted">· {m.flights ? m.flights + ' flights, ' + m.hours + ' hrs' : 'no flights (zero-flight report)'}</span></div>
-            <span className={m.sent ? 'spray-ok' : 'spray-warn'}>{m.sent ? '✓ Sent ' + fmtDay(m.sent.at.slice(0, 10)) : 'Not sent'}</span>
-            <button onClick={() => setMonth(m.ym)}>Open</button>
-          </div>)) : <div className="spray-muted">The first report (for this month) is due on the 1st of next month.</div>}
-      </div>
-
-      <h3 className="spray-h3">Due dates</h3>
-      <div className="spray-box">
-        {dates.map((d) => { const n = d.due ? daysTo(d.due) : null
-          return (
-            <div className="spray-mrow" key={d.k}>
-              <div><b>{d.what}</b>{d.note && <div className="spray-muted">{d.note}</div>}</div>
-              <span className={n == null ? 'spray-warn' : n < 0 ? 'spray-bad' : n <= 30 ? 'spray-warn' : 'spray-muted'}>{n == null ? 'No date' : longDay(d.due) + (n < 0 ? ' · past due' : n <= 90 ? ' · ' + n + ' days' : '')}</span>
-            </div>) })}
-        <FaaPapers run={run} say={say} onSaved={load} />
-      </div>
-
-      <h3 className="spray-h3">Problems on flights <span className="spray-muted">(last 60 days)</span></h3>
-      <div className="spray-box">
-        <div className="spray-muted" style={{ marginBottom: 6 }}>Accidents and incidents go to the FAA within 24 hours (CAPS form and UAS137Certificates@faa.gov); NTSB too if anyone is hurt or a drone is lost. Leaving the geofenced area goes to 9-AJV-115-UASOrganization@faa.gov.</div>
-        {o.incidents.length ? o.incidents.map((i) => (
-          <div className="spray-mrow" key={i.id}>
-            <div><b>{fmtDay(i.date)} · {i.field}</b> <span className="spray-muted">{i.farm} · {i.pilot} · {i.drone}</span><div>{i.text}</div>
-              {i.reported && <div className="spray-ok">{i.reported.how === 'reported' ? '✓ Reported to the FAA' : '✓ No report needed'} · {i.reported.by}</div>}</div>
-            <div className="spray-row" style={{ margin: 0 }}>
-              {i.reported ? <button disabled={busy} onClick={() => mark(i, 'clear')}>Unmark</button> : <>
-                <button className="save" disabled={busy} onClick={() => mark(i, 'reported')}>Reported</button>
-                <button disabled={busy} onClick={() => mark(i, 'not_needed')}>Not needed</button></>}
-            </div>
-          </div>)) : <div className="spray-muted">None. Problems come from "Something went wrong" on the flight log.</div>}
-      </div>
-
-      <h3 className="spray-h3">Pilots</h3>
-      <div className="spray-box">
-        {pilots.length ? pilots.map((p) => {
-          return (
-            <div className="spray-mrow" key={p.id}>
-              <div><b>{p.name}</b>{p.chief && <span className="spray-chief">Chief supervisor</span>} <span className="spray-muted">· FAA {p.faa_cert || 'no cert #'} · Part 137 {p.part137_date ? fmtDay(p.part137_date) : 'no date'}</span>
-                {renewalsOf(p).filter((r) => r.kind !== 'license').length > 0 && <div className="spray-dues">{renewalsOf(p).filter((r) => r.kind !== 'license').map((r) => { const n = daysTo(r.due); return <span key={r.kind} className={'spray-due' + (n < 0 ? ' late' : n <= 30 ? ' soon' : '')}>{r.label}: {longDay(r.due)}</span> })}</div>}
+      {sub === 'report' && (month ? <div>
+        <button className="spray-back" onClick={() => { setMonth(''); load() }}>← Back</button>
+        <FaaMonthly run={run} say={say} start={month} onSent={load} />
+      </div> : <>
+        {due ? <div className="spray-box spray-due-card">
+          <div className="spray-muted">Due now · email to {o.send_to}</div>
+          <div className="spray-due-row">
+            <div><b className="spray-big">{due.month}</b><div className="spray-muted">{due.flights ? due.flights + ' flights · ' + due.hours + ' hrs' : 'No flights: zero-flight report'}</div></div>
+            <span className={due.sent ? 'spray-ok' : 'spray-warn'}>{due.sent ? '✓ Sent ' + fmtDay(due.sent.at.slice(0, 10)) : 'Not sent'}</span>
+            <button className="save" onClick={() => setMonth(due.ym)}>Open report</button>
+          </div>
+          {olderUnsent.length > 0 && <div className="spray-warn" style={{ marginTop: 6 }}>Also not marked sent: {olderUnsent.map((m) => <a key={m.ym} href="#" onClick={(e) => { e.preventDefault(); setMonth(m.ym) }}>{m.month}</a>).reduce((a, b) => [a, ', ', b])}</div>}
+        </div> : null}
+        {o.current && <div className="spray-box">
+          <b>{o.current.month} so far</b> <span className="spray-muted">· {o.current.flights} flights · {o.current.hours} hrs · report due on the 1st</span>
+        </div>}
+        <div className="spray-box">
+          <b>Problems on flights</b> <span className="spray-muted">· last 60 days</span>
+          <div className="spray-muted" style={{ margin: '4px 0 6px' }}>Accidents and incidents go to the FAA within 24 hours (CAPS form + UAS137Certificates@faa.gov); NTSB too if anyone is hurt or a drone is lost.</div>
+          {o.incidents.length ? o.incidents.map((i) => (
+            <div className="spray-mrow" key={i.id}>
+              <div><b>{fmtDay(i.date)} · {i.field}</b> <span className="spray-muted">{i.pilot} · {i.drone}</span><div>{i.text}</div>
+                {i.reported && <div className="spray-ok">{i.reported.how === 'reported' ? '✓ Reported to the FAA' : '✓ No report needed'} · {i.reported.by}</div>}</div>
+              <div className="spray-row" style={{ margin: 0 }}>
+                {i.reported ? <button disabled={busy} onClick={() => mark(i, 'clear')}>Unmark</button> : <>
+                  <button className="save" disabled={busy} onClick={() => mark(i, 'reported')}>Reported</button>
+                  <button disabled={busy} onClick={() => mark(i, 'not_needed')}>Not needed</button></>}
               </div>
-            </div>) }) : <div className="spray-muted">No drone pilots on the Operators tab.</div>}
-      </div>
+            </div>)) : <div className="spray-muted">None. They come from "Something went wrong" on the flight log.</div>}
+        </div>
+      </>)}
 
-      <h3 className="spray-h3">NOTAMs · drone jobs in the next 3 days</h3>
+      {sub === 'notams' && <FaaNotams run={run} say={say} o={o} setO={setO} ops={ops} jobs={jobs} />}
+
+      {sub === 'dates' && <>
+        <div className="spray-box">
+          <b>Company paperwork</b>
+          {o.papers.filter((i) => !i.done).slice().sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999')).map((i) => { const n = i.due ? daysTo(i.due) : null
+            return (
+              <div className="spray-mrow two" key={i.key}>
+                <div>{i.label}{i.note && <div className="spray-muted">{i.note}</div>}</div>
+                <span className={n == null ? 'spray-warn' : n < 0 ? 'spray-bad' : n <= 30 ? 'spray-warn' : 'spray-muted'}>{n == null ? 'No date' : longDay(i.due) + (n < 0 ? ' · past due' : n <= 90 ? ' · ' + n + ' days' : '')}</span>
+              </div>) })}
+          <FaaPapers run={run} say={say} onSaved={load} />
+        </div>
+        <div className="spray-box">
+          <b>Pilots</b> <span className="spray-muted">· FAA recurrent every 24 months, third-class medical for everyone</span>
+          {pilots.length ? <div className="cost-scroll"><table className="spray-ptbl">
+            <thead><tr><th>Pilot</th><th>FAA cert #</th><th>Recurrent due</th><th>Medical good until</th></tr></thead>
+            <tbody>{pilots.map((p) => { const r = renewalsOf(p), f = r.find((x) => x.kind === 'faa'), m = r.find((x) => x.kind === 'medical')
+              const cell = (x, miss) => { if (!x) return <span className="spray-warn">{miss}</span>; const n = daysTo(x.due); return <span className={n < 0 ? 'spray-bad' : n <= 30 ? 'spray-warn' : ''}>{longDay(x.due)}</span> }
+              return <tr key={p.id}><td><b>{p.name}</b>{p.chief && <div className="spray-muted">Chief supervisor</div>}</td><td>{p.faa_cert || <span className="spray-warn">missing</span>}</td><td>{cell(f, 'no date')}</td><td>{cell(m, 'no date')}</td></tr> })}</tbody>
+          </table></div> : <div className="spray-muted">No drone pilots on the Operators tab.</div>}
+          <div className="spray-muted" style={{ marginTop: 6 }}>Change these on the Operators tab. Drone registrations are on the Drones tab.</div>
+        </div>
+      </>}
+
+      {sub === 'rules' && <>
+        <div className="spray-muted" style={{ marginBottom: 8 }}>From the FAA decision (docket FAA-2024-0943, July 29, 2026) and its blanket COA. Tap a group to open it.</div>
+        {FAA_RULES.map(([group, list]) => <FaaRules key={group} group={group} list={list} />)}
+      </>}
+    </div>
+  )
+}
+
+// ---- Prep NOTAM -------------------------------------------------------------------------------
+// The details 1800wxbrief.com (UAS tab) asks for, filled in from one job: one NOTAM per field per day,
+// the circle sized to that field (the smallest radius that covers it).
+const NM = 1852
+const distNm = (a, b) => { const r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2
+  return 2 * 6371000 * Math.asin(Math.sqrt(h)) / NM }
+// a field of A acres fits inside a circle of about 0.75 x the side of a square of that area
+const fieldNm = (acres) => 0.75 * Math.sqrt((Number(acres) || 1) * 4046.86) / NM
+function notamCircle(list) {
+  const pts = list.filter((j) => j.lat != null && j.lng != null)
+  if (!pts.length) return null
+  const c = { lat: pts.reduce((t, j) => t + Number(j.lat), 0) / pts.length, lng: pts.reduce((t, j) => t + Number(j.lng), 0) / pts.length }
+  const r = Math.max(...pts.map((j) => distNm(c, { lat: Number(j.lat), lng: Number(j.lng) }) + fieldNm(j.acres)))
+  return { lat: c.lat, lng: c.lng, nm: Math.max(0.1, Math.ceil(r * 10) / 10), missing: list.length - pts.length }
+}
+const dms = (v, pos, neg, deg) => { const a = Math.abs(v), d = Math.floor(a), mf = (a - d) * 60, m = Math.floor(mf), s = Math.round((mf - m) * 60)
+  const fix = s === 60 ? [d, m + 1, 0] : [d, m, s]; return String(fix[0]).padStart(deg, '0') + String(fix[1]).padStart(2, '0') + String(fix[2]).padStart(2, '0') + (v >= 0 ? pos : neg) }
+// local Mountain time -> UTC ("Zulu"), right across daylight saving changes
+const toZulu = (ymd, hm) => {
+  const [y, mo, d] = ymd.split('-').map(Number), [h, mi] = hm.split(':').map(Number), guess = Date.UTC(y, mo - 1, d, h, mi)
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Denver', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(guess))
+  const g = (t) => Number(parts.find((p) => p.type === t).value)
+  const off = Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute')) - guess
+  const z = new Date(guess - off)
+  return String(z.getUTCDate()).padStart(2, '0') + String(z.getUTCHours()).padStart(2, '0') + String(z.getUTCMinutes()).padStart(2, '0') + 'Z'
+}
+function FaaNotams({ run, say, o, setO, ops, jobs }) {
+  const today = todayYmd()
+  const [prep, setPrep] = useState(null)        // the open prep
+  const [set, setSet] = useState(null)          // editing the defaults
+  const [busy, setBusy] = useState(false)
+  const notam = jobActions(run, say, null).notam
+  const soon = jobs.filter((j) => j.source === 'drone' && !j.done && !j.hidden && j.planned_date >= today && j.planned_date <= addDays(today, 3)).sort((a, b) => (a.planned_date + a.field).localeCompare(b.planned_date + b.field))
+  const days = [...new Set(soon.map((j) => j.planned_date))]
+  const pilots = ops.filter((p) => p.crew === 'drone' && p.active !== false)
+  const open = (keys) => {
+    const list = soon.filter((j) => keys.indexOf(j.job_key) >= 0)
+    const c = notamCircle(list)
+    const p = pilots.find((x) => list.some((j) => normName(j.operator) === normName(x.name))) || pilots[0] || {}
+    setPrep({ keys, list, date: list[0].planned_date, start: o.notam.start || '06:00', end: o.notam.end || '20:00', alt: String(o.notam.altitude_ft || 100),
+      nm: c ? String(c.nm) : '', circle: c, pilot: p.name || '', drones: String(Math.max(1, new Set(list.map((j) => j.operator).filter(Boolean)).size)) })
+  }
+  const pf = (k) => (e) => { const v = e.target.value; setPrep((x) => Object.assign({}, x, { [k]: v })) }
+  const text = () => {
+    if (!prep) return ''
+    const p = pilots.find((x) => x.name === prep.pilot) || {}
+    const c = prep.circle, nextDay = prep.end <= prep.start
+    return [
+      'UAS NOTAM · ' + o.operator.name + ' · Exemption ' + o.operator.exemption,
+      'COA #: ' + (o.notam.coa || '(add it under NOTAM settings)'),
+      'Date: ' + longDay(prep.date),
+      'Time: ' + t12(prep.start) + ' – ' + t12(prep.end) + ' Mountain (' + toZulu(prep.date, prep.start) + ' – ' + toZulu(nextDay ? addDays(prep.date, 1) : prep.date, prep.end) + ')',
+      c ? 'Center: ' + c.lat.toFixed(5) + ', ' + c.lng.toFixed(5) + '  (' + dms(c.lat, 'N', 'S', 2) + dms(c.lng, 'E', 'W', 3) + ')' : 'Center: no map pin on the field(s)',
+      'Radius: ' + (prep.nm || '?') + ' NM',
+      'Altitude: surface to ' + prep.alt + ' ft AGL',
+      'Number of UAS: ' + prep.drones,
+      'Pilot in command: ' + (prep.pilot || '?') + (p.phone ? ', ' + p.phone : '') + ', ' + (p.address || o.operator.address || '20511 F Street, Rupert, ID 83350'),
+      'Fields: ' + prep.list.map((j) => j.field + ' (' + (Number(j.acres) || 0) + ' ac' + (j.farm ? ', ' + j.farm : '') + ')').join('; ')
+    ].join('\n')
+  }
+  const copy = async () => { try { await navigator.clipboard.writeText(text()); say('Copied. Paste into 1800wxbrief › UAS.') } catch (e) { window.prompt('Copy this', text()) } }
+  const filed = async () => { setBusy(true); try { for (const j of prep.list) await notam(j, true); say('Marked filed: ' + prep.list.map((j) => j.field).join(', ')); setPrep(null) } catch (e) { /* shown */ } setBusy(false) }
+  const saveSet = async () => { setBusy(true); try { setO(await run(Object.assign({ action: 'saveFaaNotam' }, set))); setSet(null); say('NOTAM settings saved') } catch (e) { /* shown */ } setBusy(false) }
+  return (
+    <div>
       <div className="spray-box">
-        <div className="spray-muted" style={{ marginBottom: 6 }}>File the D-NOTAM 24–72 hours before (1-877-487-6867) and cancel it when the job is done or scrubbed. Check military training routes for the area too.</div>
-        {soonJobs.length ? soonJobs.map((j) => (
-          <div className="spray-mrow" key={j.job_key}>
-            <div><b>{j.field}</b> <span className="spray-muted">· {fmtDay(j.planned_date)} · {j.farm || j.manager} · {(Number(j.acres) || 0).toLocaleString()} ac{j.operator ? ' · ' + j.operator : ''}</span></div>
-            <span className={j.notam ? 'spray-ok' : j.planned_date <= addDays(today, 1) ? 'spray-warn' : 'spray-muted'}>{j.notam ? '✓ Filed' : 'Not filed'}</span>
-            <button disabled={busy} onClick={async () => { setBusy(true); try { await notam(j, !j.notam) } catch (e) { /* shown */ } setBusy(false) }}>{j.notam ? 'Unmark' : 'Filed'}</button>
-          </div>)) : <div className="spray-muted">No drone jobs in the next 3 days.</div>}
+        <div className="spray-due-row">
+          <div><b>NOTAM settings</b><div className="spray-muted">COA {o.notam.coa || <span className="spray-warn">not set</span>} · up to {o.notam.altitude_ft} ft AGL · {t12(o.notam.start)}–{t12(o.notam.end)}</div></div>
+          <button onClick={() => setSet(set ? null : { coa: o.notam.coa, altitude_ft: String(o.notam.altitude_ft), start: o.notam.start, end: o.notam.end })}>{set ? 'Close' : 'Edit'}</button>
+        </div>
+        {set && <div className="spray-form" style={{ marginTop: 8 }}>
+          <label>COA number<input value={set.coa} onChange={(e) => setSet(Object.assign({}, set, { coa: e.target.value }))} /></label>
+          <label>Altitude (ft AGL)<input type="number" min="10" max="400" value={set.altitude_ft} onChange={(e) => setSet(Object.assign({}, set, { altitude_ft: e.target.value }))} /></label>
+          <label>Usual start<input type="time" value={set.start} onChange={(e) => setSet(Object.assign({}, set, { start: e.target.value }))} /></label>
+          <label>Usual end<input type="time" value={set.end} onChange={(e) => setSet(Object.assign({}, set, { end: e.target.value }))} /></label>
+          <div className="spray-row wide"><button className="save" disabled={busy} onClick={saveSet}>Save</button></div>
+        </div>}
       </div>
-
-      <h3 className="spray-h3">Everything Exemption 26422 requires</h3>
-      <div className="spray-muted" style={{ marginBottom: 6 }}>From the FAA decision (docket FAA-2024-0943, July 29, 2026) and its blanket COA. Tap a group to open it.</div>
-      {FAA_RULES.map(([group, list]) => <FaaRules key={group} group={group} list={list} />)}
+      <div className="spray-muted" style={{ margin: '0 0 8px' }}>File 24–72 hours before and cancel when the job's done or scrubbed. One NOTAM per field per day. Check military training routes too.</div>
+      {!soon.length && <div className="spray-empty">No drone jobs in the next 3 days.</div>}
+      {days.map((d) => { const list = soon.filter((j) => j.planned_date === d)
+        return (
+          <div className="spray-box" key={d}>
+            <b>{fmtDay(d)}</b>
+            {list.map((j) => (
+              <div className="spray-nrow" key={j.job_key}>
+                <div><b>{j.field}</b><div className="spray-muted">{[j.farm, (Number(j.acres) || 0).toLocaleString() + ' ac', j.operator].filter(Boolean).join(' · ')}{j.lat == null ? ' · no map pin' : ''}</div></div>
+                {j.notam ? <span className="spray-ok">✓ Filed</span> : <button onClick={() => open([j.job_key])}>Prep NOTAM</button>}
+                {j.notam && <button disabled={busy} onClick={async () => { setBusy(true); try { await notam(j, false) } catch (e) { /* shown */ } setBusy(false) }}>Unmark</button>}
+              </div>))}
+          </div>) })}
+      {prep && createPortal(<div className="spray spray-modal" onClick={() => setPrep(null)}>
+        <div className="spray-modal-box" onClick={(e) => e.stopPropagation()}>
+          <div className="spray-field" style={{ fontSize: 20 }}>Prep NOTAM · {fmtDay(prep.date)}</div>
+          <div className="spray-muted">{prep.list.map((j) => j.field).join(', ')}</div>
+          <div className="spray-form" style={{ marginTop: 10 }}>
+            <label>Start (Mountain)<input type="time" value={prep.start} onChange={pf('start')} /></label>
+            <label>End<input type="time" value={prep.end} onChange={pf('end')} /></label>
+            <label>Radius (NM) <span className="spray-muted">{prep.circle ? '(covers the field)' : ''}</span><input type="number" min="0.1" step="0.1" value={prep.nm} onChange={pf('nm')} /></label>
+            <label>Altitude (ft AGL)<input type="number" min="10" max="400" value={prep.alt} onChange={pf('alt')} /></label>
+            <label>Pilot in command<select value={prep.pilot} onChange={pf('pilot')}>{pilots.map((p) => <option key={p.id}>{p.name}</option>)}</select></label>
+            <label>Number of drones<input type="number" min="1" max="3" value={prep.drones} onChange={pf('drones')} /></label>
+          </div>
+          {!prep.circle && <div className="spray-error" style={{ marginTop: 6 }}>This field has no map pin in AgWorld, so there's no center point. Use the map on 1800wxbrief.</div>}
+          {prep.list[0].fields && prep.list[0].fields.length > 1 && <div className="spray-error" style={{ marginTop: 6 }}>This job has {prep.list[0].fields.length} fields and one map pin. If they're far apart, file one NOTAM per field on 1800wxbrief, or make the radius bigger.</div>}
+          {Number(prep.nm) > 1.5 && <div className="spray-error" style={{ marginTop: 6 }}>That's a big circle. The radius should be the least needed for the day.</div>}
+          <pre className="spray-notam-text">{text()}</pre>
+          <div className="spray-row" style={{ marginTop: 10 }}>
+            <button className="save" onClick={copy}>Copy</button>
+            <a className="spray-btn" href="https://www.1800wxbrief.com" target="_blank" rel="noreferrer">Open 1800wxbrief</a>
+            <button disabled={busy} onClick={filed}>Mark filed</button>
+            <button onClick={() => setPrep(null)}>Close</button>
+          </div>
+        </div>
+      </div>, document.body)}
     </div>
   )
 }
@@ -1878,12 +1975,10 @@ function FaaPapers({ run, say, onSaved }) {
   const setI = (i, k) => (e) => { const v = e.target.type === 'checkbox' ? e.target.checked : e.target.value; setItems((l) => l.map((x, n) => (n === i ? Object.assign({}, x, { [k]: v }) : x))) }
   const save = async () => { setBusy(true); try { setItems((await run({ action: 'saveFaaPapers', items })).items); say('FAA paperwork saved'); setOpen(false); if (onSaved) onSaved() } catch (e) { /* shown */ } setBusy(false) }
   if (!items) return null
-  const soon = items.filter((i) => !i.done && i.due && daysTo(i.due) <= 90)
-  const blanks = items.filter((i) => !i.done && !i.due).length
   return (
     <div className={'spray-box spray-fold' + (open ? ' open' : '')}>
       <button type="button" className="spray-fold-head" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span>Edit paperwork dates{soon.length ? ' · ' + soon.length + ' coming up' : ''}{blanks ? ' · ' + blanks + ' need a date' : ''}</span><span className="spray-fold-chev" aria-hidden="true">▾</span>
+        <span>Edit dates</span><span className="spray-fold-chev" aria-hidden="true">▾</span>
       </button>
       {open && <>
         <div className="spray-muted" style={{ margin: '4px 0 8px' }}>Exemption No. 26422 and its blanket COA. Phone alerts go 30 and 7 days before each date. Drone registrations are on the Drones tab.</div>

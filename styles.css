@@ -1753,3 +1753,16 @@ body.spray-dark:has(.ops-hub) { background: #f7f5f0; }
 .spray-rule { padding: 8px 0; border-top: 1px solid rgba(127,127,127,.18); }
 .spray-rule-when { color: #e5a03a; font-size: 13px; margin: 2px 0; }
 .spray-rule-src { font-size: 11px; color: #8a8f94; border: 1px solid rgba(127,127,127,.35); border-radius: 999px; padding: 0 6px; margin-left: 4px; white-space: nowrap; }
+/* Spray > FAA tab: sub-tabs, due card, NOTAM prep */
+.spray-faa-head { margin: 0 0 6px; font-size: 14px; }
+.spray-due-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; flex-wrap: wrap; }
+.spray-due-row > div:first-child { flex: 1; min-width: 160px; }
+.spray-big { font-size: 20px; }
+.spray-due-card { border-color: var(--sp-accent); }
+.spray-mrow.two { grid-template-columns: 1fr auto; }
+.spray-nrow { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid rgba(127,127,127,.18); }
+.spray-ptbl { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 13px; }
+.spray-ptbl th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--sp-tx2); padding: 4px 6px; border-bottom: 1px solid rgba(127,127,127,.3); }
+.spray-ptbl td { padding: 6px; border-bottom: 1px solid rgba(127,127,127,.15); vertical-align: top; }
+.spray-notam-text { white-space: pre-wrap; font: 12.5px/1.45 ui-monospace, Menlo, monospace; background: rgba(127,127,127,.12); border-radius: 8px; padding: 10px; margin-top: 10px; overflow-wrap: anywhere; }
+.spray-faa .spray-subtabs button { white-space: nowrap; }
