@@ -144,7 +144,7 @@ async function dailyAlerts(db, day, now, people, alertsColl) {
   (await db.collection('sprayDrones').get()).forEach((d) => drones.push(Object.assign({ id: d.id }, d.data())));
   for (const w of paperWarnings(await getPapers(db), drones, day)) {
     await queue('faa-' + w.id + '-' + w.due + '-' + w.stage, 'faa_paper', '⚠ ' + w.label,
-      (w.stage === 'expired' ? 'Was due ' + w.due + '.' : 'Due ' + w.due + ' (in ' + w.days + ' day' + (w.days === 1 ? '' : 's') + ').') + ' Spray › FAA tab.');
+      (w.stage === 'expired' ? 'Was due ' + w.due + '.' : 'Due ' + w.due + ' (in ' + w.days + ' day' + (w.days === 1 ? '' : 's') + ').') + (w.id.indexOf('reg-') === 0 ? ' Spray › Drones.' : ' Spray › FAA › Due dates.'));
   }
   const dd = Number(day.slice(8));
   if (dd === 1 || dd === 5) {
@@ -153,7 +153,7 @@ async function dailyAlerts(db, day, now, people, alertsColl) {
     if (!sent) {
       const r = await monthlyReport(db, ym);
       await queue('faa-monthly-' + ym + '-' + dd, 'faa_monthly', '📋 FAA monthly report for ' + r.month,
-        (r.zero ? 'No flights last month: a zero-flight report is still required.' : r.totals.flights + ' flights, ' + r.totals.hours + ' hrs.') + ' Spray › FAA tab › Monthly reports, then mark it sent. Check the manufacturer service bulletins too.');
+        (r.zero ? 'No flights last month: a zero-flight report is still required.' : r.totals.flights + ' flights, ' + r.totals.hours + ' hrs.') + ' Spray › FAA › Monthly report, then mark it sent. Check the manufacturer service bulletins too.');
     }
   }
   return n;
@@ -186,7 +186,10 @@ async function overview(db, today) {
   const drones = [];
   (await db.collection('sprayDrones').get()).forEach((d) => { const o = d.data() || {}; if (o.active !== false) drones.push({ id: d.id, name: o.name, faa_reg: o.faa_reg || '', reg_exp: o.reg_exp || '' }); });
   incidents.sort((a, b) => b.date.localeCompare(a.date));
-  return { ok: true, operator: OPERATOR, send_to: REPORT_TO, months, papers: await getPapers(db), drones, incidents };
+  const cy = today.slice(0, 7), cf = flights[cy] || { flights: 0, minutes: 0 };
+  const notam = (await db.collection('sprayMeta').doc('faaNotam').get()).data() || {};
+  return { ok: true, operator: OPERATOR, send_to: REPORT_TO, months, current: { ym: cy, month: monthName(cy), flights: cf.flights, hours: round1(cf.minutes / 60) },
+    papers: await getPapers(db), drones, incidents, notam: { coa: notam.coa || '', altitude_ft: notam.altitude_ft || 100, start: notam.start || '06:00', end: notam.end || '20:00' } };
 }
 /** Mark a flight's problem as reported to the FAA (or not needed). */
 async function markIncident(db, me, id, how) {
@@ -198,5 +201,14 @@ async function markIncident(db, me, id, how) {
   return { ok: true };
 }
 
-module.exports = { overview, markIncident, OPERATOR, REPORT_TO, MALFUNCTIONS, cleanProblems, incidentReason, problemText, monthlyReport, markSent, getPapers, savePapers, dailyAlerts,
+/** Prep NOTAM defaults (FAA tab > NOTAMs): COA number, altitude, usual hours. */
+async function saveNotamSettings(db, me, d) {
+  const hm = (v, def) => (/^([01]\d|2[0-3]):[0-5]\d$/.test(clean(v, 5)) ? clean(v, 5) : def);
+  const alt = Math.round(numOr(d && d.altitude_ft, 100));
+  const val = { coa: clean(d && d.coa, 60), altitude_ft: Math.min(400, Math.max(10, alt)), start: hm(d && d.start, '06:00'), end: hm(d && d.end, '20:00'), updated_by: me.name, updated_at: nowIso() };
+  await db.collection('sprayMeta').doc('faaNotam').set(val);
+  return val;
+}
+
+module.exports = { overview, markIncident, saveNotamSettings, OPERATOR, REPORT_TO, MALFUNCTIONS, cleanProblems, incidentReason, problemText, monthlyReport, markSent, getPapers, savePapers, dailyAlerts,
   _internal: { paperWarnings, prevMonth, PAPER_DEFAULTS } };
