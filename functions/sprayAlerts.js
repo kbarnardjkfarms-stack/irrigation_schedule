@@ -182,7 +182,8 @@ async function sendQueued(deps = {}) {
     const list = tokensFor(a.people || [], tokens);
     if (!list.length) { await ref.set({ status: 'no_phones', checkedAt: now }, { merge: true }); stats.noPhone++; continue; }
     try {
-      const r = await push(db, messaging, list, { title: a.title, body: a.body, tag: 'done-' + a.jobKey });
+      // a fresh tag each time: a phone shows a repeat of a tag silently (no pop-up), e.g. a job Done, Undone, Done again
+      const r = await push(db, messaging, list, { title: a.title, body: a.body, tag: 'done-' + a.jobKey + '-' + now });
       await ref.set({ status: 'sent', sentAt: now, phones: r.sent, failed: r.failed }, { merge: true });
       stats.sent++;
     } catch (err) {
