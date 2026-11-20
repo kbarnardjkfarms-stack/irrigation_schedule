@@ -43,7 +43,7 @@ import AppliedDetail from './AppliedDetail.jsx'
 import { computeApplied, WET_LOG_START_WEEK } from './appliedMath.js'
 import { gpmForWeek } from './gpmHistory.js'
 
-import { weeklyEt, scheduledBand, scheduledShare, stationsForField, normalizeIsoDate, curveKeyForCrop } from './etMath.js'
+import { weeklyEt, openMeteoWeek, scheduledBand, scheduledShare, stationsForField, normalizeIsoDate, curveKeyForCrop } from './etMath.js'
 
 const DAYS = [
   { k: 'mon', en: 'Mon' }, { k: 'tue', en: 'Tue' }, { k: 'wed', en: 'Wed' },
@@ -413,6 +413,12 @@ export default function App() {
   // weather per station (agrimetDaily), and which field's ET detail is open.
   const [etStationsByField, setEtStationsByField] = useState({})
   const [agrimetByStation, setAgrimetByStation] = useState({})
+  // Open-Meteo check (detail panel only): Open-Meteo's saved daily ET per
+  // station (openMeteoDaily), each station's bump-up ratio (etRatio), and how
+  // far each field is from its station (fieldSettings etStationMiles/Note).
+  const [openMeteoByStation, setOpenMeteoByStation] = useState({})
+  const [etRatioByStation, setEtRatioByStation] = useState({})
+  const [etStationMetaByField, setEtStationMetaByField] = useState({})
   const [etDetailFieldId, setEtDetailFieldId] = useState(null)
   const [appliedDetailFieldId, setAppliedDetailFieldId] = useState(null)
   // The "no GPM" explainer pop-up (red triangle in the Scheduled / Applied cells).
@@ -780,12 +786,20 @@ export default function App() {
     const unsub = onSnapshot(collection(db, 'fieldSettings'), (snap) => {
       const next = {}
       const stations = {}
+      const meta = {}
       snap.forEach((d) => {
         next[d.id] = d.data().gpm ?? null
         if (Array.isArray(d.data().etStations)) stations[d.id] = d.data().etStations
+        if (Array.isArray(d.data().etStations)) {
+          meta[d.id] = {
+            miles: Array.isArray(d.data().etStationMiles) ? d.data().etStationMiles : null,
+            note: typeof d.data().etStationNote === 'string' ? d.data().etStationNote : null
+          }
+        }
       })
       setGpmByField(next)
       setEtStationsByField(stations)
+      setEtStationMetaByField(meta)
     })
     return () => unsub()
   }, [user, irrigationAllowed])
@@ -806,6 +820,27 @@ export default function App() {
       setAgrimetByStation(next)
     }, (err) => console.warn('agrimetDaily listener failed', err))
     return () => unsub()
+  }, [user, irrigationAllowed])
+
+  // Open-Meteo's saved daily ET and each station's bump-up ratio. Used only by
+  // the "Open-Meteo check" in the ET detail panel; a failure here just leaves
+  // that section saying the numbers are not available.
+  useEffect(() => {
+    if (!user || !irrigationAllowed) return
+    const unsubDaily = onSnapshot(collection(db, 'openMeteoDaily'), (snap) => {
+      const next = {}
+      snap.forEach((d) => { next[d.id] = d.data().days || {} })
+      setOpenMeteoByStation(next)
+    }, (err) => console.warn('openMeteoDaily listener failed', err))
+    const unsubRatio = onSnapshot(collection(db, 'etRatio'), (snap) => {
+      const next = {}
+      snap.forEach((d) => {
+        const v = d.data()
+        next[d.id] = { ratio: typeof v.ratio === 'number' ? v.ratio : null, source: v.source || null, asOf: v.asOf || null }
+      })
+      setEtRatioByStation(next)
+    }, (err) => console.warn('etRatio listener failed', err))
+    return () => { unsubDaily(); unsubRatio() }
   }, [user, irrigationAllowed])
 
   useEffect(() => {
@@ -982,6 +1017,36 @@ export default function App() {
     } catch (err) {
       console.warn('ET info failed for', field && field.fieldName, err)
       return { hours: 0, scheduled: null, stationInfo: null, et: null, band: 'gray', share: null }
+    }
+  }
+  // Open-Meteo check for the ET detail panel (never changes the ET column).
+  // Never throws: on any problem the panel just says it is not available.
+  function omInfoFor(field) {
+    try {
+      const stationInfo = stationsForField(field.farmName, etStationsByField[field.id])
+      if (!stationInfo) return { stations: [], week: null, note: null }
+      const meta = etStationMetaByField[field.id] || {}
+      const stations = stationInfo.codes.map((code, i) => {
+        const r = etRatioByStation[code]
+        return {
+          code,
+          miles: meta.miles && typeof meta.miles[i] === 'number' ? meta.miles[i] : null,
+          ratio: r && typeof r.ratio === 'number' ? r.ratio : null,
+          ratioSource: r ? r.source : null,
+          ratioAsOf: r ? r.asOf : null,
+          days: openMeteoByStation[code] || {}
+        }
+      })
+      const agrimetStations = stationInfo.codes.map((c) => agrimetByStation[c]).filter(Boolean)
+      const week = openMeteoWeek({
+        weekStart: weekId, today: todayIso, cropName: field.crop, plantDate: field.plantDate,
+        agrimetStations,
+        omStations: stations.map((s) => ({ code: s.code, days: s.days, ratio: s.ratio }))
+      })
+      return { stations: stations.map(({ days, ...rest }) => rest), week, note: meta.note || null }
+    } catch (err) {
+      console.warn('Open-Meteo check failed for', field && field.fieldName, err)
+      return { stations: [], week: null, note: null, failed: true }
     }
   }
   // Applied inches for one field this week (see appliedMath.js). Never throws.
@@ -1887,6 +1952,7 @@ export default function App() {
           <EtDetail
             field={f}
             info={etInfoFor(f)}
+            omInfo={omInfoFor(f)}
             weekStart={weekStart}
             todayIso={todayIso}
             onClose={() => setEtDetailFieldId(null)}
