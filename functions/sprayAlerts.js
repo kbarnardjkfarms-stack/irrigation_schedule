@@ -221,7 +221,7 @@ async function pushSetup(db, messaging, auth, data) {
   if (data && data.test) {
     const tokens = await readAll(db, TOKENS);
     const mine = Object.keys(tokens).filter((t) => tokens[t].uid === me.uid);
-    const r = await push(db, messaging, mine, { title: '✅ Test field done', body: 'Spray schedule alerts are working on this phone.', tag: 'test' });
+    const r = await push(db, messaging, mine, { title: '🔔 Test alert from AIO', body: 'AIO alerts are working on this phone.', tag: 'test' });
     Object.assign(out, { tested: r.sent, phones: mine.length });
   }
   return out;
@@ -245,6 +245,21 @@ async function alertLog(db) {
     phones: Object.keys(owners).map((k) => ({ who: k, count: owners[k] })) };
 }
 
+/** Send one test alert to a person's phones (Users screen). Says plainly if they have none set up. */
+async function testUserAlert(db, me, uid, messaging) {
+  const { HttpsError } = require('firebase-functions/v2/https');
+  const u = (await db.collection('users').doc(uid).get()).data();
+  if (!u) throw new HttpsError('not-found', 'That person isn\'t in AIO.');
+  const a = u.alerts || {};
+  const what = [a.spray && 'Spray', a.irrigation && 'Irrigation'].filter(Boolean).join(' and ');
+  const r = await pushToPeople(db, [{ uid, name: u.name || '', email: String(u.email || '').toLowerCase() }], {
+    title: '\ud83d\udd14 Test alert from AIO',
+    body: 'Sent by ' + (me.name || 'an admin') + '. ' + (what ? 'Your ' + what + ' alerts will come like this.' : 'No alerts are switched on for you yet.'),
+    tag: 'test-' + Date.now()
+  }, messaging);
+  return { ok: true, name: u.name || '', phones: r.phones, sent: r.sent, alerts: { spray: a.spray || '', irrigation: a.irrigation || '' } };
+}
+
 function makeExports() {
   const { onSchedule } = require('firebase-functions/v2/scheduler');
   const { onCall } = require('firebase-functions/v2/https');
@@ -256,6 +271,12 @@ function makeExports() {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
     const db = admin.firestore();
     const me = (await db.collection('users').doc(request.auth.uid).get()).data() || {};
+    const userAdmin = me.role === 'admin' || me.role === 'owner';
+    // Users screen "Send test alert" (Admin/Owner, or a Spray admin): one test to that person's phones
+    if (request.data && request.data.testUser) {
+      if (me.sprayAdmin !== true && !userAdmin) throw new HttpsError('permission-denied', 'Admin or Owner only.');
+      return testUserAlert(db, me, String(request.data.testUser));
+    }
     if (me.sprayAdmin !== true) throw new HttpsError('permission-denied', 'Spray admins only.');
     let sent = null, test = null;
     if (request.data && request.data.sendNow) sent = await sendQueued({ db, now: Date.now() + SEND_DELAY_SEC * 1000 });
@@ -274,5 +295,5 @@ function makeExports() {
 
 module.exports = {
   makeExports, queueDoneAlert, cancelDoneAlert, pushToPeople, wantsAlert,
-  _internal: { buildAlert, queueDoneAlert, cancelDoneAlert, tokensFor, sendQueued, pushSetup, alertLog, checkLicenses, pushToPeople, wantsAlert, SEND_DELAY_SEC, STALE_HOURS }
+  _internal: { buildAlert, queueDoneAlert, cancelDoneAlert, tokensFor, sendQueued, pushSetup, alertLog, checkLicenses, pushToPeople, wantsAlert, testUserAlert, SEND_DELAY_SEC, STALE_HOURS }
 };
