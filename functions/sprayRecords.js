@@ -348,9 +348,10 @@ async function listFlights(db, data) {
   flights.sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
   const maint = await listMaint(db, { from, to });
   // drone jobs marked done (app or AgWorld) in the range that have no flight record
-  const [jSnap, sSnap] = await Promise.all([db.collection('sprayJobs').get(), db.collection('sprayJobState').get()]);
-  const jobs = {};
+  const [jSnap, sSnap, kSnap] = await Promise.all([db.collection('sprayJobs').get(), db.collection('sprayJobState').get(), db.collection(NOLOG).get()]);
+  const jobs = {}, kept = {};
   jSnap.forEach((d) => { jobs[d.id] = d.data() || {}; });
+  kSnap.forEach((d) => { kept[d.id] = d.data() || {}; });
   const logged = new Set(flights.filter((f) => f.status !== 'void').map((f) => f.job_key));
   const unlogged = [];
   sSnap.forEach((d) => {
@@ -361,6 +362,15 @@ async function listFlights(db, data) {
     if (dn.flight_id && flights.some((f) => f.id === dn.flight_id && f.status !== 'void')) return;
     unlogged.push({ job_key: d.id, field: j.field || '', farm: j.farm || '', crop: j.crop || '', acres: j.acres || null, completed_date: day,
       entered_by: dn.entered_by || '', operator: dn.operator || '', product_detail: j.product_detail || [] });
+  });
+  // ones whose job has left the schedule (45 days back): from the kept copy
+  Object.keys(kept).forEach((k) => {
+    if (jobs[k] || logged.has(k) || unlogged.some((u) => u.job_key === k)) return;
+    const j = kept[k].job || {}, dn = kept[k].done || {};
+    const day = String(dn.completed_date || '');
+    if (day < from || day > to) return;
+    unlogged.push({ job_key: k, field: j.field || '', farm: j.farm || '', crop: j.crop || '', acres: j.acres || null, completed_date: day,
+      entered_by: dn.entered_by || '', operator: dn.operator || '', product_detail: j.product_detail || [], off_schedule: true });
   });
   unlogged.sort((a, b) => a.completed_date.localeCompare(b.completed_date));
   return { ok: true, from, to, company: COMPANY, flights, unlogged, maint };
@@ -420,6 +430,75 @@ async function voidGround(db, me, jobKey, reason) {
   await Promise.all(jobs);
   return { ok: true };
 }
+/** The sync (spraySync.js) passes every Ag Rows job closed in AgWorld: [{ k, job, done, operator }].
+ *  A job with no Done in the app gets its own permanent record ('agworld-<job>'), so it stays in the
+ *  reports after the job leaves the schedule (the schedule keeps jobs 45 days back). Written once;
+ *  after that only AgWorld's actuals are updated, and only when they change. Never throws. */
+async function saveAgworldGround(db, items) {
+  try {
+    if (!items || !items.length) return 0;
+    const [gSnap, oSnap] = await Promise.all([db.collection(GROUND).get(), db.collection('sprayOperators').get()]);
+    const recs = {}, appJob = new Set();
+    gSnap.forEach((d) => { const r = d.data() || {}; recs[d.id] = r; if (!r.from_agworld_only && r.status !== 'void') appJob.add(r.job_key); });
+    const allOps = [];
+    oSnap.forEach((d) => allOps.push(d.data() || {}));
+    const actualOf = (dn) => ({ completed_date: dn.completed_date || '', acres: dn.acres_done == null ? null : dn.acres_done, gallons: dn.gallons == null ? null : dn.gallons,
+      gpa: dn.gpa == null ? null : dn.gpa, conditions: dn.conditions || '', products: (dn.product_detail || []).map((p) => ({ name: p.name || '', rate: p.rate || '', total: p.total || '', epa: p.epa || '' })) });
+    let n = 0;
+    for (const it of items) {
+      const k = String(it.k), j = it.job || {}, dn = it.done || {};
+      if (appJob.has(k)) continue;                       // a Done in the app already made the record
+      const id = 'agworld-' + k.replace(/[^A-Za-z0-9_-]/g, '');
+      const act = actualOf(dn);
+      const old = recs[id];
+      if (old) {
+        if (old.status !== 'void' && JSON.stringify(old.agworld || null) !== JSON.stringify(act)) { await db.collection(GROUND).doc(id).set({ agworld: act, updated_at: nowIso() }, { merge: true }); n++; }
+        continue;
+      }
+      const day = String(dn.completed_date || '');
+      const opName = it.operator || dn.operator || '';
+      const o = allOps.find((x) => x.crew !== 'drone' && normName(x.name) && normName(x.name) === normName(opName));
+      const op = o ? await withSupervisor(db, pilotSnap(Object.assign({}, o)), allOps) : { name: opName, license_no: '', license_type: '', license_cats: '', supervisor: '' };
+      delete op.faa_cert; delete op.part137_date; delete op.faa_current_until; delete op.medical_until;
+      const missing = ['time of day (closed in AgWorld, no Done in the app)'].concat(opName ? pilotGaps(op, day, true) : ['operator (nobody assigned on the schedule)']);
+      await db.collection(GROUND).doc(id).set({
+        from_agworld_only: true, job_key: k, agworld_id: String(j.agworld_id || k), agworld_link: j.agworld_link || '', job_title: j.title || '', job_type: j.job_type || '',
+        status: 'active', applied_for: { name: COMPANY.name, address: COMPANY.address, farm: j.farm || '' },
+        site: { field: j.field || '', farm: j.farm || '', crop: j.crop || '', lat: j.lat == null ? null : j.lat, lng: j.lng == null ? null : j.lng },
+        date: day, done_time: '', acres: num(j.acres), products: productLines(j, num(j.acres)),
+        weather: { ok: false, note: 'No Done in the app; see AgWorld\'s conditions.' }, operator: op, missing, agworld: act,
+        entered_by: 'AgWorld', entered_via: 'AgWorld sync', entered_at: nowIso(), history: [{ at: nowIso(), by: 'AgWorld sync', what: 'saved from AgWorld (closed there)' }]
+      });
+      n++;
+    }
+    return n;
+  } catch (e) {
+    console.error('saveAgworldGround', e);
+    return 0;
+  }
+}
+
+// Drone jobs closed in AgWorld with no flight log: a copy of the job is kept here until the flight
+// log is added, so the Reports warning and its "Add flight log" button survive the job leaving the
+// schedule (45 days back). Firestore: sprayNoLog/{jobKey} { job, done, saved_at } (no browser rule)
+const NOLOG = 'sprayNoLog';
+/** From the sync: [{ k, job, done }]. Saves the ones not kept yet. Never throws. */
+async function keepUnlogged(db, items) {
+  try {
+    if (!items || !items.length) return 0;
+    const have = new Set();
+    (await db.collection(NOLOG).get()).forEach((d) => have.add(d.id));
+    let n = 0;
+    for (const it of items) {
+      const k = String(it.k);
+      if (have.has(k)) continue;
+      await db.collection(NOLOG).doc(k).set({ job: it.job || {}, done: it.done || {}, saved_at: nowIso() });
+      n++;
+    }
+    return n;
+  } catch (e) { console.error('keepUnlogged', e); return 0; }
+}
+
 /** Reports + crew link: Ag Rows records in a date range, with AgWorld's actuals beside them.
  *  Ag Rows jobs closed only in AgWorld (no Done in the app) show too, flagged for the missing time. */
 async function listGround(db, data, opts) {
@@ -442,7 +521,7 @@ async function listGround(db, data, opts) {
     const r = d.data() || {};
     if (r.date < from || r.date > to) return;
     if (r.status !== 'void') have.add(r.job_key);
-    recs.push(Object.assign({ id: d.id }, r, { agworld: actual(r.job_key) }));
+    recs.push(Object.assign({ id: d.id }, r, { agworld: actual(r.job_key) || r.agworld || null }));
   });
   Object.keys(states).forEach((k) => {
     const st = states[k], dn = st.done, j = jobs[k];
@@ -588,6 +667,6 @@ async function listDrones(db) {
 module.exports = {
   COMPANY, FLIGHTS, DRONES,
   LICENSE_TYPES, MAINT_KINDS, GROUND, MAINT, logFlight, editFlight, voidFlight, cleanDrone, listDrones, listFlights, cleanPilotPapers,
-  renewals, calMonthsEnd, useApiKey, logGround, voidGround, listGround, addMaint, voidMaint, listMaint, licenseWarnings, warrantyEnd, warrantyWarnings,
+  renewals, calMonthsEnd, useApiKey, logGround, saveAgworldGround, keepUnlogged, NOLOG, voidGround, listGround, addMaint, voidMaint, listMaint, licenseWarnings, warrantyEnd, warrantyWarnings,
   _internal: { parseRate, productLines, cleanFlightInput, buildRecord, stampWeather, compass16, minutesBetween, pilotSnap, pilotGaps, meanDir, weatherUrl, groundRecord, minusHour }
 };

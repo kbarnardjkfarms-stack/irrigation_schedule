@@ -741,12 +741,17 @@ async function runSync(mode, token, deps = {}) {
 
     // Season log rows from AgWorld
     const newlyDone = [];   // jobs that were on the schedule and just got closed in AgWorld: phone alert
+    const groundDone = [];  // Ag Rows jobs closed in AgWorld: kept as permanent records (sprayRecords.saveAgworldGround)
+    const droneNoLog = [];  // drone jobs closed in AgWorld with no flight log: kept until it's added (sprayRecords.keepUnlogged)
     Object.keys(next).forEach((k) => {
       const r = next[k];
       if (r.agworld_status !== 'completed' || r.needs_review) return;
       const st = state[k] || {};
       const op = (st.assign && st.assign.operator) || '';
       const row = doneFromAgworld(st.done, r, AGWORLD_TAG, op, '');
+      const doneNow = row || st.done;
+      if (r.source !== 'drone' && doneNow && String(doneNow.entered_by || '').startsWith('AgWorld')) groundDone.push({ k, job: r, done: doneNow, operator: op });
+      if (r.source === 'drone' && doneNow && !doneNow.flight_id && String(doneNow.entered_by || '').startsWith('AgWorld')) droneNoLog.push({ k, job: r, done: doneNow });
       if (!row) return;
       // Only a job already on the schedule, not done in the app already, finished in the last 2 days
       // (so the first full check never alerts for the whole season).
@@ -792,6 +797,9 @@ async function runSync(mode, token, deps = {}) {
 
     await commitOps(db, ops);
     for (const n of newlyDone) await alerts.queueDoneAlert(db, n.k, n.r, n.row, 'agworld');
+    // Ag Rows jobs closed only in AgWorld: save a permanent record now, before the job ages off the schedule
+    stats.groundSaved = await require('./sprayRecords').saveAgworldGround(db, groundDone);
+    stats.noLogKept = await require('./sprayRecords').keepUnlogged(db, droneNoLog);
     stats.alerted = newlyDone.length;
 
     const metaOut = { running: 0, lastOk: now, typeFilters: filterMap || null };

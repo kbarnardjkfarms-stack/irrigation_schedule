@@ -161,7 +161,9 @@ async function act(db, me, data) {
   // ---- one job ----
   const jobKey = clean(data && data.jobKey, 40);
   if (!jobKey) throw new HttpsError('invalid-argument', 'Which job?');
-  const job = (await db.collection('sprayJobs').doc(jobKey).get()).data();
+  let job = (await db.collection('sprayJobs').doc(jobKey).get()).data();
+  // adding a flight log to a drone job that has left the schedule: use the copy kept for it
+  if (!job && action === 'logFlight') job = ((await db.collection(records.NOLOG).doc(jobKey).get()).data() || {}).job;
   const stateRef = db.collection('sprayJobState').doc(jobKey);
   const state = (await stateRef.get()).data() || {};
   if (!job) throw new HttpsError('not-found', 'That job changed in AgWorld since the schedule loaded. It will show the new version in a moment.');
@@ -215,6 +217,7 @@ async function act(db, me, data) {
       const f = await records.logFlight(db, me, job, jobKey, data.flight);
       // a job closed in AgWorld (or done before flight logs) now points at its record
       if (state.done && !state.done.flight_id) await stateRef.set({ done: Object.assign({}, state.done, { flight_id: f.id }) }, { merge: true });
+      await db.collection(records.NOLOG).doc(jobKey).delete().catch(() => {});
       return { ok: true, id: f.id, missing: f.record.missing };
     }
     case 'move': {
