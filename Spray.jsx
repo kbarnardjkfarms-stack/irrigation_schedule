@@ -67,7 +67,7 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
   // Drones list (Operators tab) for the flight log; only Spray admins mark drone jobs done here.
   useEffect(() => { if (isAdmin) sprayAct({ action: 'listDrones' }).then((r) => setDrones(r.data.drones || [])).catch(() => {}) }, [isAdmin])
   const openFlight = (job, save) => setFlightFor({ job, save })
-  const pilots = ops.filter((o) => o.crew === 'drone' && o.active !== false).map((o) => ({ name: o.name, license_exp: o.license_exp || '' }))
+  const pilots = ops.filter((o) => o.crew === 'drone' && o.active !== false).map((o) => ({ name: o.name, dues: renewalsOf(o) }))
 
   // Dark page while the Spray module is open (the rest of AIO stays as it is).
   useEffect(() => { document.body.classList.add('spray-dark'); return () => document.body.classList.remove('spray-dark') }, [])
@@ -95,6 +95,7 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
         {isAdmin && <button className={view === 'crew' ? 'active' : ''} onClick={() => setView('crew')}>Operators</button>}
         {isAdmin && <button className={view === 'drones' ? 'active' : ''} onClick={() => setView('drones')}>Drones</button>}
         {isAdmin && <button className={view === 'reports' ? 'active' : ''} onClick={() => setView('reports')}>Reports</button>}
+        {isAdmin && <button className={view === 'costs' ? 'active' : ''} onClick={() => setView('costs')}>Costs</button>}
         {isAdmin && <button className={view === 'managers' ? 'active' : ''} onClick={() => setView('managers')}>Managers</button>}
         {isAdmin && <button className={view === 'alerts' ? 'active' : ''} onClick={() => setView('alerts')}>Alerts</button>}
       </div>
@@ -103,7 +104,8 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
       {view === 'calendar' && <Calendar jobs={jobs} ops={ops} isAdmin={isAdmin} run={run} say={say} openFlight={openFlight} />}
       {view === 'crew' && isAdmin && <Crew ops={ops} run={run} say={say} />}
       {view === 'drones' && isAdmin && <Drones drones={drones} setDrones={setDrones} run={run} say={say} />}
-      {view === 'reports' && isAdmin && <Reports run={run} say={say} pilots={pilots} drones={drones} />}
+      {view === 'reports' && isAdmin && <Reports run={run} say={say} pilots={pilots} drones={drones} chiefs={ops.filter((o) => o.crew === 'drone' && o.chief)} />}
+      {view === 'costs' && isAdmin && <Costs run={run} say={say} ops={ops} />}
       {flightFor && <FlightForm job={flightFor.job} pilots={pilots} drones={drones.filter((d) => d.active !== false)}
         onSave={flightFor.save} onClose={() => setFlightFor(null)} />}
       {view === 'managers' && isAdmin && <Managers farms={farms} run={run} say={say} />}
@@ -477,10 +479,25 @@ function useWeather(jobs) {
 // Drone pilots carry the drone (and trailer) they run; it rides onto the drone jobs they're put on.
 // ---------------------------------------------------------------------------
 const LICENSE_TYPES = [['professional', 'Professional Applicator'], ['private', 'Private Applicator'], ['apprentice', 'Commercial Apprentice']]
+// Renewal dates (same rules as functions/sprayRecords.js renewals): the Idaho date on the card wins,
+// else 5 years from renewal (2 for an apprentice); FAA recurrent course every 24 calendar months;
+// third-class medical 60 calendar months (24 if 40 or older at the exam).
+const calEnd = (ymd, n) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd || '')) return ''; const [y, m] = ymd.split('-').map(Number); return new Date(Date.UTC(y, m - 1 + n + 1, 0)).toISOString().slice(0, 10) }
+const yearsOn = (ymd, n) => { if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd || '')) return ''; const [y, m, d] = ymd.split('-').map(Number); const e = new Date(Date.UTC(y + n, m - 1, d)); if (e.getUTCMonth() !== m - 1) e.setUTCDate(0); return e.toISOString().slice(0, 10) }
+function renewalsOf(o) {
+  const out = []
+  const lic = o.license_exp || (o.license_issued ? yearsOn(o.license_issued, o.license_type === 'apprentice' ? 2 : 5) : '')
+  if (lic) out.push({ kind: 'license', label: 'Idaho license', due: lic, figured: !o.license_exp })
+  if (o.crew === 'drone' && o.faa_recurrent) out.push({ kind: 'faa', label: 'FAA recurrent course', due: calEnd(o.faa_recurrent, 24) })
+  if (o.crew === 'drone' && o.medical_issued) out.push({ kind: 'medical', label: '3rd-class medical', due: calEnd(o.medical_issued, o.medical_over40 ? 24 : 60) })
+  return out
+}
+const daysTo = (ymd) => Math.round((Date.parse(ymd + 'T12:00:00Z') - Date.parse(todayYmd() + 'T12:00:00Z')) / 86400000)
 function Crew({ ops, run, say }) {
   const [tab, setTab] = useState('drone')   // inner tabs: Drone pilots | Ag Rows
   const blankFor = (crew) => ({ id: '', name: '', crew, phone: '', active: true,
-    license_no: '', license_type: '', license_cats: '', license_exp: '', supervisor: '', faa_cert: '', part137_date: '', address: '' })
+    license_no: '', license_type: '', license_cats: '', license_exp: '', license_issued: '', supervisor: '', chief: false, faa_cert: '', part137_date: '', address: '',
+    faa_recurrent: '', medical_issued: '', medical_over40: false })
   const blank = blankFor(tab)
   const [form, setForm] = useState(blank)
   const pickTab = (t) => { setTab(t); setForm(blankFor(t)) }
@@ -534,19 +551,27 @@ function Crew({ ops, run, say }) {
     setBusy(false)
   }
   const list = ops.filter((o) => o.crew === tab)
+  // licensed Professional Applicators (either crew) who can supervise an apprentice or an unlicensed operator
+  const supervisors = ops.filter((o) => o.active !== false && o.license_type === 'professional' && String(o.license_no || '').trim())
   const drone = tab === 'drone'
   const papers = (o) => [
     o.license_no ? (LICENSE_TYPES.find((t) => t[0] === o.license_type) || [0, 'Idaho license'])[1] + ' ' + o.license_no : 'No Idaho license # yet',
     o.license_cats ? 'cat. ' + o.license_cats : '', drone && o.license_no && !/\bAU\b/.test(o.license_cats || '') ? '⚠ no AU category' : '',
-    o.license_exp ? (o.license_exp < todayYmd() ? '⚠ expired ' : 'exp. ') + fmtDay(o.license_exp) : '',
     drone && (o.faa_cert ? 'FAA ' + o.faa_cert : 'no FAA cert #'), drone && (o.part137_date ? 'Part 137 ' + fmtDay(o.part137_date) : 'no Part 137 date')
   ].filter(Boolean).join(' · ')
+  const dueChips = (o) => renewalsOf(o).map((r) => { const d = daysTo(r.due)
+    return <span key={r.kind} className={'spray-due' + (d < 0 ? ' late' : d <= 30 ? ' soon' : '')}>{r.label}: {d < 0 ? 'past due ' : 'due '}{longDay(r.due)}{r.figured ? '*' : ''}</span> })
+  const coming = list.filter((o) => o.active !== false).flatMap((o) => renewalsOf(o).map((r) => Object.assign({ name: o.name }, r))).filter((r) => daysTo(r.due) <= 90).sort((a, b) => a.due.localeCompare(b.due))
   return (
     <div>
       <div className="spray-subtabs">
         <button className={drone ? 'active' : ''} onClick={() => pickTab('drone')}>Drone pilots ({ops.filter((o) => o.crew === 'drone').length})</button>
         <button className={!drone ? 'active' : ''} onClick={() => pickTab('ground')}>Ag Rows ({ops.filter((o) => o.crew === 'ground').length})</button>
       </div>
+      {coming.length > 0 && <div className="spray-box spray-coming">
+        <b>Coming due (next 90 days)</b>
+        {coming.map((r, i) => { const d = daysTo(r.due); return <div key={i} className={d < 0 ? 'late' : d <= 30 ? 'soon' : ''}>{r.name} · {r.label} · {d < 0 ? 'past due since ' + longDay(r.due) : longDay(r.due) + ' (' + d + ' days)'}</div> })}
+      </div>}
       <div className="spray-box">
         <b>{form.id ? 'Edit ' + form.name : drone ? 'Add a drone pilot' : 'Add an Ag Rows operator'}</b>
         <div className="spray-form">
@@ -559,12 +584,24 @@ function Crew({ ops, run, say }) {
           </select></label>
           <label>License #<input value={form.license_no || ''} onChange={set('license_no')} /></label>
           <label>Categories <span className="spray-muted">{drone ? '(drones need AU)' : '(e.g. CO, AC)'}</span><input value={form.license_cats || ''} onChange={set('license_cats')} placeholder={drone ? 'e.g. CO, AU, AC' : 'e.g. CO, AC'} /></label>
-          <label>Expires <span className="spray-muted">(alert 30 and 7 days before)</span><input type="date" value={form.license_exp || ''} onChange={set('license_exp')} /></label>
-          {form.license_type === 'apprentice' && <label className="wide">Supervising Professional Applicator <span className="spray-muted">(name + license #)</span><input value={form.supervisor || ''} onChange={set('supervisor')} /></label>}
+          <label>Issued / last renewed<input type="date" max={todayYmd()} value={form.license_issued || ''} onChange={set('license_issued')} /></label>
+          <label>Expires <span className="spray-muted">(from the card; blank = {form.license_type === 'apprentice' ? '2' : '5'} years from renewal)</span><input type="date" value={form.license_exp || ''} onChange={set('license_exp')} /></label>
+          {(form.license_type === 'apprentice' || !String(form.license_no || '').trim()) && <label className="wide">Supervising Professional Applicator <span className="spray-muted">({form.license_type === 'apprentice' ? 'apprentice' : 'no license yet'}: who they work under)</span>
+            <select value={form.supervisor || ''} onChange={set('supervisor')}>
+              <option value="">Pick</option>
+              {form.supervisor && !supervisors.some((o) => o.name === form.supervisor) && <option value={form.supervisor}>{form.supervisor}</option>}
+              {supervisors.filter((o) => o.name !== form.name).map((o) => <option key={o.id} value={o.name}>{o.name} · PA #{o.license_no}</option>)}
+            </select>
+            {!supervisors.length && <span className="spray-muted">Nobody has a Professional Applicator license on file yet. Add yours as a drone pilot with your license.</span>}
+          </label>}
           {drone && <>
             <div className="spray-formhead">FAA</div>
+            <label className="check wide"><input type="checkbox" checked={!!form.chief} onChange={set('chief')} /> Chief supervisor on the Part 137 certificate (shows on the FAA reports)</label>
             <label>Certificate #<input value={form.faa_cert || ''} onChange={set('faa_cert')} /></label>
             <label>Part 137 knowledge/skill date <span className="spray-muted">(137.19(e))</span><input type="date" value={form.part137_date || ''} onChange={set('part137_date')} /></label>
+            <label>Last recurrent course <span className="spray-muted">(or test date; due every 24 months)</span><input type="date" max={todayYmd()} value={form.faa_recurrent || ''} onChange={set('faa_recurrent')} /></label>
+            <label>Third-class medical issued<input type="date" max={todayYmd()} value={form.medical_issued || ''} onChange={set('medical_issued')} /></label>
+            <label className="check"><input type="checkbox" checked={!!form.medical_over40} onChange={set('medical_over40')} /> 40 or older at the medical exam (good 2 years, not 5)</label>
             <label className="wide">Address on records <span className="spray-muted">(blank = company: 20511 F Street, Rupert, ID 83350)</span><input value={form.address || ''} onChange={set('address')} /></label>
           </>}
           <label className="check"><input type="checkbox" checked={form.active !== false} onChange={set('active')} /> Active</label>
@@ -575,16 +612,18 @@ function Crew({ ops, run, say }) {
         </div>
         <div className="spray-muted" style={{ marginTop: 6 }}>
           {drone ? 'Drone pilots pick the drone they flew on each job\'s Done form. Their license and FAA numbers are copied into every flight record.'
-            : 'Ag Rows operators mark jobs done with one tap; their license is copied into each Ag Rows record.'} Make a link for each person below and text it to them (no sign-in).
+            : 'Ag Rows operators mark jobs done with one tap; their license is copied into each Ag Rows record.'} Make a link for each person below and text it to them (no sign-in). You get a phone alert 30 and 7 days before anything comes due (* = figured from the issue date).
           Farm managers and who gets field-done alerts are on the Managers tab.
         </div>
       </div>
       {list.length ? list.map((o) => (
         <div className={'spray-hidden' + (o.active === false ? ' off' : '')} key={o.id}>
           <div>
-            <b>{o.name}</b>{o.active === false && <span className="spray-muted"> · inactive</span>}
+            <b>{o.name}</b>{drone && o.chief && <span className="spray-chief">Chief supervisor</span>}{o.active === false && <span className="spray-muted"> · inactive</span>}
             {o.phone && <div className="spray-muted">{o.phone}</div>}
+            {o.supervisor && (o.license_type === 'apprentice' || !o.license_no) && <div className="spray-muted">Works under {o.supervisor}</div>}
             <div className="spray-muted">{papers(o)}</div>
+            {renewalsOf(o).length > 0 && <div className="spray-dues">{dueChips(o)}</div>}
             {links[normName(o.name)] && <div className="spray-muted">Link {links[normName(o.name)].lastUsed ? 'last opened ' + new Date(links[normName(o.name)].lastUsed).toLocaleDateString() : 'not opened yet'}</div>}
           </div>
           <div className="spray-row" style={{ margin: 0 }}>
@@ -606,7 +645,7 @@ function Crew({ ops, run, say }) {
 
 // Drones tab: name + FAA registration for the records and logbooks; battery numbers for the Costs tab.
 function Drones({ drones, setDrones, run, say }) {
-  const blank = { id: '', name: '', make: '', model: '', faa_reg: '', serial: '', battery_cost: '', battery_cycles: '', batteries_per_flight: '', acres_before: '', purchase_price: '', activated: '', active: true, notes: '' }
+  const blank = { id: '', name: '', make: '', model: '', faa_reg: '', serial: '', acres_before: '', purchase_price: '', activated: '', active: true, notes: '' }
   const [form, setForm] = useState(blank)
   const [busy, setBusy] = useState(false)
   const set = (k) => (e) => setForm((f) => Object.assign({}, f, { [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
@@ -631,9 +670,6 @@ function Drones({ drones, setDrones, run, say }) {
           <label>Model<input value={form.model} onChange={set('model')} placeholder="e.g. Agras T50" /></label>
           <label>FAA registration #<input value={form.faa_reg} onChange={set('faa_reg')} placeholder="FA3…" /></label>
           <label>Serial #<input value={form.serial} onChange={set('serial')} /></label>
-          <label>Battery cost ($ each)<input type="number" min="0" step="1" inputMode="decimal" value={v(form.battery_cost)} onChange={set('battery_cost')} /></label>
-          <label>Battery life (cycles)<input type="number" min="0" step="1" inputMode="numeric" value={v(form.battery_cycles)} onChange={set('battery_cycles')} /></label>
-          <label>Batteries per flight<input type="number" min="0" step="1" inputMode="numeric" value={v(form.batteries_per_flight)} onChange={set('batteries_per_flight')} /></label>
           <div className="spray-formhead">Purchase</div>
           <label>Purchase price ($) <span className="spray-muted">(drone + 3 batteries + charging station)</span><input type="number" min="0" step="1" inputMode="decimal" value={v(form.purchase_price)} onChange={set('purchase_price')} /></label>
           <label>Activated <span className="spray-muted">(warranty runs 1 year from this day)</span><input type="date" max={todayYmd()} value={form.activated || ''} onChange={set('activated')} /></label>
@@ -653,8 +689,7 @@ function Drones({ drones, setDrones, run, say }) {
             <b>🛸 {d.name}</b> <span className="spray-muted">{[d.make, d.model].filter(Boolean).join(' ')}{d.active === false ? ' · out of service' : ''}</span>
             <div className="spray-droneac"><b>{Math.round(Number(d.acres_total) || 0).toLocaleString()}</b> acres total
               <span className="spray-muted"> · {Math.round(Number(d.acres_before) || 0).toLocaleString()} before the app + {Math.round(Number(d.acres_logged) || 0).toLocaleString()} logged ({d.flights_logged || 0} flights, {hrs(d.minutes_logged)} hrs)</span></div>
-            <div className="spray-muted">{[d.faa_reg ? 'FAA ' + d.faa_reg : 'No FAA registration yet', d.serial && 'S/N ' + d.serial,
-              d.battery_cost != null && '$' + d.battery_cost + '/battery', d.battery_cycles != null && d.battery_cycles + ' cycles', d.batteries_per_flight != null && d.batteries_per_flight + '/flight'].filter(Boolean).join(' · ')}</div>
+            <div className="spray-muted">{[d.faa_reg ? 'FAA ' + d.faa_reg : 'No FAA registration yet', d.serial && 'S/N ' + d.serial].filter(Boolean).join(' · ')}</div>
             {d.purchase_price != null && <div className="spray-muted">Paid {money(d.purchase_price)} with 3 batteries + charging station</div>}
             {d.warranty_end && (() => {
               const days = Math.round((Date.parse(d.warranty_end + 'T12:00:00Z') - Date.parse(todayYmd() + 'T12:00:00Z')) / 86400000)
@@ -1214,8 +1249,9 @@ function FlightForm({ job, me, pilots, drones, onSave, onClose, initial, askReas
           <label className="wide">Notes <span className="spray-muted">(optional: skipped areas, drift concerns, buffer zones…)</span><input value={f.notes} onChange={set('notes')} maxLength={500} /></label>
           {askReason && <label className="wide">Why it's being corrected <span className="spray-muted">(kept in the record's history)</span><input value={f.reason} onChange={set('reason')} minLength={4} maxLength={300} required /></label>}
         </div>
-        {(() => { const p = pilots.find((x) => x.name === f.pilot); return p && p.license_exp && p.license_exp < f.date
-          ? <div className="spray-error" style={{ marginTop: 6 }}>⚠ {p.name}'s Idaho applicator license expired {fmtDay(p.license_exp)}. The record will be flagged.</div> : null })()}
+        {(() => { const p = pilots.find((x) => x.name === f.pilot)
+          const dues = p ? (p.dues || []).filter((r) => r.due < f.date) : []
+          return dues.length ? <div className="spray-error" style={{ marginTop: 6 }}>⚠ {p.name}: {dues.map((r) => r.label + ' ran out ' + fmtDay(r.due)).join(', ')}. The record will be flagged.</div> : null })()}
         {!initial && <div className="spray-muted" style={{ marginTop: 8 }}>
           Saved with the record automatically: the weather at the field for the hours flown, {products.length ? products.map((p) => p.name + (p.rate ? ' ' + p.rate : '')).join(', ') : 'the products'} from AgWorld with EPA numbers and amounts, the pilot's license and FAA numbers, and the drone's registration.
         </div>}
@@ -1247,7 +1283,7 @@ const hoursTxt = (w) => (w && w.hours && w.hours.length > 1 ? w.hours.map((h) =>
 const money = (n) => '$' + Number(n).toLocaleString(undefined, { minimumFractionDigits: Number(n) % 1 ? 2 : 0, maximumFractionDigits: 2 })
 const longDay = (ymd) => (ymd ? new Date(ymd + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) : '')
 
-function Reports({ run, say, pilots, drones }) {
+function Reports({ run, say, pilots, drones, chiefs }) {
   const yr = todayYmd().slice(0, 4)
   const [from, setFrom] = useState(yr + '-01-01')
   const [to, setTo] = useState(todayYmd())
@@ -1357,6 +1393,7 @@ function Reports({ run, say, pilots, drones }) {
   const OpsReport = () => (
     <div className="rp">
       <Head title="Agricultural Aircraft Operator Records" sub="14 CFR 137.71 · keep 12 months or more" />
+      <div className="rp-sum">Chief supervisor: {(chiefs || []).length ? chiefs.map((c) => c.name + (c.faa_cert ? ' (FAA ' + c.faa_cert + (c.part137_date ? ', 137.19(e) ' + longDay(c.part137_date) : '') + ')' : '')).join('; ') : <span className="rp-miss">not set (Operators › Drone pilots)</span>}</div>
       <div className="rp-sec">Pilots</div>
       <table className="rp-tbl">
         <thead><tr><th>Name</th><th>Address</th><th>FAA certificate #</th><th>137.19(e) date</th></tr></thead>
@@ -1396,7 +1433,6 @@ function Reports({ run, say, pilots, drones }) {
           const rows = recs.filter((r) => key(r) === n), ok = rows.filter((r) => r.status !== 'void')
           const who = rows[rows.length - 1]
           const dInfo = drones.find((d) => d.name === n) || {}
-          const cycles = dInfo.batteries_per_flight ? sum(ok, 'flights') * dInfo.batteries_per_flight : null
           return (
             <div className="rp-book" key={n}>
               <Head title={kind === 'pilot' ? 'Pilot Logbook' : 'Aircraft Logbook'} sub={kind === 'pilot'
@@ -1408,7 +1444,6 @@ function Reports({ run, say, pilots, drones }) {
                 <div><b>{sum(ok, 'flights')}</b>flights</div>
                 <div><b>{hrs(sum(ok, 'minutes'))}</b>hours</div>
                 <div><b>{acresTxt(sum(ok, 'acres'))}</b>acres</div>
-                {kind === 'drone' && cycles != null && <div><b>{cycles}</b>battery cycles</div>}
                 {kind === 'drone' && dInfo.acres_total != null && <div><b>{acresTxt(dInfo.acres_total)}</b>lifetime acres</div>}
               </div>
               <table className="rp-tbl">
@@ -1544,6 +1579,261 @@ function Reports({ run, say, pilots, drones }) {
         : section === 'state' ? (crewSec === 'ground' ? <GroundReport /> : <StateReport />) : faa === 'ops' ? <OpsReport /> : <Logbook kind={faa === 'pilots' ? 'pilot' : 'drone'} />}
       {form && <FlightForm job={form.job} pilots={pilots} drones={activeDrones} initial={form.initial} askReason={!!form.initial}
         title={form.initial ? 'Correct flight record' : 'Add flight log'} onSave={form.save} onClose={() => setForm(null)} />}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Costs tab (Spray admins): drone cost per acre, acres per labor hour, labor cost per hour
+// (functions/sprayCosts.js). Hours are entered each Sunday for Mon–Sat; pay rates and expenses are
+// kept on the server where only Spray admins reach them. Chemical isn't included.
+// ---------------------------------------------------------------------------
+const COST_PARTS = [
+  ['labor', 'Labor', '#3987e5'], ['battery', 'Batteries', '#d95926'], ['wear', 'Drone wear', '#199e70'], ['repairs', 'Repairs', '#c98500'],
+  ['fuel', 'Fuel', '#d55181'], ['fixed', 'Yearly fixed', '#0ca30c'], ['other', 'Other', '#9085e9']
+]
+const usd = (n, d) => (n == null ? '—' : '$' + Number(n).toLocaleString(undefined, { minimumFractionDigits: d == null ? 2 : d, maximumFractionDigits: d == null ? 2 : d }))
+const lastMonday = () => { const d = new Date(todayYmd() + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7) - 7); return d.toISOString().slice(0, 10) }
+const shiftWeek = (w, n) => { const d = new Date(w + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + 7 * n); return d.toISOString().slice(0, 10) }
+const wkLabel = (w) => { const a = new Date(w + 'T12:00:00Z'), b = new Date(w + 'T12:00:00Z'); b.setUTCDate(b.getUTCDate() + 5); const f = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }); return f(a) + ' – ' + f(b) }
+
+// One small weekly line chart (one measure, one axis), with a hover readout per week.
+function WeekLine({ weeks, field, fmt, axisFmt, color, title }) {
+  const pts = weeks.filter((w) => w[field] != null)
+  const [hov, setHov] = useState(null)
+  if (pts.length < 2) return <div className="cost-chart"><div className="cost-ctitle">{title}</div><div className="spray-muted">Shows once there are two weeks with numbers.</div></div>
+  const W = 520, H = 150, L = 44, R = 10, T = 12, B = 24
+  const max = Math.max(...pts.map((p) => p[field])) * 1.15 || 1
+  const x = (i) => L + (pts.length === 1 ? 0 : i * (W - L - R) / (pts.length - 1)), y = (v) => T + (H - T - B) * (1 - v / max)
+  const ticks = [0, max / 2, max].map((v) => Math.round(v * 10) / 10)
+  const line = pts.map((p, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p[field]).toFixed(1)).join(' ')
+  return (
+    <div className="cost-chart">
+      <div className="cost-ctitle">{title}</div>
+      <svg viewBox={'0 0 ' + W + ' ' + H} role="img" aria-label={title} onMouseLeave={() => setHov(null)}>
+        {ticks.map((t) => <g key={t}><line x1={L} x2={W - R} y1={y(t)} y2={y(t)} className="cost-grid" /><text x={L - 6} y={y(t) + 4} textAnchor="end" className="cost-axis">{(axisFmt || fmt)(t)}</text></g>)}
+        <path d={line} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        {pts.map((p, i) => <circle key={p.week} cx={x(i)} cy={y(p[field])} r={hov === i ? 5 : 3.5} fill={color} stroke="var(--sp-card)" strokeWidth="2" />)}
+        {pts.map((p, i) => <rect key={'h' + p.week} x={x(i) - (W - L - R) / pts.length / 2} y={T} width={(W - L - R) / pts.length} height={H - T - B} fill="transparent" onMouseEnter={() => setHov(i)} onClick={() => setHov(i)} />)}
+        {[0, pts.length - 1].map((i) => <text key={'x' + i} x={x(i)} y={H - 6} textAnchor={i ? 'end' : 'start'} className="cost-axis">{wkLabel(pts[i].week).split(' – ')[0]}</text>)}
+        {hov != null && <line x1={x(hov)} x2={x(hov)} y1={T} y2={H - B} className="cost-cross" />}
+      </svg>
+      <div className="cost-hover">{hov != null ? 'Week of ' + wkLabel(pts[hov].week) + ': ' + fmt(pts[hov][field]) + ' · ' + Math.round(pts[hov].acres).toLocaleString() + ' ac' + (pts[hov].hours ? ' · ' + pts[hov].hours + ' hrs' : '') : 'Tap or hover a week'}</div>
+    </div>
+  )
+}
+
+function Costs({ run, say, ops }) {
+  const [year, setYear] = useState(todayYmd().slice(0, 4))
+  const [d, setD] = useState(null)
+  const [pane, setPane] = useState('numbers')   // numbers | hours | pay | expenses
+  const load = async () => { try { setD(await run({ action: 'costs', year })) } catch (e) { /* shown */ } }
+  useEffect(() => { load() }, [year])
+  const pilotsList = ops.filter((o) => o.crew === 'drone' && o.active !== false).map((o) => o.name)
+  return (
+    <div>
+      <div className="spray-subtabs">
+        {[['numbers', 'Numbers'], ['hours', 'Weekly hours'], ['expenses', 'Expenses'], ['pay', 'Pay rates']].map(([k, l]) =>
+          <button key={k} className={pane === k ? 'active' : ''} onClick={() => setPane(k)}>{l}</button>)}
+      </div>
+      {pane === 'numbers' && <CostNumbers d={d} year={year} setYear={setYear} />}
+      {pane === 'hours' && <WeekHours run={run} say={say} pilots={pilotsList} onSaved={load} />}
+      {pane === 'expenses' && <Expenses run={run} say={say} year={year} onSaved={load} />}
+      {pane === 'pay' && <PayRates run={run} say={say} pilots={pilotsList} onSaved={load} />}
+    </div>
+  )
+}
+
+function CostNumbers({ d, year, setYear }) {
+  const yNow = Number(todayYmd().slice(0, 4))
+  if (!d) return <div className="spray-empty">Loading costs…</div>
+  const s = d.season
+  const parts = s.parts.filter((p) => p.amount > 0)
+  const maxPilotAph = Math.max(1, ...d.pilots.map((p) => p.acres_per_hour || 0))
+  return (
+    <div>
+      <div className="spray-bar">
+        <select value={year} onChange={(e) => setYear(e.target.value)}>{[yNow, yNow - 1, yNow - 2].map((y) => <option key={y}>{y}</option>)}</select>
+        <span className="spray-muted">Drone crew · {s.acres.toLocaleString()} acres · {s.flights} flights · chemical not included</span>
+      </div>
+      <div className="cost-tiles">
+        <div><b>{usd(s.cost_per_acre)}</b><span>cost per acre</span></div>
+        <div><b>{s.acres_per_hour == null ? '—' : s.acres_per_hour}</b><span>acres per labor hour</span></div>
+        <div><b>{usd(s.labor_per_hour)}</b><span>labor cost per hour</span></div>
+        <div><b>{usd(s.total, 0)}</b><span>total cost</span></div>
+      </div>
+      {d.fuel_missing.length > 0 && <div className="cost-note warn">⚠ Fuel not in yet for {d.fuel_missing.map((m) => new Date(m + '-15T12:00:00Z').toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' })).join(', ')}: cost per acre is low until it's added (Expenses).</div>}
+
+      <div className="spray-box">
+        <div className="cost-ctitle">What makes up {usd(s.cost_per_acre)} an acre</div>
+        {parts.length ? <>
+          <div className="cost-stack">{parts.map((p) => { const c = COST_PARTS.find((x) => x[0] === p.key); return <i key={p.key} style={{ flexGrow: p.amount, background: c[2] }} title={c[1] + ': ' + usd(p.per_acre) + '/ac'} /> })}</div>
+          <div className="cost-legend">{parts.map((p) => { const c = COST_PARTS.find((x) => x[0] === p.key); return <span key={p.key}><i style={{ background: c[2] }} />{c[1]} <b>{usd(p.per_acre)}</b><em>{usd(p.amount, 0)}</em></span> })}</div>
+        </> : <div className="spray-muted">No costs yet for {year}. Enter weekly hours, pay rates and expenses.</div>}
+      </div>
+
+      <div className="cost-two">
+        <WeekLine weeks={d.weeks} field="cost_per_acre" fmt={(v) => usd(v)} axisFmt={(v) => usd(v, 0)} color="#3987e5" title="Cost per acre, by week" />
+        <WeekLine weeks={d.weeks} field="acres_per_hour" fmt={(v) => String(v)} color="#199e70" title="Acres per labor hour, by week" />
+      </div>
+
+      {d.flags.length > 0 && <div className="spray-box cost-flags"><div className="cost-ctitle">Worth a look</div>
+        {d.flags.map((f, i) => <div key={i}>⚠ {f.week ? 'Week of ' + wkLabel(f.week) + ': ' : ''}{f.what}</div>)}</div>}
+
+      <div className="spray-day">By pilot</div>
+      <div className="spray-box cost-scroll">
+        {d.pilots.length ? <table className="cost-tbl">
+          <thead><tr><th>Pilot</th><th>Acres</th><th>Hours</th><th>Acres / hr</th><th className="cost-barcol" /><th>Cost / hr</th><th>Labor / ac</th></tr></thead>
+          <tbody>{d.pilots.map((p) => (
+            <tr key={p.name}><td>{p.name}{p.pay_type === 'salary' ? <span className="spray-muted"> · salary</span> : ''}</td><td>{Math.round(p.acres).toLocaleString()}</td><td>{p.hours || '—'}</td>
+              <td><b>{p.acres_per_hour == null ? '—' : p.acres_per_hour}</b></td>
+              <td className="cost-barcol"><span className="cost-hbar"><i style={{ width: ((p.acres_per_hour || 0) / maxPilotAph * 100) + '%' }} /></span></td>
+              <td>{usd(p.cost_per_hour)}</td><td>{usd(p.labor_per_acre)}</td></tr>))}</tbody>
+        </table> : <div className="spray-muted">No pilot hours or flights yet.</div>}
+      </div>
+
+      <div className="spray-day">By drone</div>
+      <div className="spray-box cost-scroll">
+        {d.drones.length ? <table className="cost-tbl">
+          <thead><tr><th>Drone</th><th>Acres</th><th>Flights</th><th>Ac / flight</th><th>Batteries</th><th>Wear</th><th>Repairs</th><th>Machine $/ac</th></tr></thead>
+          <tbody>{d.drones.map((x) => <tr key={x.name}><td>{x.name}</td><td>{Math.round(x.acres).toLocaleString()}</td><td>{x.flights}</td><td>{x.acres_per_flight == null ? '—' : x.acres_per_flight}</td>
+            <td>{usd(x.battery, 0)}</td><td>{usd(x.wear, 0)}</td><td>{usd(x.repairs, 0)}</td><td><b>{usd(x.machine_per_acre)}</b></td></tr>)}</tbody>
+        </table> : <div className="spray-muted">No flights yet.</div>}
+      </div>
+
+      <div className="spray-day">By week</div>
+      <div className="spray-box cost-scroll">
+        <table className="cost-tbl">
+          <thead><tr><th>Week</th><th>Acres</th><th>Hours</th><th>Ac / hr</th>{COST_PARTS.map((c) => <th key={c[0]}>{c[1]}</th>)}<th>Total</th><th>$ / ac</th></tr></thead>
+          <tbody>{d.weeks.slice().reverse().map((w) => <tr key={w.week}><td>{wkLabel(w.week)}{w.fuel_missing ? <span className="spray-muted"> · fuel?</span> : ''}</td><td>{Math.round(w.acres)}</td><td>{w.hours || '—'}{w.unpaid_hours ? '*' : ''}</td><td>{w.acres_per_hour == null ? '—' : w.acres_per_hour}</td>
+            {COST_PARTS.map((c) => <td key={c[0]}>{w[c[0]] ? usd(w[c[0]], 0) : ''}</td>)}<td>{usd(w.total, 0)}</td><td><b>{usd(w.cost_per_acre)}</b></td></tr>)}</tbody>
+        </table>
+        {d.weeks.some((w) => w.unpaid_hours) && <div className="spray-muted" style={{ marginTop: 6 }}>* includes hours for someone with no pay rate yet (not in labor cost).</div>}
+      </div>
+      {d.notes.length > 0 && <div className="cost-note">{d.notes.map((n, i) => <div key={i}>• {n}</div>)}</div>}
+      <div className="spray-muted" style={{ margin: '8px 2px' }}>How it's figured: salary ÷ {d.assumptions.salary_hours} per hour · drone purchase price ÷ {d.assumptions.wear_years} a year over that drone's acres · battery purchases over the season's acres · fuel spread over each month's acres · yearly fixed over the season's acres · repairs from the Drones tab maintenance log.</div>
+    </div>
+  )
+}
+
+// Sunday: last week's hours (Mon–Sat), one row per drone pilot.
+function WeekHours({ run, say, pilots, onSaved }) {
+  const [week, setWeek] = useState(lastMonday())
+  const [rows, setRows] = useState({})
+  const [pay, setPay] = useState({})
+  const [busy, setBusy] = useState(false)
+  const key = (n) => String(n || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 60)
+  useEffect(() => { run({ action: 'getWeek', week }).then((r) => {
+    const m = {}; Object.values(r.rows || {}).forEach((h) => { m[key(h.name)] = String(h.hours) }); setRows(m); setPay(r.pay || {})
+  }).catch(() => {}) }, [week])
+  const names = [...new Set(pilots.concat(Object.keys(rows).map((k) => (pilots.find((p) => key(p) === k)) || null).filter(Boolean)))]
+  const save = async () => {
+    setBusy(true)
+    try { await run({ action: 'saveHours', week, rows: names.map((n) => ({ name: n, hours: rows[key(n)] == null ? '' : rows[key(n)] })) }); say('Hours saved for ' + wkLabel(week)); onSaved && onSaved() } catch (e) { /* shown */ }
+    setBusy(false)
+  }
+  const total = names.reduce((t, n) => t + (parseFloat(rows[key(n)]) || 0), 0)
+  return (
+    <div className="spray-box">
+      <div className="spray-bar">
+        <button onClick={() => setWeek(shiftWeek(week, -1))}>‹</button>
+        <b>Week of {wkLabel(week)}</b>
+        <button disabled={shiftWeek(week, 1) > todayYmd()} onClick={() => setWeek(shiftWeek(week, 1))}>›</button>
+        {week !== lastMonday() && <button onClick={() => setWeek(lastMonday())}>Last week</button>}
+      </div>
+      <div className="spray-muted" style={{ margin: '4px 0 8px' }}>Monday–Saturday hours from Paycom. For Sayger, his hours as you know them.</div>
+      {names.map((n) => (
+        <div className="cost-hrow" key={n}>
+          <span>{n}<span className="spray-muted">{pay[key(n)] ? ' · ' + (pay[key(n)].type === 'salary' ? 'salary' : usd(pay[key(n)].rate) + '/hr') : ' · no pay rate yet'}</span></span>
+          <input type="number" min="0" max="100" step="0.25" inputMode="decimal" value={rows[key(n)] == null ? '' : rows[key(n)]} placeholder="hrs"
+            onChange={(e) => { const v = e.target.value; setRows((r) => Object.assign({}, r, { [key(n)]: v })) }} />
+        </div>
+      ))}
+      {!names.length && <div className="spray-muted">Add drone pilots on the Operators tab first.</div>}
+      <div className="spray-row" style={{ marginTop: 10 }}>
+        <button className="save" disabled={busy || !names.length} onClick={save}>Save hours</button>
+        <span className="spray-muted">{total} hrs total</span>
+      </div>
+    </div>
+  )
+}
+
+function PayRates({ run, say, pilots, onSaved }) {
+  const [pay, setPay] = useState({})
+  const [f, setF] = useState(null)
+  const key = (n) => String(n || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 60)
+  useEffect(() => { run({ action: 'listPay' }).then((r) => setPay(r.pay || {})).catch(() => {}) }, [])
+  const save = async () => {
+    try { const r = await run(Object.assign({ action: 'savePay' }, f)); setPay(r.pay || {}); say('Saved ' + f.name + '\'s pay'); setF(null); onSaved && onSaved() } catch (e) { /* shown */ }
+  }
+  return (
+    <div className="spray-box">
+      <div className="spray-muted" style={{ marginBottom: 8 }}>Only Spray admins see these. Salary is figured at salary ÷ 2080 per hour of the hours you enter.</div>
+      {pilots.map((n) => { const p = pay[key(n)]; const editing = f && key(f.name) === key(n)
+        return (
+          <div className="cost-hrow" key={n}>
+            <span>{n}</span>
+            {editing ? <span className="cost-payedit">
+              <select value={f.type} onChange={(e) => setF(Object.assign({}, f, { type: e.target.value }))}><option value="hourly">Hourly</option><option value="salary">Salary</option></select>
+              {f.type === 'hourly' ? <input type="number" min="0" step="0.25" inputMode="decimal" placeholder="$/hr" value={f.rate} onChange={(e) => setF(Object.assign({}, f, { rate: e.target.value }))} />
+                : <input type="number" min="0" step="100" inputMode="decimal" placeholder="$ a year" value={f.salary} onChange={(e) => setF(Object.assign({}, f, { salary: e.target.value }))} />}
+              <button className="save" onClick={save}>Save</button><button onClick={() => setF(null)}>Cancel</button>
+            </span> : <span>
+              <span className="spray-muted">{p ? (p.type === 'salary' ? usd(p.salary, 0) + ' a year (' + usd(p.salary / 2080) + '/hr)' : usd(p.rate) + '/hr') : 'not set'}</span>
+              <button onClick={() => setF({ name: n, type: (p && p.type) || 'hourly', rate: p && p.rate != null ? String(p.rate) : '', salary: p && p.salary != null ? String(p.salary) : '' })}>{p ? 'Change' : 'Set'}</button>
+            </span>}
+          </div>
+        ) })}
+      {!pilots.length && <div className="spray-muted">Add drone pilots on the Operators tab first.</div>}
+    </div>
+  )
+}
+
+function Expenses({ run, say, year, onSaved }) {
+  const [list, setList] = useState([])
+  const blank = { kind: 'fuel', when: todayYmd().slice(0, 7), amount: '', what: '' }
+  const [f, setF] = useState(blank)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { run({ action: 'listExpenses' }).then((r) => setList(r.expenses || [])).catch(() => {}) }, [])
+  const set = (k) => (e) => { const v = e.target.value; setF((x) => Object.assign({}, x, { [k]: v }, k === 'kind' ? { when: v === 'fuel' ? todayYmd().slice(0, 7) : v === 'fixed' ? todayYmd().slice(0, 4) : todayYmd() } : {})) }
+  const [droneNames, setDroneNames] = useState([])
+  useEffect(() => { run({ action: 'listDrones' }).then((r) => setDroneNames((r.drones || []).map((x) => x.name))).catch(() => {}) }, [])
+  const add = async () => {
+    setBusy(true)
+    try { const r = await run(Object.assign({ action: 'addExpense' }, f)); setList(r.expenses || []); setF(Object.assign({}, blank, { kind: f.kind, when: f.when })); say('Added'); onSaved && onSaved() } catch (e) { /* shown */ }
+    setBusy(false)
+  }
+  const del = async (x) => {
+    if (!window.confirm('Delete this expense (' + usd(x.amount) + ')?')) return
+    try { const r = await run({ action: 'deleteExpense', id: x.id }); setList(r.expenses || []); onSaved && onSaved() } catch (e) { /* shown */ }
+  }
+  const KL = { fuel: 'Fuel', battery: 'Batteries', fixed: 'Yearly fixed', other: 'Other' }
+  const whenTxt = (x) => (x.kind === 'fuel' ? new Date(x.when + '-15T12:00:00Z').toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }) : x.kind === 'fixed' ? x.when : fmtDay(x.when))
+  const shown = list.filter((x) => String(x.when).slice(0, 4) === year)
+  return (
+    <div>
+      <div className="spray-box">
+        <div className="spray-form">
+          <label>Type<select value={f.kind} onChange={set('kind')}><option value="fuel">Fuel (monthly total)</option><option value="battery">Batteries bought</option><option value="fixed">Yearly fixed (insurance, fees, software…)</option><option value="other">Other (one time)</option></select></label>
+          {f.kind === 'fuel' && <label>Month<input type="month" value={f.when} onChange={set('when')} /></label>}
+          {f.kind === 'fixed' && <label>Year<input type="number" min="2020" max="2100" value={f.when} onChange={set('when')} /></label>}
+          {(f.kind === 'other' || f.kind === 'battery') && <label>Date<input type="date" max={todayYmd()} value={f.when} onChange={set('when')} /></label>}
+          {f.kind === 'battery' && <label>For drone <span className="spray-muted">(optional)</span><select value={f.drone || ''} onChange={set('drone')}><option value="">Whole fleet</option>{droneNames.map((n) => <option key={n}>{n}</option>)}</select></label>}
+          <label>Amount ($)<input type="number" min="0" step="0.01" inputMode="decimal" value={f.amount} onChange={set('amount')} /></label>
+          <label className="wide">What it was {(f.kind === 'fuel' || f.kind === 'battery') && <span className="spray-muted">(optional{f.kind === 'fuel' ? ", e.g. from the controller's June report" : ''})</span>}<input value={f.what} onChange={set('what')} maxLength={200}
+            placeholder={f.kind === 'fixed' ? 'e.g. drone liability insurance' : f.kind === 'other' ? 'e.g. spare nozzles, trailer tires' : f.kind === 'battery' ? 'e.g. 2 x DB1560' : ''} /></label>
+        </div>
+        <div className="spray-row"><button className="save" disabled={busy} onClick={add}>Add expense</button></div>
+        <div className="spray-muted">Repairs go on the Drones tab maintenance log, so they're counted on the right drone.</div>
+      </div>
+      <div className="spray-day">{year} expenses ({shown.length})</div>
+      {shown.map((x) => (
+        <div className="spray-hidden" key={x.id}>
+          <div><b>{usd(x.amount)}</b> <span className="spray-muted">{KL[x.kind]} · {whenTxt(x)}{x.drone ? ' · ' + x.drone : ''}{x.what ? ' · ' + x.what : ''}</span></div>
+          <button className="spray-danger" onClick={() => del(x)}>Delete</button>
+        </div>
+      ))}
+      {!shown.length && <div className="spray-empty">Nothing entered for {year} yet.</div>}
     </div>
   )
 }
