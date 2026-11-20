@@ -1251,7 +1251,7 @@ body.spray-dark:has(.ops-hub) { background: #f7f5f0; }
   /* the old Google spray app's colors */
   --sp-bg: #0c0f11; --sp-card: #161a1e; --sp-card2: #1d2329; --sp-line: #252b31; --sp-line2: #323a42; --sp-tx: #e8e8e3; --sp-tx2: #9aa1a7; --sp-tx3: #6b737a;
   --sp-green: #86c070; --sp-greenBg: #17261a; --sp-amber: #f0b24f; --sp-amberBg: #352813; --sp-red: #ff9b9b; --sp-redBg: #3a1b1d;
-  --sp-accent: #7aaef0; --sp-blueBg: #1f2a36; --sp-drone: #ecd84a; --sp-spray: #86c070; --sp-spread: #f2884a; --sp-ontag: #14130c;
+  --sp-accent: #7aaef0; --sp-blueBg: #1f2a36; --sp-drone: #ecd84a; --sp-spray: #86c070; --sp-spread: #f2884a; --sp-fum: #b48ae8; --sp-ontag: #14130c;
   background: var(--sp-bg); color: var(--sp-tx); min-height: calc(100vh - 60px);
   padding: 12px 16px 80px; max-width: none; margin: 0;
 }
@@ -1766,3 +1766,8 @@ body.spray-dark:has(.ops-hub) { background: #f7f5f0; }
 .spray-ptbl td { padding: 6px; border-bottom: 1px solid rgba(127,127,127,.15); vertical-align: top; }
 .spray-notam-text { white-space: pre-wrap; font: 12.5px/1.45 ui-monospace, Menlo, monospace; background: rgba(127,127,127,.12); border-radius: 8px; padding: 10px; margin-top: 10px; overflow-wrap: anywhere; }
 .spray-faa .spray-subtabs button { white-space: nowrap; }
+/* Ag Rows fumigation jobs (purple) */
+.spray-card.k-fumigation { border-left-color: var(--sp-fum, #b48ae8); }
+.spray-tag.k-fumigation { background: var(--sp-fum, #b48ae8); }
+.spray-cal-legend i.k-fumigation, .spray-cal .dots i.k-fumigation { background: var(--sp-fum, #b48ae8); }
+.spray-cal .mc.k-fumigation { border-left-color: var(--sp-fum, #b48ae8); }

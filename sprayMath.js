@@ -58,12 +58,12 @@ export function doneRows(states, jobs) {
   return out
 }
 
-/** The color of the stripe on a card: drone yellow, spray green, spread orange. */
+/** The color of the stripe on a card: drone yellow, spray green, spread orange, fumigation purple. */
 export function kindOf(j) {
   if (j.source === 'drone') return 'drone'
-  return j.job_type === 'Spread' ? 'spread' : 'spray'
+  return j.job_type === 'Spread' ? 'spread' : j.job_type === 'Fumigation' ? 'fumigation' : 'spray'
 }
-export const KIND_LABEL = { drone: 'Drone', spray: 'Ag Rows spray', spread: 'Ag Rows spread' }
+export const KIND_LABEL = { drone: 'Drone', spray: 'Ag Rows spray', spread: 'Ag Rows spread', fumigation: 'Ag Rows fumigation' }
 
 const CROP_EMOJI = [
   [/potato/, '🥔'], [/sweet ?corn|corn|maize/, '🌽'], [/wheat|barley|grain|oat|triticale/, '🌾'],

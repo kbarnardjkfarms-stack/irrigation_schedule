@@ -979,7 +979,7 @@ function CrewRecords({ code, me }) {
           {(i === 0 || list[i - 1].date !== r.date) && <div className="spray-day">{fmtDay(r.date)}</div>}
           <div className="spray-hidden">
             <div>
-              <b>{r.site.field}</b> <span className="spray-muted">{[r.job_type === 'Spread' ? 'Spread' : 'Spray', r.site.farm, r.site.crop].filter(Boolean).join(' · ')}</span>
+              <b>{r.site.field}</b> <span className="spray-muted">{[(r.job_type === 'Spread' || r.job_type === 'Fumigation' ? r.job_type : 'Spray'), r.site.farm, r.site.crop].filter(Boolean).join(' · ')}</span>
               <div className="spray-muted">{[r.operator.name || 'Nobody assigned', r.done_time ? 'done ' + t12(r.done_time) : '', r.products.map((p) => p.name).join(', ')].filter(Boolean).join(' · ')}</div>
             </div>
             <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><b>{Math.round(Number(r.acres) || 0).toLocaleString()} ac</b>{r.gallons ? <div className="spray-muted">{Math.round(r.gallons).toLocaleString()} gal</div> : null}</div>
@@ -1110,7 +1110,7 @@ function Calendar({ jobs, ops, isAdmin, run, say, openFlight }) {
             <button key={v} className={crew === v ? 'active' : ''} onClick={() => setCrew(v)}>{l}</button>
           ))}
         </div>
-        <span className="spray-cal-legend"><span><i className="k-drone" />Drone</span><span><i className="k-spray" />Spray</span><span><i className="k-spread" />Spread</span></span>
+        <span className="spray-cal-legend"><span><i className="k-drone" />Drone</span><span><i className="k-spray" />Spray</span><span><i className="k-spread" />Spread</span><span><i className="k-fumigation" />Fumigation</span></span>
       </div>
       <div className="spray-cal">
         {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((x) => <div className="hd" key={x}>{x}</div>)}
@@ -1491,7 +1491,7 @@ function Reports({ run, say, pilots, drones, chiefs }) {
         <div className="rp-sec">Applications ({live2.length})</div>
         {gr.map((r) => (
           <div className={'rp-rec' + (r.status === 'void' ? ' void' : '')} key={r.id}>
-            <div className="rp-rechead"><b>{longDay(r.date)} · {r.site.field}</b><span>{[r.job_type === 'Spread' ? 'Spread' : 'Spray', r.site.farm, r.status === 'void' ? 'VOID: ' + ((r.void && r.void.reason) || '') : ''].filter(Boolean).join(' · ')}</span></div>
+            <div className="rp-rechead"><b>{longDay(r.date)} · {r.site.field}</b><span>{[(r.job_type === 'Spread' || r.job_type === 'Fumigation' ? r.job_type : 'Spray'), r.site.farm, r.status === 'void' ? 'VOID: ' + ((r.void && r.void.reason) || '') : ''].filter(Boolean).join(' · ')}</span></div>
             <div className="rp-grid">
               <div><i>Applied for</i>{r.applied_for.name}, {r.applied_for.address}{r.applied_for.farm ? ' (' + r.applied_for.farm + ')' : ''}</div>
               <div><i>Crop / site</i>{r.site.crop || '—'}</div>
