@@ -1207,6 +1207,9 @@ function Reports({ run, say, pilots, drones, chiefs }) {
   const yr = todayYmd().slice(0, 4)
   const [from, setFrom] = useState(yr + '-01-01')
   const [to, setTo] = useState(todayYmd())
+  // Records by year (Idaho keeps 2 years, FAA 12 months; nothing here is ever deleted)
+  const yearSel = /^\d{4}-01-01$/.test(from) && (to === from.slice(0, 4) + '-12-31' || (from.slice(0, 4) === yr && to === todayYmd())) ? from.slice(0, 4) : 'custom'
+  const pickYear = (y) => { if (y === 'custom') return; setFrom(y + '-01-01'); setTo(y === yr ? todayYmd() : y + '-12-31') }
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState(false)
   const [section, setSection] = useState('state')   // state | faa
@@ -1479,6 +1482,10 @@ function Reports({ run, say, pilots, drones, chiefs }) {
           <button key={k} className={faa === k ? 'active' : ''} onClick={() => setFaa(k)}>{l}</button>)}
       </div>}
       <div className="spray-box rp-ctl no-print">
+        <label>Year<select value={yearSel} onChange={(e) => pickYear(e.target.value)}>
+          {[0, 1, 2, 3].map((n) => String(Number(yr) - n)).map((y) => <option key={y} value={y}>{y}</option>)}
+          <option value="custom">Custom dates</option>
+        </select></label>
         <label>From<input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} /></label>
         <label>To<input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} /></label>
         {!(section === 'faa' && faa === 'pilots') && !(section === 'state' && crewSec === 'ground') && <label>Pilot<select value={pilot} onChange={(e) => setPilot(e.target.value)}><option value="">All</option>{pilotNames.map((n) => <option key={n}>{n}</option>)}</select></label>}
