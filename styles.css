@@ -1732,3 +1732,24 @@ body.spray-dark:has(.ops-hub) { background: #f7f5f0; }
 .spray-fold-head { display: flex; width: 100%; justify-content: space-between; align-items: center; background: none; border: 0; padding: 0; color: inherit; font: inherit; font-weight: 700; cursor: pointer; text-align: left; min-height: 32px; }
 .spray-fold-chev { transition: transform .15s; opacity: .7; }
 .spray-fold.open .spray-fold-chev { transform: rotate(180deg); }
+/* Spray: problems on the flight log, FAA paperwork */
+.spray-prob .spray-seg { margin: 4px 0; }
+.spray-paper { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid rgba(127,127,127,.2); }
+.spray-paper input[type="date"] { min-width: 150px; }
+.spray-box .late { color: #e5534b; }
+@media (max-width: 560px) { .spray-paper { grid-template-columns: 1fr; } }
+/* Spray > FAA tab */
+.spray-faa .spray-h3 { margin: 18px 0 6px; font-size: 15px; }
+.spray-mrow { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid rgba(127,127,127,.18); }
+.spray-mrow:first-of-type { border-top: 0; }
+.spray-attn { border-color: #e5a03a; }
+.spray-attn-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid rgba(127,127,127,.18); color: #e5a03a; }
+.spray-ok { color: #4caf7a; font-size: 13px; }
+.spray-warn { color: #e5a03a; font-size: 13px; font-weight: 600; }
+.spray-bad { color: #e5534b; font-size: 13px; font-weight: 600; }
+.spray-back { margin-bottom: 10px; }
+.spray-faa .spray-fold { margin: 10px 0 0; }
+@media (max-width: 560px) { .spray-mrow { grid-template-columns: 1fr auto; } .spray-mrow > div:first-child { grid-column: 1 / -1; } }
+.spray-rule { padding: 8px 0; border-top: 1px solid rgba(127,127,127,.18); }
+.spray-rule-when { color: #e5a03a; font-size: 13px; margin: 2px 0; }
+.spray-rule-src { font-size: 11px; color: #8a8f94; border: 1px solid rgba(127,127,127,.35); border-radius: 999px; padding: 0 6px; margin-left: 4px; white-space: nowrap; }

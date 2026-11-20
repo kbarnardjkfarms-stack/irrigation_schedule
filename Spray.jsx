@@ -71,6 +71,8 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
 
   // Dark page while the Spray module is open (the rest of AIO stays as it is).
   useEffect(() => { document.body.classList.add('spray-dark'); return () => document.body.classList.remove('spray-dark') }, [])
+  // Phone alerts are turned on from the name menu (PhoneAlerts.jsx); here just keep this phone's alert token fresh.
+  useEffect(() => { refreshPush().catch(() => {}) }, [])
 
   const jobs = useMemo(() => mergeJobs(jobsDoc || {}, states), [jobsDoc, states])
   // A farm manager sees their own jobs first: their name on the job, or their farms on their AIO login.
@@ -87,7 +89,6 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
       <div className="spray-brand">
         <div className="spray-logo"><img src={jkLogo} alt="JK Farms" /></div>
         <h1>Spray Schedule</h1>
-        <Alerts say={say} />
       </div>
       <div className="spray-tabs">
         <button className={view === 'schedule' ? 'active' : ''} onClick={() => setView('schedule')}>Schedule</button>
@@ -95,6 +96,7 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
         {isAdmin && <button className={view === 'crew' ? 'active' : ''} onClick={() => setView('crew')}>Operators</button>}
         {isAdmin && <button className={view === 'drones' ? 'active' : ''} onClick={() => setView('drones')}>Drones</button>}
         {isAdmin && <button className={view === 'reports' ? 'active' : ''} onClick={() => setView('reports')}>Reports</button>}
+        {isAdmin && <button className={view === 'faa' ? 'active' : ''} onClick={() => setView('faa')}>FAA</button>}
         {isAdmin && <button className={view === 'costs' ? 'active' : ''} onClick={() => setView('costs')}>Costs</button>}
         {isAdmin && <button className={view === 'alerts' ? 'active' : ''} onClick={() => setView('alerts')}>Alerts</button>}
       </div>
@@ -105,6 +107,7 @@ export default function Spray({ userRole, sprayAdmin, userProfile }) {
       {view === 'drones' && isAdmin && <Drones drones={drones} setDrones={setDrones} run={run} say={say} />}
       {view === 'reports' && isAdmin && <Reports run={run} say={say} pilots={pilots} drones={drones} chiefs={ops.filter((o) => o.crew === 'drone' && o.chief)} />}
       {view === 'costs' && isAdmin && <Costs run={run} say={say} ops={ops} />}
+      {view === 'faa' && isAdmin && <FaaTab run={run} say={say} ops={ops} jobs={jobs} />}
       {flightFor && <FlightForm job={flightFor.job} pilots={pilots} drones={drones.filter((d) => d.active !== false)}
         onSave={flightFor.save} onClose={() => setFlightFor(null)} />}
       {view === 'alerts' && isAdmin && <AlertLog say={say} />}
@@ -145,7 +148,8 @@ function jobActions(run, say, openFlight) {
       await run({ action: 'hide', jobKey: j.job_key })
       say('Removed ' + j.field, async () => { await run({ action: 'restore', jobKey: j.job_key }); say('Back on the schedule') })
     },
-    restore: async (j) => { await run({ action: 'restore', jobKey: j.job_key }); say('Back on the schedule') }
+    restore: async (j) => { await run({ action: 'restore', jobKey: j.job_key }); say('Back on the schedule') },
+    notam: async (j, filed) => { await run({ action: 'notam', jobKey: j.job_key, filed }); say(filed ? 'NOTAM marked filed for ' + j.field : 'NOTAM unmarked') }
   }
 }
 
@@ -653,16 +657,21 @@ function Crew({ ops, run, say }) {
 
 // Drones tab: name + FAA registration for the records and logbooks; battery numbers for the Costs tab.
 function Drones({ drones, setDrones, run, say }) {
-  const blank = { id: '', name: '', make: '', model: '', faa_reg: '', serial: '', acres_before: '', purchase_price: '', activated: '', active: true, notes: '' }
+  const blank = { id: '', name: '', make: '', model: '', faa_reg: '', reg_exp: '', serial: '', acres_before: '', purchase_price: '', activated: '', active: true, notes: '' }
   const [form, setForm] = useState(blank)
   const [busy, setBusy] = useState(false)
   const set = (k) => (e) => setForm((f) => Object.assign({}, f, { [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
   const go = async (data, msg) => {
     setBusy(true)
-    try { const r = await run(data); setDrones(r.drones || []); say(msg); setForm(blank) } catch (e) { /* shown */ }
+    try { const r = await run(data); setDrones(r.drones || []); say(msg); closeForm() } catch (e) { /* shown */ }
     setBusy(false)
   }
   const v = (x) => (x == null ? '' : String(x))
+  // the add / edit form stays folded up until it's needed (like Operators)
+  const [adding, setAdding] = useState(false)
+  const formRef = useRef(null)
+  const closeForm = () => { setForm(blank); setAdding(false) }
+  const edit = (d) => { setForm(Object.assign({}, blank, d)); setTimeout(() => formRef.current && formRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0) }
   // maintenance log (shows in each drone's logbook on Reports)
   const [maint, setMaint] = useState([])
   const [kinds, setKinds] = useState([])
@@ -670,13 +679,18 @@ function Drones({ drones, setDrones, run, say }) {
   useEffect(() => { run({ action: 'listMaint' }).then((r) => { setMaint(r.maint || []); setKinds(r.kinds || []) }).catch(() => {}) }, [])
   return (
     <div>
-      <div className="spray-box">
-        <b>{form.id ? 'Edit ' + form.name : 'Add a drone'}</b>
+      <div className={'spray-box spray-fold' + (form.id || adding ? ' open' : '')} ref={formRef}>
+        {form.id ? <b>Edit {form.name}</b>
+          : <button type="button" className="spray-fold-head" aria-expanded={adding} onClick={() => (adding ? closeForm() : setAdding(true))}>
+            <span>+ Add a drone</span><span className="spray-fold-chev" aria-hidden="true">▾</span>
+          </button>}
+        {(form.id || adding) && <>
         <div className="spray-form">
           <label>Nickname <span className="spray-muted">(what pilots pick on Done)</span><input value={form.name} onChange={set('name')} placeholder="e.g. Bluebird" /></label>
           <label>Make<select value={form.make} onChange={set('make')}><option value="">Pick</option><option>DJI</option><option>EAVision</option><option>Other</option></select></label>
           <label>Model<input value={form.model} onChange={set('model')} placeholder="e.g. Agras T50" /></label>
           <label>FAA registration #<input value={form.faa_reg} onChange={set('faa_reg')} placeholder="FA3…" /></label>
+          <label>Registration expires <span className="spray-muted">(good 3 years; alert 30 and 7 days before)</span><input type="date" value={form.reg_exp || ''} onChange={set('reg_exp')} /></label>
           <label>Serial #<input value={form.serial} onChange={set('serial')} /></label>
           <div className="spray-formhead">Purchase</div>
           <label>Purchase price ($) <span className="spray-muted">(drone + 3 batteries + charging station)</span><input type="number" min="0" step="1" inputMode="decimal" value={v(form.purchase_price)} onChange={set('purchase_price')} /></label>
@@ -688,8 +702,9 @@ function Drones({ drones, setDrones, run, say }) {
         </div>
         <div className="spray-row">
           <button className="save" disabled={busy} onClick={() => go(Object.assign({ action: 'saveDrone' }, form), (form.id ? 'Saved ' : 'Added ') + form.name)}>{form.id ? 'Save' : 'Add'}</button>
-          {form.id && <button disabled={busy} onClick={() => setForm(blank)}>Cancel</button>}
+          <button disabled={busy} onClick={closeForm}>Cancel</button>
         </div>
+        </>}
       </div>
       {drones.length ? drones.map((d) => (
         <div className={'spray-hidden spray-wrap' + (d.active === false ? ' off' : '')} key={d.id}>
@@ -697,7 +712,7 @@ function Drones({ drones, setDrones, run, say }) {
             <b>🛸 {d.name}</b> <span className="spray-muted">{[d.make, d.model].filter(Boolean).join(' ')}{d.active === false ? ' · out of service' : ''}</span>
             <div className="spray-droneac"><b>{Math.round(Number(d.acres_total) || 0).toLocaleString()}</b> acres total
               <span className="spray-muted"> · {Math.round(Number(d.acres_before) || 0).toLocaleString()} before the app + {Math.round(Number(d.acres_logged) || 0).toLocaleString()} logged ({d.flights_logged || 0} flights, {hrs(d.minutes_logged)} hrs)</span></div>
-            <div className="spray-muted">{[d.faa_reg ? 'FAA ' + d.faa_reg : 'No FAA registration yet', d.serial && 'S/N ' + d.serial].filter(Boolean).join(' · ')}</div>
+            <div className="spray-muted">{[d.faa_reg ? 'FAA ' + d.faa_reg + (d.reg_exp ? ' (expires ' + fmtDay(d.reg_exp) + ')' : '') : 'No FAA registration yet', d.serial && 'S/N ' + d.serial].filter(Boolean).join(' · ')}</div>
             {d.purchase_price != null && <div className="spray-muted">Paid {money(d.purchase_price)} with 3 batteries + charging station</div>}
             {d.warranty_end && (() => {
               const days = Math.round((Date.parse(d.warranty_end + 'T12:00:00Z') - Date.parse(todayYmd() + 'T12:00:00Z')) / 86400000)
@@ -709,7 +724,7 @@ function Drones({ drones, setDrones, run, say }) {
           <div className="spray-row" style={{ margin: 0 }}>
             <button className={openLog === d.id ? 'active' : ''} onClick={() => setOpenLog(openLog === d.id ? '' : d.id)}>
               Maintenance ({maint.filter((m) => m.drone_id === d.id && m.status !== 'void').length})</button>
-            <button disabled={busy} onClick={() => setForm(Object.assign({}, blank, d))}>Edit</button>
+            <button disabled={busy} onClick={() => edit(d)}>Edit</button>
             <button className="spray-danger" disabled={busy} onClick={() => window.confirm('Delete ' + d.name + '? Flight records already saved keep its details.') && go({ action: 'deleteDrone', id: d.id }, 'Deleted ' + d.name)}>Delete</button>
           </div>
           {openLog === d.id && <MaintLog drone={d} list={maint.filter((m) => m.drone_id === d.id)} kinds={kinds} run={run} say={say} setMaint={setMaint} />}
@@ -1142,12 +1157,17 @@ function FlightForm({ job, me, pilots, drones, onSave, onClose, initial, askReas
     pilot: firstPilot ? firstPilot.name : '', drone: '', date: todayYmd(),
     start: hhmm(new Date(now.getTime() - 2 * 3600000)), end: hhmm(now), flights: '', acres: String(job.acres || ''), notes: '', reason: ''
   }, initial || {}))
+  // anything that went wrong (FAA monthly report; may need the 24-hour report)
+  const [prob, setProb] = useState(Object.assign({ any: !!(initial && initial.problems), lost_links: '', lost_link_sec: '', malfunction: '', damage: false, notes: '' }, (initial && initial.problems) || {}))
+  const setP = (k) => (e) => { const v = e.target.type === 'checkbox' ? e.target.checked : e.target.value; setProb((x) => Object.assign({}, x, { [k]: v })) }
+  const problems = prob.any ? { lost_links: Number(prob.lost_links) || 0, lost_link_sec: Number(prob.lost_link_sec) || 0, malfunction: prob.malfunction, damage: !!prob.damage, notes: prob.notes } : null
+  const incident = problems && (problems.malfunction || problems.damage || problems.lost_links)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const set = (k) => (e) => { const v = e.target.value; setF((x) => Object.assign({}, x, { [k]: v })) }
   const save = async (e) => {
     e.preventDefault(); setErr(''); setBusy(true)
-    try { await onSave(Object.assign({}, f, { flights: Number(f.flights), acres: Number(f.acres) })); onClose() }
+    try { await onSave(Object.assign({}, f, { flights: Number(f.flights), acres: Number(f.acres), problems })); onClose() }
     catch (x) { setErr(x.message || String(x)) }
     setBusy(false)
   }
@@ -1177,6 +1197,22 @@ function FlightForm({ job, me, pilots, drones, onSave, onClose, initial, askReas
           <label>Flights<input type="number" min="1" max="300" inputMode="numeric" placeholder="battery sets flown" value={f.flights} onChange={set('flights')} required /></label>
           <label>Acres sprayed<input type="number" min="0.1" step="0.1" inputMode="decimal" value={f.acres} onChange={set('acres')} required /></label>
           <label className="wide">Notes <span className="spray-muted">(optional: skipped areas, drift concerns, buffer zones…)</span><input value={f.notes} onChange={set('notes')} maxLength={500} /></label>
+          <div className="wide spray-prob">
+            <div className="spray-seg">
+              <button type="button" className={!prob.any ? 'active' : ''} onClick={() => setProb((x) => Object.assign({}, x, { any: false }))}>Everything normal</button>
+              <button type="button" className={prob.any ? 'active' : ''} onClick={() => setProb((x) => Object.assign({}, x, { any: true }))}>Something went wrong</button>
+            </div>
+          </div>
+          {prob.any && <>
+            <label>Lost link (times)<input type="number" min="0" max="99" inputMode="numeric" value={prob.lost_links} onChange={setP('lost_links')} /></label>
+            <label>Lost link total (seconds)<input type="number" min="0" inputMode="numeric" value={prob.lost_link_sec} onChange={setP('lost_link_sec')} /></label>
+            <label>Malfunction<select value={prob.malfunction} onChange={setP('malfunction')}>
+              <option value="">None</option>
+              {FAA_MALFUNCTIONS.map((m) => <option key={m}>{m}</option>)}
+            </select></label>
+            <label className="check"><input type="checkbox" checked={!!prob.damage} onChange={setP('damage')} /> Damage on takeoff or landing</label>
+            <label className="wide">What happened<input value={prob.notes} onChange={setP('notes')} maxLength={500} placeholder="Short description" /></label>
+          </>}
           {askReason && <label className="wide">Why it's being corrected <span className="spray-muted">(kept in the record's history)</span><input value={f.reason} onChange={set('reason')} minLength={4} maxLength={300} required /></label>}
         </div>
         {(() => { const p = pilots.find((x) => x.name === f.pilot)
@@ -1185,6 +1221,7 @@ function FlightForm({ job, me, pilots, drones, onSave, onClose, initial, askReas
         {!initial && <div className="spray-muted" style={{ marginTop: 8 }}>
           Saved with the record automatically: the weather at the field for the hours flown, {products.length ? products.map((p) => p.name + (p.rate ? ' ' + p.rate : '')).join(', ') : 'the products'} from AgWorld with EPA numbers and amounts, the pilot's license and FAA numbers, and the drone's registration.
         </div>}
+        {incident && <div className="spray-error" style={{ marginTop: 8 }}>⚠ This may need the FAA accident/incident report within 24 hours (CAPS form, and UAS137Certificates@faa.gov), and the NTSB if anyone was hurt or the drone was lost. It goes in this month's FAA report either way.</div>}
         {err && <div className="spray-error" style={{ marginTop: 8 }}>{err}</div>}
         <div className="spray-row" style={{ marginTop: 12 }}>
           <button type="submit" className="save" disabled={busy}>{busy ? 'Saving…' : initial ? 'Save correction' : job.done ? 'Save flight log' : 'Save & mark done'}</button>
@@ -1244,6 +1281,8 @@ function Reports({ run, say, pilots, drones, chiefs }) {
   const recs = all.filter((r) => (showVoid || r.status !== 'void') && (!usePilot || r.pilot.name === usePilot) && (!useDrone || r.drone.name === useDrone))
   const live = recs.filter((r) => r.status !== 'void')
   const co = (data && data.company) || { name: 'JK Farms', address: '20511 F Street, Rupert, ID 83350' }
+  // FAA reports and logbooks are under the drone exemption holder
+  const faaCo = (data && data.faa_operator) || { name: 'JK Equipment LLC', address: co.address, exemption: '26422' }
   const period = longDay(from) + ' – ' + longDay(to)
   const pilotNames = [...new Set(all.map((r) => r.pilot.name))].sort()
   const droneNames = [...new Set(all.map((r) => r.drone.name))].sort()
@@ -1251,8 +1290,8 @@ function Reports({ run, say, pilots, drones, chiefs }) {
 
   const correct = (r) => setForm({
     job: { field: r.site.field, farm: r.site.farm, crop: r.site.crop, acres: r.job_acres },
-    initial: { pilot: r.pilot.name, drone: r.drone.name, date: r.date, start: r.start, end: r.end, flights: String(r.flights), acres: String(r.acres), notes: r.notes || '' },
-    save: async (f) => { const x = await run({ action: 'editFlight', id: r.id, reason: f.reason, changes: { pilot: f.pilot, drone: f.drone, date: f.date, start: f.start, end: f.end, flights: f.flights, acres: f.acres, notes: f.notes } }); say(x.unchanged ? 'Nothing changed' : 'Record corrected'); await load() }
+    initial: { pilot: r.pilot.name, drone: r.drone.name, date: r.date, start: r.start, end: r.end, flights: String(r.flights), acres: String(r.acres), notes: r.notes || '', problems: r.problems || null },
+    save: async (f) => { const x = await run({ action: 'editFlight', id: r.id, reason: f.reason, changes: { pilot: f.pilot, drone: f.drone, date: f.date, start: f.start, end: f.end, flights: f.flights, acres: f.acres, notes: f.notes, problems: f.problems } }); say(x.unchanged ? 'Nothing changed' : 'Record corrected'); await load() }
   })
   const voidIt = async (r) => {
     const why = window.prompt('Void the ' + r.site.field + ' record from ' + longDay(r.date) + '? It stays on file, marked void. Why?')
@@ -1264,9 +1303,9 @@ function Reports({ run, say, pilots, drones, chiefs }) {
     save: async (f) => { const x = await run({ action: 'logFlight', jobKey: u.job_key, flight: f }); say('Flight log saved' + (x.missing && x.missing.length ? ' · missing: ' + x.missing.join(', ') : '')); await load() }
   })
 
-  const Head = ({ title, sub }) => (
+  const Head = ({ title, sub, faa }) => (
     <div className="rp-head">
-      <div><div className="rp-co">{co.name}</div><div className="rp-addr">{co.address}</div></div>
+      <div><div className="rp-co">{(faa ? faaCo : co).name}</div><div className="rp-addr">{(faa ? faaCo : co).address}</div></div>
       <div className="rp-title"><b>{title}</b><div>{sub}</div><div>{period}{usePilot ? ' · pilot ' + usePilot : ''}{useDrone ? ' · drone ' + useDrone : ''}</div></div>
     </div>
   )
@@ -1314,6 +1353,7 @@ function Reports({ run, say, pilots, drones, chiefs }) {
           </table>
           {r.weather && r.weather.ok && <div className="rp-note">Weather: {r.weather.source}, pulled {new Date(r.weather.stamped_at).toLocaleString()}{hoursTxt(r.weather) ? ' · by hour (mph): ' + hoursTxt(r.weather) : ''}</div>}
           {r.notes && <div className="rp-note">Notes: {r.notes}</div>}
+          {r.problems && <div className="rp-miss">Problem: {probTxt(r.problems)}</div>}
           <Missing r={r} /><Foot r={r} /><Tools r={r} /><History r={r} />
         </div>
       ))}
@@ -1325,7 +1365,7 @@ function Reports({ run, say, pilots, drones, chiefs }) {
   const roster = [...new Map(live.map((r) => [r.pilot.name, r.pilot])).values()]
   const OpsReport = () => (
     <div className="rp">
-      <Head title="Agricultural Aircraft Operator Records" sub="14 CFR 137.71 · keep 12 months or more" />
+      <Head faa title="Agricultural Aircraft Operator Records" sub={'14 CFR 137.71' + (faaCo.exemption ? ' · Exemption No. ' + faaCo.exemption : '') + ' · keep 12 months or more'} />
       <div className="rp-sum">Chief supervisor: {(chiefs || []).length ? chiefs.map((c) => c.name + (c.faa_cert ? ' (FAA ' + c.faa_cert + (c.part137_date ? ', 137.19(e) ' + longDay(c.part137_date) : '') + ')' : '')).join('; ') : <span className="rp-miss">not set (Operators › Drone pilots)</span>}</div>
       <div className="rp-sec">Pilots</div>
       <table className="rp-tbl">
@@ -1368,7 +1408,7 @@ function Reports({ run, say, pilots, drones, chiefs }) {
           const dInfo = drones.find((d) => d.name === n) || {}
           return (
             <div className="rp-book" key={n}>
-              <Head title={kind === 'pilot' ? 'Pilot Logbook' : 'Aircraft Logbook'} sub={kind === 'pilot'
+              <Head faa title={kind === 'pilot' ? 'Pilot Logbook' : 'Aircraft Logbook'} sub={kind === 'pilot'
                 ? n + ' · FAA ' + (who.pilot.faa_cert || '—') + ' · Part 137 ' + (who.pilot.part137_date ? longDay(who.pilot.part137_date) : '—') + ' · ID ' + (who.pilot.license_no || '—')
                 : n + ' · ' + [who.drone.make, who.drone.model].filter(Boolean).join(' ') + ' · FAA ' + (who.drone.faa_reg || '—') + (who.drone.serial ? ' · S/N ' + who.drone.serial : '')} />
               <div className="rp-totals">
@@ -1386,7 +1426,7 @@ function Reports({ run, say, pilots, drones, chiefs }) {
                     <td>{longDay(r.date)}</td><td>{r.site.field}<div className="rp-small">{r.site.farm}</div></td>
                     <td>{kind === 'pilot' ? r.drone.name + (r.drone.faa_reg ? ' · ' + r.drone.faa_reg : '') : r.pilot.name}</td>
                     <td>{t12(r.start)}–{t12(r.end)}</td><td>{hrs(r.minutes)}</td><td>{r.flights}</td><td>{acresTxt(r.acres)}</td>
-                    <td>{r.status === 'void' ? 'VOID' : r.notes || ''}</td>
+                    <td>{r.status === 'void' ? 'VOID' : [r.notes, probTxt(r.problems)].filter(Boolean).join(' · ')}</td>
                   </tr>))}
                   <tr className="rp-tot"><td colSpan={4}>Totals this period</td><td>{hrs(sum(ok, 'minutes'))}</td><td>{sum(ok, 'flights')}</td><td>{acresTxt(sum(ok, 'acres'))}</td><td></td></tr>
                 </tbody>
@@ -1577,6 +1617,284 @@ function ArchivePanel({ run, say }) {
               </div>
               <div className="spray-muted spray-arc-fp" title="SHA-256 fingerprint of the report file">Fingerprint {((a.files || []).find((f) => f.which === 'html') || {}).sha256}</div>
             </div>))}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// FAA side of the drone operation (Exemption No. 26422, JK Equipment LLC; functions/sprayFaa.js):
+// problems on a flight log, the monthly operations report, and the company's FAA paperwork dates.
+// ---------------------------------------------------------------------------
+const FAA_MALFUNCTIONS = ['Control station', 'Electrical', 'Fuel / battery', 'Navigation (GPS)', 'Onboard flight control', 'Powerplant (motor / prop)', 'In-flight fire', 'Other']
+const probTxt = (p) => (!p ? '' : [p.lost_links ? p.lost_links + ' lost link' + (p.lost_links === 1 ? '' : 's') + (p.lost_link_sec ? ' (' + p.lost_link_sec + ' s)' : '') : '',
+  p.malfunction ? p.malfunction + ' malfunction' : '', p.damage ? 'damage' : '', p.notes].filter(Boolean).join(' · '))
+const prevYm = () => { const t = todayYmd(), y = Number(t.slice(0, 4)), m = Number(t.slice(5, 7)); return m === 1 ? (y - 1) + '-12' : y + '-' + String(m - 1).padStart(2, '0') }
+
+// Reports > FAA > Monthly report: what the exemption's COA asks for each month, zero-flight months too.
+function FaaMonthly({ run, say, start, onSent }) {
+  const [ym, setYm] = useState(start || prevYm())
+  const [r, setR] = useState(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { setR(null); run({ action: 'faaMonthly', ym }).then(setR).catch(() => {}) }, [ym])
+  const ll = (lat, lng) => (lat == null ? 'no map pin' : Number(lat).toFixed(5) + ', ' + Number(lng).toFixed(5))
+  const text = () => {
+    if (!r) return ''
+    const L = [r.operator.name + ' · Monthly UAS operations report · ' + r.month, 'Exemption No. ' + r.operator.exemption + ' (docket ' + r.operator.docket + ') and blanket COA', '']
+    if (r.zero) L.push('No flights were made during ' + r.month + '. This is a zero-flight (negative) report.')
+    r.aircraft.forEach((a) => {
+      L.push('Aircraft: ' + (a.faa_reg || 'no registration #') + ' · ' + [a.make, a.model].filter(Boolean).join(' ') + ' (' + a.drone + ')')
+      L.push('  Flights: ' + a.flights + ' · Hours: ' + a.hours)
+      a.locations.forEach((l) => L.push('  ' + l.field + ', ' + l.farm + ' (' + ll(l.lat, l.lng) + '): ' + l.flights + ' flights'))
+      L.push('  Takeoff/landing damage: ' + (a.damage || 'none') + ' · Malfunctions: ' + (a.malfunctions.join(', ') || 'none') + ' · Lost-link events: ' + (a.lost_links ? a.lost_links + ', ' + a.lost_link_sec + ' s total' : 'none'))
+      a.events.forEach((e) => L.push('    ' + e.date + ' ' + e.field + ' (' + e.pilot + '): ' + e.text))
+      L.push('')
+    })
+    return L.join('\n')
+  }
+  const copy = async () => { try { await navigator.clipboard.writeText(text()); say('Copied. Paste it into an email to ' + r.send_to) } catch (e) { window.prompt('Copy this', text()) } }
+  const mark = async (sent) => { setBusy(true); try { setR(await run({ action: 'faaMarkSent', ym, sent })); say(sent ? r.month + ' marked sent' : 'Unmarked'); if (onSent) onSent() } catch (e) { /* shown */ } setBusy(false) }
+  return (
+    <div>
+      <div className="spray-box rp-ctl no-print">
+        <label>Month<input type="month" value={ym} max={todayYmd().slice(0, 7)} onChange={(e) => e.target.value && setYm(e.target.value)} /></label>
+        <button disabled={!r} onClick={copy}>Copy for email</button>
+        <button className="save" onClick={() => window.print()}>Print / save PDF</button>
+        {r && (r.sent ? <button disabled={busy} onClick={() => mark(false)}>✓ Sent {fmtDay(r.sent.at.slice(0, 10))} · unmark</button>
+          : <button className="save" disabled={busy} onClick={() => mark(true)}>Mark sent</button>)}
+      </div>
+      {!r ? <div className="spray-empty">Loading…</div> : (
+        <div className="rp">
+          <div className="rp-head">
+            <div><div className="rp-co">{r.operator.name}</div><div className="rp-addr">{r.operator.address}</div></div>
+            <div className="rp-title"><b>Monthly UAS Operations Report</b><div>Exemption No. {r.operator.exemption} · docket {r.operator.docket} · blanket COA</div><div>{r.month}</div></div>
+          </div>
+          <div className="rp-sum">Email to {r.send_to} each month{r.sent ? ' · sent ' + fmtDay(r.sent.at.slice(0, 10)) + ' (' + r.sent.by + ')' : ' · not marked sent yet'}</div>
+          {r.zero ? <div className="rp-rec"><b>No flights were made during {r.month}.</b> This is a zero-flight (negative) report, required even when the drones don't fly.</div>
+            : r.aircraft.map((a) => (
+              <div className="rp-rec" key={a.drone + a.faa_reg}>
+                <div className="rp-rechead"><b>{a.faa_reg || 'No FAA registration #'} · {[a.make, a.model].filter(Boolean).join(' ')}</b><span>{a.drone}{a.serial ? ' · S/N ' + a.serial : ''}</span></div>
+                <div className="rp-totals"><div><b>{a.flights}</b>flights</div><div><b>{a.hours}</b>hours</div><div><b>{a.damage}</b>damage</div><div><b>{a.malfunctions.length}</b>malfunctions</div><div><b>{a.lost_links}</b>lost links{a.lost_link_sec ? ' · ' + a.lost_link_sec + ' s' : ''}</div></div>
+                <div className="cost-scroll"><table className="rp-tbl">
+                  <thead><tr><th>Location</th><th>Lat, long</th><th>Flights</th><th>Days</th></tr></thead>
+                  <tbody>{a.locations.map((l, i) => <tr key={i}><td>{l.field}<div className="rp-small">{l.farm}</div></td><td>{ll(l.lat, l.lng)}</td><td>{l.flights}</td><td>{l.dates.map((d) => fmtDay(d).split(',')[0] + ' ' + d.slice(8)).join(', ')}</td></tr>)}</tbody>
+                </table></div>
+                {a.events.length > 0 && <div className="rp-miss">{a.events.map((e, i) => <div key={i}>{fmtDay(e.date)} · {e.field} · {e.pilot}: {e.text}</div>)}</div>}
+              </div>))}
+        </div>)}
+    </div>
+  )
+}
+
+// Everything Exemption No. 26422 (docket FAA-2024-0943, JK Equipment LLC) and its blanket COA ask
+// for, from the FAA decision (July 29, 2026). [what, when, how / where, condition]. JK Equipment
+// requires a third-class medical for every pilot (the exemption only needs it for night or manual).
+const FAA_RULES = [
+  ['Reports', [
+    ['Monthly operations report', 'Every month, zero-flight months too', 'Email 9-AVS-FS-AFS-700-Correspondence@faa.gov: aircraft registration #s, make/model, every location (lat/long), flights per location per aircraft, total hours, takeoff/landing damage, malfunctions, lost-link events (count + duration)', 'COA F.1–F.2'],
+    ['Accident / incident report', 'Within 24 hours', 'CAPS accident/incident form (or the email above), also UAS137Certificates@faa.gov. Serious injury or death, drone lost, damage needing repair before the next flight, damage to other property, flight-control / control-station / powerplant / electrical failure, in-flight fire, fly-away or any lost-link procedure, any COA deviation', 'COA F.3; C&L 44'],
+    ['Left the geofenced work area', 'Within 24 hours', '9-AJV-115-UASOrganization@faa.gov and UAS137Certificates@faa.gov', 'C&L 44; COA G.2'],
+    ['NTSB notification', 'Immediately', 'Per 49 CFR 830 (ntsb.gov). Separate from the FAA report', 'C&L 44; COA F.3.e'],
+    ['Follow-up investigation report', 'After the internal investigation', 'Copy of JK Equipment\'s own incident report to the FAA', 'COA F.3.d']
+  ]],
+  ['Every job', [
+    ['File the D-NOTAM', '24–72 hours before; cancel when done or scrubbed', '1-877-487-6867: pilot name and address, location + radius (smallest needed that day), altitude, time, number of drones', 'C&L 6; COA E'],
+    ['Check military training routes', '24 hours before if the area overlaps', 'Call the route\'s scheduling agency (FAA JO 7400.10); if not coordinated, stay clear', 'COA C.3'],
+    ['New location: walk the area + crew briefing', 'First job at a site', 'Everyone working the area attends', 'C&L 43'],
+    ['Operating documents at the ground station', 'Every job', 'Exemption, COA, ops manual, training program, flight manual, FCC licenses, operator certificate (AAOC); show the FAA or law enforcement on request', 'C&L 13']
+  ]],
+  ['Operating limits', [
+    ['Airspace and height', 'Always', 'Class G at or below 400 ft under the blanket COA; more than 200 ft AGL, other airspace, or closer than 2–5 NM to airports needs a new COA or an amendment', 'C&L 6, 8; COA D'],
+    ['Drones per pilot', 'Always', 'No more than 3 drones per pilot in command', 'C&L 6'],
+    ['GPS or control-link loss', 'Always', 'Stop dispensing; anything unexpected, stop dispensing', 'Exemption 26422'],
+    ['Night flying', 'Night jobs', 'Anti-collision lights visible 3 miles and ID lights on each drone; night, multi-drone and no-observer ops need their own ops manual and training sections', 'C&L 14, 26'],
+    ['Fixed-wing drones', 'Always', 'Stay 500 ft from roads, vehicles and buildings', 'Exemption 26422']
+  ]],
+  ['Pilots', [
+    ['Part 107 certificate + recurrent course', 'Every 24 calendar months', 'FAASafety.gov online recurrent; tracked on Operators', 'C&L 20'],
+    ['Third-class medical', 'Per the medical\'s expiration', 'Required for every JK Equipment pilot (company rule); tracked on Operators', 'C&L 22'],
+    ['Pilot training + 137.19(e) knowledge/skill test records', 'At hire and recurrent', 'On file with date, pilot name, FAA cert #, signature; give the FAA on request', 'C&L 15, 23'],
+    ['Visual observer night training records', 'Before night observer duty', 'On file', 'C&L 28'],
+    ['Pilots report Part 61 deviations / exemptions', 'Right away', 'To JK Equipment', 'C&L 45']
+  ]],
+  ['Maintenance', [
+    ['Manufacturer service / safety bulletins', 'Check every month', 'Comply with every bulletin', 'C&L 19'],
+    ['Maintenance log entry', 'Every maintenance action', 'What was done, date, who did it (JK Equipment-trained techs only); Drones tab › maintenance log', 'C&L 19'],
+    ['Functional test flight after a flight-critical repair', 'Before the next job', '500 ft from other people; log it', 'C&L 16'],
+    ['Flight termination system test', 'Each new or rebuilt drone, before service', 'Log it', 'C&L 36']
+  ]],
+  ['Before changing anything', [
+    ['Buying a new drone', 'Before buying or flying it', 'Must be on the FAA 44807 approved list at the weight you\'ll fly (docket FAA-2023-1271) and have FCC equipment authorization; otherwise petition to amend first', 'C&L 4'],
+    ['Operating outside the grant', 'Before doing it', 'Petition to amend (docket FAA-2024-0943) or a new COA at caps.faa.gov/coaportal', 'C&L 6, 8; COA D'],
+    ['Ops manual + training program review', 'Every year and whenever operations change', 'Sections for night, multi-drone, multi-drone at night, no-observer ops if you do them', 'C&L 14, 15, 26']
+  ]],
+  ['Renewal', [
+    ['Operator certificate (AAOC) under 26422', 'Confirm now', 'Form 8710-3 + exemption # to UAS137Certificates@faa.gov; name must read JK Equipment LLC. Exemption and AAOC are both needed to fly', 'C&L 2'],
+    ['Renewal petition', 'Start Feb 1, 2028; file by May 3, 2028 (120 days before)', 'regulations.gov docket FAA-2024-0943, meeting 14 CFR 11.81. Last time it went in late and left a gap (May 31 – Jul 29, 2026)', 'Effect of decision'],
+    ['Blanket COA', 'Ends about Jul 29, 2028', 'Ends before the exemption: confirm it renews with the petition', 'COA'],
+    ['Exemption 26422', 'Expires Aug 31, 2028', '', 'Effect of decision']
+  ]]
+]
+
+// The FAA tab (Spray admins): everything Exemption 26422 has to be kept up on, in one place.
+// Needs attention first, then the monthly reports, every due date, problems on flights (24-hour
+// report check), pilots, and NOTAMs for the drone jobs coming up.
+function FaaTab({ run, say, ops, jobs }) {
+  const [o, setO] = useState(null)
+  const [month, setMonth] = useState('')       // the monthly report that's open
+  const [busy, setBusy] = useState(false)
+  const load = async () => { try { setO(await run({ action: 'faaOverview' })) } catch (e) { setO({ months: [], papers: [], drones: [], incidents: [] }) } }
+  useEffect(() => { load() }, [])
+  const notam = jobActions(run, say, null).notam
+  const today = todayYmd()
+  if (!o) return <div className="spray-empty">Loading the FAA tab…</div>
+  if (month) return (
+    <div>
+      <button className="spray-back" onClick={() => { setMonth(''); load() }}>← Back to the FAA tab</button>
+      <FaaMonthly run={run} say={say} start={month} onSent={load} />
+    </div>
+  )
+  const pilots = ops.filter((p) => p.crew === 'drone' && p.active !== false)
+  // every dated item, soonest first
+  const dates = []
+  o.papers.filter((i) => !i.done).forEach((i) => dates.push({ k: 'p' + i.key, what: i.label, due: i.due, note: i.note, need: !i.due }))
+  o.drones.forEach((d) => dates.push({ k: 'd' + d.id, what: d.name + ' FAA registration' + (d.faa_reg ? ' (' + d.faa_reg + ')' : ''), due: d.reg_exp, note: d.faa_reg ? 'Good 3 years. Set it on the Drones tab.' : 'No registration # on the Drones tab', need: !d.reg_exp }))
+  pilots.forEach((p) => renewalsOf(p).filter((r) => r.kind !== 'license').forEach((r) => dates.push({ k: 'r' + p.id + r.kind, what: p.name + ' · ' + r.label, due: r.due, note: '' })))
+  pilots.filter((p) => !p.faa_recurrent).forEach((p) => dates.push({ k: 'n' + p.id, what: p.name + ' · FAA recurrent course', due: '', note: 'Last completed date not on the Operators tab', need: true }))
+  dates.sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999'))
+  const unsent = o.months.filter((m) => !m.sent)
+  const openInc = o.incidents.filter((i) => !i.reported)
+  const soonJobs = jobs.filter((j) => j.source === 'drone' && !j.done && !j.hidden && j.planned_date <= addDays(today, 3)).sort((a, b) => a.planned_date.localeCompare(b.planned_date))
+  const notamDue = soonJobs.filter((j) => !j.notam && j.planned_date <= addDays(today, 1))
+  const dueSoon = dates.filter((d) => d.due && daysTo(d.due) <= 30)
+  const attention = [
+    ...unsent.map((m) => ({ k: 'm' + m.ym, txt: 'Monthly report for ' + m.month + ' not marked sent' + (m.flights ? '' : ' (zero-flight)'), act: () => setMonth(m.ym), btn: 'Open' })),
+    ...openInc.map((i) => ({ k: 'i' + i.id, txt: fmtDay(i.date) + ' · ' + i.field + ': ' + i.text + '. Check whether it needs the 24-hour report.' })),
+    ...dueSoon.map((d) => ({ k: 'a' + d.k, txt: d.what + (daysTo(d.due) < 0 ? ' · past due ' : ' · due ') + longDay(d.due) })),
+    ...notamDue.map((j) => ({ k: 'n' + j.job_key, txt: j.field + ' (' + fmtDay(j.planned_date) + '): NOTAM not filed' })),
+    ...dates.filter((d) => d.need && /AAOC|insurance|registration/i.test(d.what)).map((d) => ({ k: 'b' + d.k, txt: d.what + ': no date yet' }))
+  ]
+  const mark = async (i, how) => { setBusy(true); try { setO(await run({ action: 'faaIncident', id: i.id, how })); say(how === 'clear' ? 'Unmarked' : 'Marked') } catch (e) { /* shown */ } setBusy(false) }
+  return (
+    <div className="spray-faa">
+      <div className="spray-box">
+        <b>{o.operator.name} · Exemption No. {o.operator.exemption}</b>
+        <div className="spray-muted">Part 137 / 44807, docket {o.operator.docket}, with its blanket COA. Phone alerts go out for the dates below (30 and 7 days before) and for the monthly report on the 1st.</div>
+      </div>
+
+      <div className={'spray-box' + (attention.length ? ' spray-attn' : '')}>
+        <b>{attention.length ? 'Needs attention (' + attention.length + ')' : '✓ Nothing needs attention'}</b>
+        {attention.map((a) => <div className="spray-attn-row" key={a.k}><span>{a.txt}</span>{a.act && <button onClick={a.act}>{a.btn}</button>}</div>)}
+      </div>
+
+      <h3 className="spray-h3">Monthly reports</h3>
+      <div className="spray-box">
+        <div className="spray-muted" style={{ marginBottom: 6 }}>Email to {o.send_to} every month, zero-flight months too.</div>
+        {o.months.length ? o.months.map((m) => (
+          <div className="spray-mrow" key={m.ym}>
+            <div><b>{m.month}</b> <span className="spray-muted">· {m.flights ? m.flights + ' flights, ' + m.hours + ' hrs' : 'no flights (zero-flight report)'}</span></div>
+            <span className={m.sent ? 'spray-ok' : 'spray-warn'}>{m.sent ? '✓ Sent ' + fmtDay(m.sent.at.slice(0, 10)) : 'Not sent'}</span>
+            <button onClick={() => setMonth(m.ym)}>Open</button>
+          </div>)) : <div className="spray-muted">The first report (for this month) is due on the 1st of next month.</div>}
+      </div>
+
+      <h3 className="spray-h3">Due dates</h3>
+      <div className="spray-box">
+        {dates.map((d) => { const n = d.due ? daysTo(d.due) : null
+          return (
+            <div className="spray-mrow" key={d.k}>
+              <div><b>{d.what}</b>{d.note && <div className="spray-muted">{d.note}</div>}</div>
+              <span className={n == null ? 'spray-warn' : n < 0 ? 'spray-bad' : n <= 30 ? 'spray-warn' : 'spray-muted'}>{n == null ? 'No date' : longDay(d.due) + (n < 0 ? ' · past due' : n <= 90 ? ' · ' + n + ' days' : '')}</span>
+            </div>) })}
+        <FaaPapers run={run} say={say} onSaved={load} />
+      </div>
+
+      <h3 className="spray-h3">Problems on flights <span className="spray-muted">(last 60 days)</span></h3>
+      <div className="spray-box">
+        <div className="spray-muted" style={{ marginBottom: 6 }}>Accidents and incidents go to the FAA within 24 hours (CAPS form and UAS137Certificates@faa.gov); NTSB too if anyone is hurt or a drone is lost. Leaving the geofenced area goes to 9-AJV-115-UASOrganization@faa.gov.</div>
+        {o.incidents.length ? o.incidents.map((i) => (
+          <div className="spray-mrow" key={i.id}>
+            <div><b>{fmtDay(i.date)} · {i.field}</b> <span className="spray-muted">{i.farm} · {i.pilot} · {i.drone}</span><div>{i.text}</div>
+              {i.reported && <div className="spray-ok">{i.reported.how === 'reported' ? '✓ Reported to the FAA' : '✓ No report needed'} · {i.reported.by}</div>}</div>
+            <div className="spray-row" style={{ margin: 0 }}>
+              {i.reported ? <button disabled={busy} onClick={() => mark(i, 'clear')}>Unmark</button> : <>
+                <button className="save" disabled={busy} onClick={() => mark(i, 'reported')}>Reported</button>
+                <button disabled={busy} onClick={() => mark(i, 'not_needed')}>Not needed</button></>}
+            </div>
+          </div>)) : <div className="spray-muted">None. Problems come from "Something went wrong" on the flight log.</div>}
+      </div>
+
+      <h3 className="spray-h3">Pilots</h3>
+      <div className="spray-box">
+        {pilots.length ? pilots.map((p) => {
+          return (
+            <div className="spray-mrow" key={p.id}>
+              <div><b>{p.name}</b>{p.chief && <span className="spray-chief">Chief supervisor</span>} <span className="spray-muted">· FAA {p.faa_cert || 'no cert #'} · Part 137 {p.part137_date ? fmtDay(p.part137_date) : 'no date'}</span>
+                {renewalsOf(p).filter((r) => r.kind !== 'license').length > 0 && <div className="spray-dues">{renewalsOf(p).filter((r) => r.kind !== 'license').map((r) => { const n = daysTo(r.due); return <span key={r.kind} className={'spray-due' + (n < 0 ? ' late' : n <= 30 ? ' soon' : '')}>{r.label}: {longDay(r.due)}</span> })}</div>}
+              </div>
+            </div>) }) : <div className="spray-muted">No drone pilots on the Operators tab.</div>}
+      </div>
+
+      <h3 className="spray-h3">NOTAMs · drone jobs in the next 3 days</h3>
+      <div className="spray-box">
+        <div className="spray-muted" style={{ marginBottom: 6 }}>File the D-NOTAM 24–72 hours before (1-877-487-6867) and cancel it when the job is done or scrubbed. Check military training routes for the area too.</div>
+        {soonJobs.length ? soonJobs.map((j) => (
+          <div className="spray-mrow" key={j.job_key}>
+            <div><b>{j.field}</b> <span className="spray-muted">· {fmtDay(j.planned_date)} · {j.farm || j.manager} · {(Number(j.acres) || 0).toLocaleString()} ac{j.operator ? ' · ' + j.operator : ''}</span></div>
+            <span className={j.notam ? 'spray-ok' : j.planned_date <= addDays(today, 1) ? 'spray-warn' : 'spray-muted'}>{j.notam ? '✓ Filed' : 'Not filed'}</span>
+            <button disabled={busy} onClick={async () => { setBusy(true); try { await notam(j, !j.notam) } catch (e) { /* shown */ } setBusy(false) }}>{j.notam ? 'Unmark' : 'Filed'}</button>
+          </div>)) : <div className="spray-muted">No drone jobs in the next 3 days.</div>}
+      </div>
+
+      <h3 className="spray-h3">Everything Exemption 26422 requires</h3>
+      <div className="spray-muted" style={{ marginBottom: 6 }}>From the FAA decision (docket FAA-2024-0943, July 29, 2026) and its blanket COA. Tap a group to open it.</div>
+      {FAA_RULES.map(([group, list]) => <FaaRules key={group} group={group} list={list} />)}
+    </div>
+  )
+}
+
+function FaaRules({ group, list }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className={'spray-box spray-fold' + (open ? ' open' : '')}>
+      <button type="button" className="spray-fold-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span>{group} <span className="spray-muted">({list.length})</span></span><span className="spray-fold-chev" aria-hidden="true">▾</span>
+      </button>
+      {open && list.map(([what, when, how, src]) => (
+        <div className="spray-rule" key={what}>
+          <div><b>{what}</b> <span className="spray-rule-src">{src}</span></div>
+          <div className="spray-rule-when">{when}</div>
+          {how && <div className="spray-muted">{how}</div>}
+        </div>))}
+    </div>
+  )
+}
+
+// Operators > Drone pilots: the company's FAA paperwork dates, with phone alerts 30 and 7 days before.
+function FaaPapers({ run, say, onSaved }) {
+  const [items, setItems] = useState(null)
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { run({ action: 'faaPapers' }).then((r) => setItems(r.items || [])).catch(() => setItems([])) }, [])
+  const setI = (i, k) => (e) => { const v = e.target.type === 'checkbox' ? e.target.checked : e.target.value; setItems((l) => l.map((x, n) => (n === i ? Object.assign({}, x, { [k]: v }) : x))) }
+  const save = async () => { setBusy(true); try { setItems((await run({ action: 'saveFaaPapers', items })).items); say('FAA paperwork saved'); setOpen(false); if (onSaved) onSaved() } catch (e) { /* shown */ } setBusy(false) }
+  if (!items) return null
+  const soon = items.filter((i) => !i.done && i.due && daysTo(i.due) <= 90)
+  const blanks = items.filter((i) => !i.done && !i.due).length
+  return (
+    <div className={'spray-box spray-fold' + (open ? ' open' : '')}>
+      <button type="button" className="spray-fold-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span>Edit paperwork dates{soon.length ? ' · ' + soon.length + ' coming up' : ''}{blanks ? ' · ' + blanks + ' need a date' : ''}</span><span className="spray-fold-chev" aria-hidden="true">▾</span>
+      </button>
+      {open && <>
+        <div className="spray-muted" style={{ margin: '4px 0 8px' }}>Exemption No. 26422 and its blanket COA. Phone alerts go 30 and 7 days before each date. Drone registrations are on the Drones tab.</div>
+        {items.map((i, n) => (
+          <div className="spray-paper" key={i.key}>
+            <div><b>{i.label}</b>{i.note && <div className="spray-muted">{i.note}</div>}</div>
+            <input type="date" value={i.due || ''} onChange={setI(n, 'due')} />
+            <label className="check"><input type="checkbox" checked={!!i.done} onChange={setI(n, 'done')} /> Done</label>
+          </div>))}
+        <div className="spray-row"><button className="save" disabled={busy} onClick={save}>Save</button><button disabled={busy} onClick={() => setOpen(false)}>Close</button></div>
+      </>}
     </div>
   )
 }

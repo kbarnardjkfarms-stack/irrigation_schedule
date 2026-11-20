@@ -40,7 +40,8 @@ export function mergeJobs(jobs, states) {
       rig: (st.assign && st.assign.rig) || '',
       done: st.done || null,
       hidden: st.hidden || null,
-      released: st.hidden_released || null
+      released: st.hidden_released || null,
+      notam: st.notam || null
     }))
   })
   return out
