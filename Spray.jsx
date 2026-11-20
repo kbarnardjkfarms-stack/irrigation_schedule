@@ -498,13 +498,18 @@ function Crew({ ops, run, say }) {
     faa_recurrent: '', medical_issued: '', medical_over40: false })
   const blank = blankFor(tab)
   const [form, setForm] = useState(blank)
-  const pickTab = (t) => { setTab(t); setForm(blankFor(t)) }
+  const pickTab = (t) => { setTab(t); setForm(blankFor(t)); setAdding(false) }
+  // the add / edit form stays folded up until it's needed
+  const [adding, setAdding] = useState(false)
+  const formRef = useRef(null)
+  const edit = (o) => { setForm(Object.assign({}, blank, o)); setTimeout(() => formRef.current && formRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0) }
+  const closeForm = () => { setForm(blank); setAdding(false) }
   const [busy, setBusy] = useState(false)
   const set = (k) => (e) => setForm((f) => Object.assign({}, f, { [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }))
   const save = async () => {
     if (!form.name.trim()) { say('Enter a name.'); return }
     setBusy(true)
-    try { await run(Object.assign({ action: 'saveOperator' }, form, { crew: tab })); say((form.id ? 'Saved ' : 'Added ') + form.name); setForm(blank) } catch (e) { /* shown */ }
+    try { await run(Object.assign({ action: 'saveOperator' }, form, { crew: tab })); say((form.id ? 'Saved ' : 'Added ') + form.name); closeForm() } catch (e) { /* shown */ }
     setBusy(false)
   }
   const del = async (o) => {
@@ -570,8 +575,12 @@ function Crew({ ops, run, say }) {
         <b>Coming due (next 90 days)</b>
         {coming.map((r, i) => { const d = daysTo(r.due); return <div key={i} className={d < 0 ? 'late' : d <= 30 ? 'soon' : ''}>{r.name} · {r.label} · {d < 0 ? 'past due since ' + longDay(r.due) : longDay(r.due) + ' (' + d + ' days)'}</div> })}
       </div>}
-      <div className="spray-box">
-        <b>{form.id ? 'Edit ' + form.name : drone ? 'Add a drone pilot' : 'Add an Ag Rows operator'}</b>
+      <div className={'spray-box spray-fold' + (form.id || adding ? ' open' : '')} ref={formRef}>
+        {form.id ? <b>Edit {form.name}</b>
+          : <button type="button" className="spray-fold-head" aria-expanded={adding} onClick={() => (adding ? closeForm() : setAdding(true))}>
+            <span>{drone ? '+ Add a drone pilot' : '+ Add an Ag Rows operator'}</span><span className="spray-fold-chev" aria-hidden="true">▾</span>
+          </button>}
+        {(form.id || adding) && <>
         <div className="spray-form">
           <label>Name<input value={form.name} onChange={set('name')} placeholder="As it should show on jobs" /></label>
           <label>Phone<input value={form.phone} onChange={set('phone')} inputMode="tel" placeholder="(208) 555-0123" /></label>
@@ -606,13 +615,14 @@ function Crew({ ops, run, say }) {
         </div>
         <div className="spray-row">
           <button className="save" disabled={busy} onClick={save}>{form.id ? 'Save' : 'Add'}</button>
-          {form.id && <button disabled={busy} onClick={() => setForm(blank)}>Cancel</button>}
+          <button disabled={busy} onClick={closeForm}>Cancel</button>
         </div>
         <div className="spray-muted" style={{ marginTop: 6 }}>
           {drone ? 'Drone pilots pick the drone they flew on each job\'s Done form. Their license and FAA numbers are copied into every flight record.'
             : 'Ag Rows operators mark jobs done with one tap; their license is copied into each Ag Rows record.'} Make a link for each person below and text it to them (no sign-in). You get a phone alert 30 and 7 days before anything comes due (* = figured from the issue date).
           Farm managers and who gets field-done alerts are on AIO's Users screen (each person's farms and Phone alerts).
         </div>
+        </>}
       </div>
       {list.length ? list.map((o) => (
         <div className={'spray-hidden' + (o.active === false ? ' off' : '')} key={o.id}>
@@ -625,7 +635,7 @@ function Crew({ ops, run, say }) {
             {links[normName(o.name)] && <div className="spray-muted">Link {links[normName(o.name)].lastUsed ? 'last opened ' + new Date(links[normName(o.name)].lastUsed).toLocaleDateString() : 'not opened yet'}</div>}
           </div>
           <div className="spray-row" style={{ margin: 0 }}>
-            <button disabled={busy} onClick={() => setForm(Object.assign({}, blank, o))}>Edit</button>
+            <button disabled={busy} onClick={() => edit(o)}>Edit</button>
             {links[normName(o.name)]
               ? <>
                 <button disabled={busy} onClick={() => send(o, links[normName(o.name)].code)}>Send link</button>
@@ -636,7 +646,7 @@ function Crew({ ops, run, say }) {
             <button className="spray-danger" disabled={busy} onClick={() => del(o)}>Delete</button>
           </div>
         </div>
-      )) : <div className="spray-empty">Nobody yet. Add them above.</div>}
+      )) : <div className="spray-empty">Nobody yet. Tap Add above.</div>}
     </div>
   )
 }

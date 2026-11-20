@@ -1728,3 +1728,7 @@ body.spray-dark:has(.ops-hub) { background: #f7f5f0; }
 .spray-arc { display: flex; flex-direction: column; gap: 4px; }
 .spray-arc-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .spray-arc-fp { font-size: 11px; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, monospace; }
+/* Spray > Operators: fold-up add form */
+.spray-fold-head { display: flex; width: 100%; justify-content: space-between; align-items: center; background: none; border: 0; padding: 0; color: inherit; font: inherit; font-weight: 700; cursor: pointer; text-align: left; min-height: 32px; }
+.spray-fold-chev { transition: transform .15s; opacity: .7; }
+.spray-fold.open .spray-fold-chev { transform: rotate(180deg); }
