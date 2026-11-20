@@ -1650,7 +1650,7 @@ function FaaMonthly({ run, say, start, onSent }) {
     r.aircraft.forEach((a) => {
       L.push('Aircraft: ' + (a.faa_reg || 'no registration #') + ' · ' + [a.make, a.model].filter(Boolean).join(' ') + ' (' + a.drone + ')')
       L.push('  Flights: ' + a.flights + ' · Hours: ' + a.hours)
-      a.locations.forEach((l) => L.push('  ' + l.field + ', ' + l.farm + ' (' + ll(l.lat, l.lng) + '): ' + l.flights + ' flights'))
+      a.locations.forEach((l) => L.push('  ' + (l.city || '(town?)') + ' · ' + l.field + ', ' + l.farm + ' (' + ll(l.lat, l.lng) + '): ' + l.flights + ' flights'))
       L.push('  Takeoff/landing damage: ' + (a.damage || 'none') + ' · Malfunctions: ' + (a.malfunctions.join(', ') || 'none') + ' · Lost-link events: ' + (a.lost_links ? a.lost_links + ', ' + a.lost_link_sec + ' s total' : 'none'))
       a.events.forEach((e) => L.push('    ' + e.date + ' ' + e.field + ' (' + e.pilot + '): ' + e.text))
       L.push('')
@@ -1658,6 +1658,9 @@ function FaaMonthly({ run, say, start, onSent }) {
     return L.join('\n')
   }
   const copy = async () => { try { await navigator.clipboard.writeText(text()); say('Copied. Paste it into an email to ' + r.send_to) } catch (e) { window.prompt('Copy this', text()) } }
+  // nearest town for each farm (COA F.2.c: "city name and latitude/longitude"); set once, used every month
+  const [towns, setTowns] = useState(null)
+  const saveTowns = async () => { setBusy(true); try { setR(await run({ action: 'saveFaaCities', ym, cities: towns })); setTowns(null); say('Towns saved') } catch (e) { /* shown */ } setBusy(false) }
   const mark = async (sent) => { setBusy(true); try { setR(await run({ action: 'faaMarkSent', ym, sent })); say(sent ? r.month + ' marked sent' : 'Unmarked'); if (onSent) onSent() } catch (e) { /* shown */ } setBusy(false) }
   return (
     <div>
@@ -1667,7 +1670,16 @@ function FaaMonthly({ run, say, start, onSent }) {
         <button className="save" onClick={() => window.print()}>Print / save PDF</button>
         {r && (r.sent ? <button disabled={busy} onClick={() => mark(false)}>✓ Sent {fmtDay(r.sent.at.slice(0, 10))} · unmark</button>
           : <button className="save" disabled={busy} onClick={() => mark(true)}>Mark sent</button>)}
+        {r && r.farms && r.farms.length > 0 && <button onClick={() => setTowns(towns ? null : r.farms.map((f) => Object.assign({}, f)))}>{towns ? 'Close towns' : 'Towns'}</button>}
       </div>
+      {r && r.farms && r.farms.some((f) => !f.city) && !towns && <div className="spray-box spray-warn no-print">The FAA wants the town with each location. Set the nearest town for {r.farms.filter((f) => !f.city).map((f) => f.farm).join(', ')} under Towns (once; it's used every month).</div>}
+      {towns && <div className="spray-box no-print">
+        <b>Nearest town for each farm</b>
+        <div className="spray-form" style={{ marginTop: 6 }}>
+          {towns.map((t, i) => <label key={t.farm}>{t.farm}<input value={t.city} placeholder="e.g. Glenns Ferry, ID" onChange={(e) => { const v = e.target.value; setTowns((l) => l.map((x, n) => (n === i ? Object.assign({}, x, { city: v }) : x))) }} /></label>)}
+        </div>
+        <div className="spray-row"><button className="save" disabled={busy} onClick={saveTowns}>Save</button></div>
+      </div>}
       {!r ? <div className="spray-empty">Loading…</div> : (
         <div className="rp">
           <div className="rp-head">
@@ -1682,7 +1694,7 @@ function FaaMonthly({ run, say, start, onSent }) {
                 <div className="rp-totals"><div><b>{a.flights}</b>flights</div><div><b>{a.hours}</b>hours</div><div><b>{a.damage}</b>damage</div><div><b>{a.malfunctions.length}</b>malfunctions</div><div><b>{a.lost_links}</b>lost links{a.lost_link_sec ? ' · ' + a.lost_link_sec + ' s' : ''}</div></div>
                 <div className="cost-scroll"><table className="rp-tbl">
                   <thead><tr><th>Location</th><th>Lat, long</th><th>Flights</th><th>Days</th></tr></thead>
-                  <tbody>{a.locations.map((l, i) => <tr key={i}><td>{l.field}<div className="rp-small">{l.farm}</div></td><td>{ll(l.lat, l.lng)}</td><td>{l.flights}</td><td>{l.dates.map((d) => fmtDay(d).split(',')[0] + ' ' + d.slice(8)).join(', ')}</td></tr>)}</tbody>
+                  <tbody>{a.locations.map((l, i) => <tr key={i}><td>{l.field}<div className="rp-small">{l.farm} · {l.city || <span className="spray-warn">town?</span>}</div></td><td>{ll(l.lat, l.lng)}</td><td>{l.flights}</td><td>{l.dates.map((d) => fmtDay(d).split(',')[0] + ' ' + d.slice(8)).join(', ')}</td></tr>)}</tbody>
                 </table></div>
                 {a.events.length > 0 && <div className="rp-miss">{a.events.map((e, i) => <div key={i}>{fmtDay(e.date)} · {e.field} · {e.pilot}: {e.text}</div>)}</div>}
               </div>))}
@@ -1709,9 +1721,10 @@ const FAA_RULES = [
     ['Operating documents at the ground station', 'Every job', 'Exemption, COA, ops manual, training program, flight manual, FCC licenses, operator certificate (AAOC); show the FAA or law enforcement on request', 'C&L 13']
   ]],
   ['Operating limits', [
-    ['Airspace and height', 'Always', 'Class G at or below 400 ft under the blanket COA; more than 200 ft AGL, other airspace, or closer than 2–5 NM to airports needs a new COA or an amendment', 'C&L 6, 8; COA D'],
+    ['Height', 'Always', 'No higher than 200 ft AGL under the exemption (the COA allows 400; the stricter one applies). Report altitude in feet AGL', 'C&L 6; COA D'],
+    ['Airspace and airports', 'Always', 'Class G only, in visual weather (VMC). Stay beyond 5 NM of an airport with a tower, 3 NM of one with an instrument approach, 2 NM of other airports and heliports. Anything else needs a new COA at caps.faa.gov/coaportal', 'COA D'],
     ['Drones per pilot', 'Always', 'No more than 3 drones per pilot in command', 'C&L 6'],
-    ['GPS or control-link loss', 'Always', 'Stop dispensing; anything unexpected, stop dispensing', 'Exemption 26422'],
+    ['GPS or control-link loss', 'Always', 'Stop dispensing, and the drone must return to a pre-set spot inside the operating area and land (never across a runway). Anything unexpected: stop dispensing. A lost link that causes a fly-away or runs the lost-link procedure is a 24-hour report', 'Exemption 26422; COA G.1, F.3'],
     ['Night flying', 'Night jobs', 'Anti-collision lights visible 3 miles and ID lights on each drone; night, multi-drone and no-observer ops need their own ops manual and training sections', 'C&L 14, 26'],
     ['Fixed-wing drones', 'Always', 'Stay 500 ft from roads, vehicles and buildings', 'Exemption 26422']
   ]],
@@ -1879,7 +1892,8 @@ function FaaNotams({ run, say, o, setO, ops, jobs }) {
     const c = prep.circle, nextDay = prep.end <= prep.start
     return [
       'UAS NOTAM · ' + o.operator.name + ' · Exemption ' + o.operator.exemption,
-      'COA #: ' + (o.notam.coa || '(add it under NOTAM settings)'),
+      'Authority: Exemption No. ' + o.operator.exemption + ' (docket ' + o.operator.docket + '), blanket 44807 COA' + (o.notam.coa ? ' · ID ' + o.notam.coa : ''),
+      'Nature of activity: agricultural spraying by unmanned aircraft (UAS), 14 CFR Part 137',
       'Date: ' + longDay(prep.date),
       'Time: ' + t12(prep.start) + ' – ' + t12(prep.end) + ' Mountain (' + toZulu(prep.date, prep.start) + ' – ' + toZulu(nextDay ? addDays(prep.date, 1) : prep.date, prep.end) + ')',
       c ? 'Center: ' + c.lat.toFixed(5) + ', ' + c.lng.toFixed(5) + '  (' + dms(c.lat, 'N', 'S', 2) + dms(c.lng, 'E', 'W', 3) + ')' : 'Center: no map pin on the field(s)',
@@ -1897,12 +1911,12 @@ function FaaNotams({ run, say, o, setO, ops, jobs }) {
     <div>
       <div className="spray-box">
         <div className="spray-due-row">
-          <div><b>NOTAM settings</b><div className="spray-muted">COA {o.notam.coa || <span className="spray-warn">not set</span>} · up to {o.notam.altitude_ft} ft AGL · {t12(o.notam.start)}–{t12(o.notam.end)}</div></div>
+          <div><b>NOTAM settings</b><div className="spray-muted">{o.notam.coa ? 'ID ' + o.notam.coa + ' · ' : ''}up to {o.notam.altitude_ft} ft AGL · {t12(o.notam.start)}–{t12(o.notam.end)}</div></div>
           <button onClick={() => setSet(set ? null : { coa: o.notam.coa, altitude_ft: String(o.notam.altitude_ft), start: o.notam.start, end: o.notam.end })}>{set ? 'Close' : 'Edit'}</button>
         </div>
         {set && <div className="spray-form" style={{ marginTop: 8 }}>
-          <label>COA number<input value={set.coa} onChange={(e) => setSet(Object.assign({}, set, { coa: e.target.value }))} /></label>
-          <label>Altitude (ft AGL)<input type="number" min="10" max="400" value={set.altitude_ft} onChange={(e) => setSet(Object.assign({}, set, { altitude_ft: e.target.value }))} /></label>
+          <label>ID for 1800wxbrief <span className="spray-muted">(optional: the blanket COA has no number)</span><input value={set.coa} onChange={(e) => setSet(Object.assign({}, set, { coa: e.target.value }))} /></label>
+          <label>Altitude (ft AGL, 200 max)<input type="number" min="10" max="200" value={set.altitude_ft} onChange={(e) => setSet(Object.assign({}, set, { altitude_ft: e.target.value }))} /></label>
           <label>Usual start<input type="time" value={set.start} onChange={(e) => setSet(Object.assign({}, set, { start: e.target.value }))} /></label>
           <label>Usual end<input type="time" value={set.end} onChange={(e) => setSet(Object.assign({}, set, { end: e.target.value }))} /></label>
           <div className="spray-row wide"><button className="save" disabled={busy} onClick={saveSet}>Save</button></div>
@@ -1929,7 +1943,7 @@ function FaaNotams({ run, say, o, setO, ops, jobs }) {
             <label>Start (Mountain)<input type="time" value={prep.start} onChange={pf('start')} /></label>
             <label>End<input type="time" value={prep.end} onChange={pf('end')} /></label>
             <label>Radius (NM) <span className="spray-muted">{prep.circle ? '(covers the field)' : ''}</span><input type="number" min="0.1" step="0.1" value={prep.nm} onChange={pf('nm')} /></label>
-            <label>Altitude (ft AGL)<input type="number" min="10" max="400" value={prep.alt} onChange={pf('alt')} /></label>
+            <label>Altitude (ft AGL, 200 max)<input type="number" min="10" max="200" value={prep.alt} onChange={pf('alt')} /></label>
             <label>Pilot in command<select value={prep.pilot} onChange={pf('pilot')}>{pilots.map((p) => <option key={p.id}>{p.name}</option>)}</select></label>
             <label>Number of drones<input type="number" min="1" max="3" value={prep.drones} onChange={pf('drones')} /></label>
           </div>
