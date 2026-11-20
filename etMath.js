@@ -237,6 +237,72 @@ export function weeklyEt({ weekStart, today, cropName, plantDate, stations }) {
   }
 }
 
+// ---- Open-Meteo comparison (detail panel only, Nov 2026) ------------------
+//
+// Open-Meteo gives a grass-reference ET (inches). Multiplied by the station's
+// "bump-up" ratio (etRatio/{station}.ratio, AgriMet alfalfa / Open-Meteo grass
+// over the last 30 days) it becomes an alfalfa-reference number comparable to
+// AgriMet's. This does NOT change the ET column: it only feeds the "Open-Meteo
+// check" section of the tap-open panel so the two can be watched side by side.
+//
+// omStations: [{ code, days: { 'YYYY-MM-DD': { etIn } }, ratio }]
+// A station with no usable ratio is skipped (the raw grass number is never
+// shown as if it were alfalfa ET). Past days are labelled 'real' (Open-Meteo's
+// own look at a finished day), today and later 'forecast'. No forecast rain is
+// used anywhere.
+function omReference(omStations, onDate, today) {
+  const vals = []
+  for (const s of omStations || []) {
+    const d = s && s.days ? s.days[onDate] : null
+    const et = d && typeof d.etIn === 'number' ? d.etIn : null
+    if (et == null || typeof s.ratio !== 'number' || !(s.ratio > 0)) continue
+    vals.push(et * s.ratio)
+  }
+  if (!vals.length) return { value: null, source: 'none' }
+  const value = vals.reduce((a, b) => a + b, 0) / vals.length
+  return { value, source: onDate < today ? 'real' : 'forecast' }
+}
+
+// Returns null when there is no curve for the crop or no plant date where one
+// is needed. Otherwise:
+// { days: [{ date, kc, agrimet: {value, source}, om: {value, source} }],
+//   growingDays, comparedDays, agrimetInches, omInches }
+// The two totals only add up days where BOTH methods have a number, so they
+// are always comparable; comparedDays says how many days that was.
+export function openMeteoWeek({ weekStart, today, cropName, plantDate, agrimetStations, omStations }) {
+  plantDate = normalizeIsoDate(plantDate)
+  const curveKey = curveKeyForCrop(cropName)
+  if (!curveKey) return null
+  const curve = CURVES[curveKey]
+  if (curve.mode === 'planting' && !plantDate) return null
+  const days = []
+  let growingDays = 0
+  let comparedDays = 0
+  let agrimetInches = 0
+  let omInches = 0
+  for (let i = 0; i < 7; i++) {
+    const date = addDaysIso(weekStart, i)
+    const kc = kcOnDate(curveKey, plantDate, date)
+    const agrimet = agrimetStations && agrimetStations.length
+      ? mixedReferenceEt(agrimetStations, date, today)
+      : { value: null, source: 'none' }
+    const om = omReference(omStations, date, today)
+    days.push({ date, kc, agrimet, om })
+    if (kc == null) continue
+    growingDays++
+    if (agrimet.value != null && om.value != null) {
+      comparedDays++
+      agrimetInches += kc * agrimet.value
+      omInches += kc * om.value
+    }
+  }
+  return {
+    days, growingDays, comparedDays, curveKey,
+    agrimetInches: comparedDays ? agrimetInches : null,
+    omInches: comparedDays ? omInches : null
+  }
+}
+
 // ---- Color of the Scheduled cell -----------------------------------------
 //
 // Scheduled inches as a share of the week's ET:
