@@ -64,7 +64,7 @@ function recBlock(r, ground) {
   const g = (label, val) => '<div><i>' + label + '</i>' + val + '</div>';
   const actual = ground && r.agworld ? r.agworld : null;
   return '<div class="rec' + (voided ? ' void' : '') + '">' +
-    '<div class="rh"><b>' + esc(day(r.date)) + ' · ' + esc(r.site && r.site.field) + '</b><span>' + esc([ground ? (r.job_type === 'Spread' ? 'Spread' : 'Spray') + ' (ground)' : 'Drone', r.site && r.site.farm, voided ? 'VOID: ' + ((r.void && r.void.reason) || '') : ''].filter(Boolean).join(' · ')) + '</span></div>' +
+    '<div class="rh"><b>' + esc(day(r.date)) + ' · ' + esc(r.site && r.site.field) + '</b><span>' + esc([ground ? (r.job_type === 'Spread' || r.job_type === 'Fumigation' ? r.job_type : 'Spray') + ' (ground)' : 'Drone', r.site && r.site.farm, voided ? 'VOID: ' + ((r.void && r.void.reason) || '') : ''].filter(Boolean).join(' · ')) + '</span></div>' +
     '<div class="g">' +
     g('Applied for', esc(r.applied_for.name + ', ' + r.applied_for.address + (r.applied_for.farm ? ' (' + r.applied_for.farm + ')' : ''))) +
     g('Crop / site', esc((r.site && r.site.crop) || '—')) +

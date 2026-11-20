@@ -5,7 +5,9 @@
 //   * Only recs, work orders and actuals (planned activities are skipped).
 //   * Ag Rows jobs must be labeled Ground Spraying / Ground Spreading in AgWorld
 //     (operation or a cost line). Drone jobs are found by the drone words.
-//     Chemigation / fertigation / fumigation / injection and the farm's own boom
+//     Soil fumigation hired out to Ag Rows is the AgWorld operation "Groundwork- Vapam Broadcast"
+//     (or a label Ag Rows Fumigation) and comes in as an Ag Rows 'Fumigation' job. Any other fumigation (the farm's
+//     own water-run fumigation), chemigation / fertigation / injection, and the farm's own boom
 //     sprayer are always left out.
 //   * Rec -> work order -> actual are one job: AgWorld's parent_id link wins,
 //     otherwise same fields + spray/spread at a later stage (an actual within
@@ -48,6 +50,8 @@ const SYNC = {
     'WorkOrder', 'workorder', 'work_order', 'WorkOrderActivity', 'ActualActivity', 'actual', 'Actual'],
   GROUND_SPRAY_LABELS: ['ground spraying'],
   GROUND_SPREAD_LABELS: ['ground spreading'],
+  GROUND_FUMIGATION_RE: /groundwork\s*[-\u2013:]?\s*vapam/,   // AgWorld operation "Groundwork- Vapam Broadcast" (Ag Rows)
+  GROUND_FUMIGATION_LABELS: ['ag rows fumigation', 'agrows fumigation', 'ag-rows fumigation'],
   HOLD_UNLABELED: false,        // true = unlabeled spray/spread look-alikes wait for the admin to approve
   DRONE_WORDS: ['drone', 'drones', 'uav', 'uavs', 'agras', 'aerial'],
   ACTUAL_MATCH_DAYS: 3,
@@ -215,11 +219,15 @@ function formFromRates(a) {
   return null;
 }
 
-/** { source: 'drone'|'ground', type: 'Spray'|'Spread' } or { reason }. */
+/** { source: 'drone'|'ground', type: 'Spray'|'Spread'|'Fumigation' } or { reason }. */
 function classifyJob(a) {
   const text = classText(a);
   const labels = jobLabels(a);
-  if (/chemigation|fertigation|fumigation|inject/.test(labels + ' ' + String(a.title || '').toLowerCase())) {
+  const lt = labels + ' ' + String(a.title || '').toLowerCase();
+  // soil fumigation hired out to Ag Rows: only when labeled Ag Rows Fumigation (the farm's own
+  // water-run fumigation is left out below)
+  if (SYNC.GROUND_FUMIGATION_RE.test(labels) || SYNC.GROUND_FUMIGATION_LABELS.some((l) => labels.indexOf(l) > -1)) return { source: 'ground', type: 'Fumigation' };
+  if (/chemigation|fertigation|fumigation|inject/.test(lt)) {
     return { reason: 'chemigation / fumigation / injection' };
   }
   const droneRe = new RegExp('\\b(' + SYNC.DRONE_WORDS.join('|') + ')\\b');

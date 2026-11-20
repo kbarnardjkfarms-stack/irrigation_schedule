@@ -25,7 +25,7 @@ const ALERTS = 'sprayAlerts', TOKENS = 'sprayPushTokens';
 const SEND_DELAY_SEC = 90;
 const STALE_HOURS = 24;
 const personKey = (s) => String(s || '').toLowerCase().replace(/[^a-z]/g, '');
-const KIND = (j) => (j.source === 'drone' ? 'Drone' : j.job_type === 'Spread' ? 'Ag Rows spread' : 'Ag Rows spray');
+const KIND = (j) => (j.source === 'drone' ? 'Drone' : j.job_type === 'Spread' ? 'Ag Rows spread' : j.job_type === 'Fumigation' ? 'Ag Rows fumigation' : 'Ag Rows spray');
 
 /** Title + body for a Done alert. */
 function buildAlert(job, done) {
