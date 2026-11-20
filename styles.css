@@ -1724,3 +1724,7 @@ body.spray-dark:has(.ops-hub) { background: #f7f5f0; }
 .ops-nav button.on { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
 .ops-nav button.on b { color: #3c5a3f; }
 @media (max-width: 520px) { .ops-nav button { padding: 8px 9px; } .ops-nav button small { display: none; } .ops-nav button b { font-size: 13.5px; } }
+/* Spray > Reports > Archive */
+.spray-arc { display: flex; flex-direction: column; gap: 4px; }
+.spray-arc-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.spray-arc-fp { font-size: 11px; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, monospace; }

@@ -1473,7 +1473,9 @@ function Reports({ run, say, pilots, drones, chiefs }) {
       <div className="spray-subtabs no-print">
         <button className={section === 'state' ? 'active' : ''} onClick={() => setSection('state')}>State reports</button>
         <button className={section === 'faa' ? 'active' : ''} onClick={() => setSection('faa')}>FAA reports</button>
+        <button className={section === 'archive' ? 'active' : ''} onClick={() => setSection('archive')}>Archive</button>
       </div>
+      {section === 'archive' ? <ArchivePanel run={run} say={say} /> : <>
       {section === 'state' && <div className="spray-seg no-print" style={{ marginBottom: 10 }}>
         {[['drone', 'Drone'], ['ground', 'Ag Rows']].map(([k, l]) => <button key={k} className={crewSec === k ? 'active' : ''} onClick={() => setCrewSec(k)}>{l}</button>)}
       </div>}
@@ -1504,8 +1506,67 @@ function Reports({ run, say, pilots, drones, chiefs }) {
       </div>}
       {busy && !data ? <div className="spray-empty">Loading records…</div>
         : section === 'state' ? (crewSec === 'ground' ? <GroundReport /> : <StateReport />) : faa === 'ops' ? <OpsReport /> : <Logbook kind={faa === 'pilots' ? 'pilot' : 'drone'} />}
+      </>}
       {form && <FlightForm job={form.job} pilots={pilots} drones={activeDrones} initial={form.initial} askReason={!!form.initial}
         title={form.initial ? 'Correct flight record' : 'Add flight log'} onSave={form.save} onClose={() => setForm(null)} />}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Reports > Archive: frozen year-end copies of the records (functions/sprayArchive.js). Made
+// automatically each January for the year before, or any time with "Archive now". Each copy is a
+// readable report (opens in any browser, prints to PDF) plus the data, with a fingerprint that
+// shows it hasn't been changed since it was saved. Copies are never overwritten or deleted.
+// ---------------------------------------------------------------------------
+function ArchivePanel({ run, say }) {
+  const yr = Number(todayYmd().slice(0, 4))
+  const [list, setList] = useState(null)
+  const [year, setYear] = useState(String(yr - (todayYmd().slice(5) < '03-01' ? 1 : 0)))
+  const [busy, setBusy] = useState('')
+  const load = async () => { try { setList((await run({ action: 'listArchives' })).archives || []) } catch (e) { setList([]) } }
+  useEffect(() => { load() }, [])
+  const make = async () => {
+    setBusy('make')
+    try { const r = await run({ action: 'archiveYear', year }); setList(r.archives || []); say('Saved a copy of the ' + year + ' records.') } catch (e) { /* shown */ }
+    setBusy('')
+  }
+  const get = async (a, which) => {
+    setBusy(a.id + which)
+    try {
+      const r = await run({ action: 'getArchiveFile', id: a.id, which })
+      const url = URL.createObjectURL(new Blob([r.text], { type: r.type }))
+      if (which === 'html') window.open(url, '_blank')
+      const link = document.createElement('a'); link.href = url; link.download = r.name; document.body.appendChild(link); link.click(); link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      say(r.unchanged ? r.name + ': fingerprint matches, unchanged since it was saved.' : '⚠ ' + r.name + ' doesn\'t match the fingerprint saved with it.')
+    } catch (e) { /* shown */ }
+    setBusy('')
+  }
+  const kb = (n) => (n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB')
+  const when = (iso) => new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+  return (
+    <div>
+      <div className="spray-box">
+        <b>Year-end archive</b>
+        <div className="spray-muted" style={{ margin: '4px 0 8px' }}>A frozen copy of a year's drone and Ag Rows application records, Part 137 records, pilot and drone logbooks and maintenance, kept apart from the live data. AIO saves one on its own each January for the year before. Copies are never changed or deleted; archiving again adds a new copy.</div>
+        <div className="rp-ctl">
+          <label>Year<select value={year} onChange={(e) => setYear(e.target.value)}>{[0, 1, 2, 3].map((n) => String(yr - n)).map((y) => <option key={y}>{y}</option>)}</select></label>
+          <button className="save" disabled={!!busy} onClick={make}>{busy === 'make' ? 'Saving…' : 'Archive now'}</button>
+        </div>
+      </div>
+      {list == null ? <div className="spray-empty">Loading archives…</div>
+        : !list.length ? <div className="spray-empty">No archives yet. The first one saves itself in January, or use Archive now.</div>
+          : list.map((a) => (
+            <div className="spray-box spray-arc" key={a.id}>
+              <div><b>{a.year} records</b> <span className="spray-muted">· saved {when(a.at)} · {a.kind === 'auto' ? 'automatic' : 'by ' + a.by}</span></div>
+              <div className="spray-muted">{a.counts.drone} drone · {a.counts.ground} Ag Rows{a.counts.voided ? ' · ' + a.counts.voided + ' voided' : ''}{a.counts.unlogged ? ' · ⚠ ' + a.counts.unlogged + ' drone job' + (a.counts.unlogged === 1 ? '' : 's') + ' with no flight log' : ''}</div>
+              <div className="spray-arc-btns">
+                {(a.files || []).map((f) => <button key={f.which} disabled={!!busy} onClick={() => get(a, f.which)}>
+                  {busy === a.id + f.which ? 'Getting…' : f.which === 'html' ? 'Open report' : 'Download data'} <span className="spray-muted">({kb(f.bytes)})</span></button>)}
+              </div>
+              <div className="spray-muted spray-arc-fp" title="SHA-256 fingerprint of the report file">Fingerprint {((a.files || []).find((f) => f.which === 'html') || {}).sha256}</div>
+            </div>))}
     </div>
   )
 }
