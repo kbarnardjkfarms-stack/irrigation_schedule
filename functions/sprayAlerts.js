@@ -170,6 +170,7 @@ async function sendQueued(deps = {}) {
   const messaging = deps.messaging || admin.messaging();
   const now = deps.now || Date.now();
   await checkLicenses(db, now);
+  await require('./sprayArchive').autoArchive(db, now, deps.archive);   // early January: save last year's records
   const snap = await db.collection(ALERTS).where('status', '==', 'queued').get();
   const due = [];
   snap.forEach((d) => due.push({ ref: d.ref, a: d.data() }));

@@ -135,6 +135,20 @@ async function act(db, me, data) {
     return records.voidFlight(db, me, clean(data.id, 80), data.reason);
   }
 
+  // ---- year-end archive (Spray > Reports > Archive; functions/sprayArchive.js) ----
+  if (action === 'listArchives' || action === 'archiveYear' || action === 'getArchiveFile') {
+    if (!me.admin) throw new HttpsError('permission-denied', 'Only a Spray admin can see or make archives.');
+    const arc = require('./sprayArchive');
+    try {
+      if (action === 'archiveYear') await arc.archiveYear(db, clean(data.year, 4), me.name, 'manual');
+      if (action === 'getArchiveFile') return Object.assign({ ok: true }, await arc.getArchiveFile(db, clean(data.id, 80), clean(data.which, 8)));
+      return { ok: true, archives: await arc.listArchives(db) };
+    } catch (e) {
+      if (e instanceof HttpsError) throw e;
+      throw new HttpsError('failed-precondition', String(e && e.message || e));
+    }
+  }
+
   // ---- Costs tab (Spray admin): weekly hours, pay rates, expenses, cost per acre (functions/sprayCosts.js) ----
   if (costs.COST_ACTIONS.indexOf(action) >= 0) return costs.costAction(db, me, action, data || {});
 
