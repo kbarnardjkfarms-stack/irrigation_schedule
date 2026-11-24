@@ -389,6 +389,13 @@ service cloud.firestore {
       allow read: if signedIn() && canViewContracts() && hasModule('contracts');
       allow write: if signedIn() && isAdminOrOwner();
     }
+    // Bid rounds sent to vendors (PlanningBidRounds.jsx). The vendor links
+    // themselves (bidLinks) have no rule on purpose: only the bidPortal /
+    // bidLinkAdmin functions read them, so codes can't be listed.
+    match /bidRounds/{docId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow write: if signedIn() && isAdminOrOwner();
+    }
     match /contractSettings/{docId} {
       allow read: if signedIn() && canViewContracts() && hasModule('contracts');
       allow write: if signedIn() && isAdminOrOwner();
