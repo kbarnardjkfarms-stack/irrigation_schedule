@@ -5297,6 +5297,53 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
     valueProj: acc.valueProj + g.valueProj, valueActual: acc.valueActual + g.valueActual, valueSet: acc.valueSet + g.valueSet,
   }), { capacity: unassignedCapacity, inStorage: 0, shipped: 0, shrink: 0, initial: 0, shrinkBase: 0, projShrink: 0, projRated: 0, projSet: 0, valueProj: 0, valueActual: 0, valueSet: 0 });
   const fmtMoney = (v) => `$${Math.round(v).toLocaleString()}`;
+  // Click a column heading to sort by it (click again to flip direction, a
+  // third click goes back to the default order: biggest capacity first).
+  // Rows with no value ("—") always sink to the bottom.
+  const [sort, setSort] = useState({ key: null, dir: "desc" });
+  const SORT_VALUE = {
+    label: (g) => g.key,
+    capacity: (g) => g.capacity,
+    inStorage: (g) => g.inStorage,
+    afterShrink: (g) => (g.projSet ? g.inStorage - g.projShrink : null),
+    projPct: (g) => (g.projRated ? (g.projShrink / g.projRated) * 100 : null),
+    projShrink: (g) => (g.projSet ? g.projShrink : null),
+    value: (g) => (g.valueSet ? g.valueProj : null),
+    shipped: (g) => g.shipped,
+    shrink: (g) => (g.shrinkBase ? g.shrink : null),
+    shrinkPct: (g) => (g.shrinkBase ? (g.shrink / g.shrinkBase) * 100 : null),
+  };
+  const clickSort = (key) => setSort((s) => {
+    const firstDir = key === "label" ? "asc" : "desc";
+    if (s.key !== key) return { key, dir: firstDir };
+    if (s.dir === firstDir) return { key, dir: firstDir === "asc" ? "desc" : "asc" };
+    return { key: null, dir: "desc" };
+  });
+  const sortedGrouped = useMemo(() => {
+    if (!sort.key) return grouped;
+    const get = SORT_VALUE[sort.key];
+    const mult = sort.dir === "asc" ? 1 : -1;
+    return [...grouped].sort((a, b) => {
+      const va = get(a), vb = get(b);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (typeof va === "string") return mult * naturalCompare(va, vb);
+      return mult * (va - vb);
+    });
+  }, [grouped, sort]);
+  const SortTh = ({ k, children }) => {
+    const active = sort.key === k;
+    return (
+      <th
+        onClick={() => clickSort(k)}
+        title="Click to sort"
+        style={{ ...thStyle, cursor: "pointer", userSelect: "none", whiteSpace: "nowrap", color: active ? "#f2c14e" : thStyle.color }}
+      >
+        {children}<span style={{ marginLeft: 5, opacity: active ? 1 : 0.35 }}>{active ? (sort.dir === "asc" ? "▲" : "▼") : "↕"}</span>
+      </th>
+    );
+  };
   // Exports exactly what's on screen: the grouped table under the current
   // filters and Group-by choices (Summary sheet), plus a field-by-field
   // breakdown of the same filtered rows (Fields sheet), and a note of which
@@ -5320,7 +5367,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
         g.shrinkBase ? r2(g.shrink) : "",
         g.shrinkBase ? r2((g.shrink / g.shrinkBase) * 100) : "",
       ];
-      const summaryRows = grouped.map((g) => [...(dims.length ? g.labelParts : [g.key]), ...metricCells(g)]);
+      const summaryRows = sortedGrouped.map((g) => [...(dims.length ? g.labelParts : [g.key]), ...metricCells(g)]);
       summaryRows.push([ "Total", ...Array(dimLabels.length - 1).fill(""), ...metricCells(totals) ]);
       const wsSummary = XLSX.utils.aoa_to_sheet([header, ...summaryRows]);
       wsSummary["!cols"] = header.map((h, i) => ({ wch: i < dimLabels.length ? 26 : 16 }));
@@ -5350,6 +5397,7 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
       const wsFields = XLSX.utils.aoa_to_sheet([fieldHeader, ...fieldRows]);
       wsFields["!cols"] = fieldHeader.map((h, i) => ({ wch: i < 5 ? 24 : 16 }));
       const filterLines = [["Exported", new Date().toLocaleString()], ["Grouped by", dims.length ? dimLabels.join(" / ") : "none"]];
+      if (sort.key) filterLines.push(["Sorted by", `${header[sort.key === "label" ? 0 : ({ capacity: 0, inStorage: 1, afterShrink: 2, projPct: 3, projShrink: 4, value: 5, shipped: 6, shrink: 7, shrinkPct: 8 })[sort.key] + dimLabels.length]} (${sort.dir === "asc" ? "low → high" : "high → low"})`]);
       DIM_OPTIONS.forEach((d) => { if (invFilter[d.key]?.length) filterLines.push([`Filter — ${d.label}`, invFilter[d.key].join(", ")]); });
       if (!isFilterActive(invFilter)) filterLines.push(["Filters", "none (everything)"]);
       const wsInfo = XLSX.utils.aoa_to_sheet(filterLines);
@@ -5452,20 +5500,20 @@ function SummaryTab({ bays, statsById, buildingsById, locationsById, invFilter =
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ background: "#141b28", textAlign: "left" }}>
-              <th style={thStyle}>{dims.length ? dims.map((d) => DIM_OPTIONS.find((o) => o.key === d).label).join(" / ") : "Group"}</th>
-              <th style={thStyle}>Capacity (cwt)</th>
-              <th style={thStyle}>In Storage (cwt)</th>
-              <th style={thStyle}>In Storage − proj. shrink (cwt)</th>
-              <th style={thStyle}>Proj. shrink %</th>
-              <th style={thStyle}>Proj. shrink (cwt)</th>
-              <th style={thStyle}>Value ($)</th>
-              <th style={thStyle}>Run out (cwt)</th>
-              <th style={thStyle}>Actual shrink (cwt)</th>
-              <th style={thStyle}>Actual shrink %</th>
+              <SortTh k="label">{dims.length ? dims.map((d) => DIM_OPTIONS.find((o) => o.key === d).label).join(" / ") : "Group"}</SortTh>
+              <SortTh k="capacity">Capacity (cwt)</SortTh>
+              <SortTh k="inStorage">In Storage (cwt)</SortTh>
+              <SortTh k="afterShrink">In Storage − proj. shrink (cwt)</SortTh>
+              <SortTh k="projPct">Proj. shrink %</SortTh>
+              <SortTh k="projShrink">Proj. shrink (cwt)</SortTh>
+              <SortTh k="value">Value ($)</SortTh>
+              <SortTh k="shipped">Run out (cwt)</SortTh>
+              <SortTh k="shrink">Actual shrink (cwt)</SortTh>
+              <SortTh k="shrinkPct">Actual shrink %</SortTh>
             </tr>
           </thead>
           <tbody>
-            {grouped.map((g) => (
+            {sortedGrouped.map((g) => (
               <tr key={g.key} style={{ borderTop: "1px solid #232d40" }}>
                 <td style={tdStyle}>
                   <b style={{ color: "#eef1f6", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
