@@ -3339,3 +3339,8 @@ exports.sprayAlertLog = sprayAlertsExports.sprayAlertLog;
 const sprayCrewExports = require('./sprayCrewLinks').makeExports();
 exports.sprayCrew = sprayCrewExports.sprayCrew;
 exports.sprayLinkAdmin = sprayCrewExports.sprayLinkAdmin;
+
+// Planning › Prices & bids: no-login bid links for vendors (functions/bidLinks.js)
+const bidLinkExports = require('./bidLinks').makeExports();
+exports.bidPortal = bidLinkExports.bidPortal;
+exports.bidLinkAdmin = bidLinkExports.bidLinkAdmin;
