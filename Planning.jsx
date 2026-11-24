@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import Contracts from './Contracts.jsx'
 import Seed from './Seed.jsx'
+import PlanningPrices from './PlanningPrices.jsx'
 
 // Planning module (was the Contracts tile): the season's planning in one place —
 //   Contracts     contracts, acres and allocations, storage plan (Contracts.jsx)
 //   Potato seed   seed tickets, needs, contracted seed and sales (Seed.jsx)
+//   Prices & bids chemical / fertilizer / seed price history, bids, sellers
+//                 (PlanningPrices.jsx) — same permission as Contracts
 // Both modules keep their own permissions ('contracts' and 'seed'), so a
 // login only sees the tabs it has. Potato planting staff still go straight
 // to their seed ticket screen and never see this page. The tab last used is
@@ -12,12 +15,13 @@ import Seed from './Seed.jsx'
 
 const SECTIONS = [
   { id: 'contracts', label: 'Contracts', sub: 'Contracts, acres & storage' },
-  { id: 'seed', label: 'Potato Seed', sub: 'Tickets, needs & sales' }
+  { id: 'seed', label: 'Potato Seed', sub: 'Tickets, needs & sales' },
+  { id: 'prices', label: 'Prices & bids', sub: 'Price history, bids, sellers' }
 ]
 const KEY = 'aio.planning.section'
 
 export default function Planning({ userRole, canContracts = true, canSeed = true, initial = null }) {
-  const allowed = SECTIONS.filter((s) => (s.id === 'contracts' ? canContracts : canSeed))
+  const allowed = SECTIONS.filter((s) => (s.id === 'seed' ? canSeed : canContracts))
   const [section, setSection] = useState(() => {
     let saved = null
     try { saved = window.localStorage.getItem(KEY) } catch { saved = null }
@@ -42,6 +46,7 @@ export default function Planning({ userRole, canContracts = true, canSeed = true
       )}
       {section === 'contracts' && <Contracts userRole={userRole} />}
       {section === 'seed' && <Seed userRole={userRole} />}
+      {section === 'prices' && <PlanningPrices userRole={userRole} />}
     </div>
   )
 }

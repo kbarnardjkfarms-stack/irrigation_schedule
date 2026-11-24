@@ -1788,3 +1788,42 @@ body.spray-dark:has(.ops-hub) { background: #f7f5f0; }
 .spray-tag.k-fumigation { background: var(--sp-fum, #b48ae8); }
 .spray-cal-legend i.k-fumigation, .spray-cal .dots i.k-fumigation { background: var(--sp-fum, #b48ae8); }
 .spray-cal .mc.k-fumigation { border-left-color: var(--sp-fum, #b48ae8); }
+
+/* Planning › Prices & bids */
+.prices .pr-picker { position: relative; max-width: 420px; }
+.prices .pr-picker input { width: 100%; }
+.pr-picker-list { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 2px); background: #fff; border: 0.5px solid #ddd8cc; border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,.15); max-height: 320px; overflow: auto; }
+.pr-picker-list button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; border: none; border-bottom: 0.5px solid #eee9de; border-radius: 0; text-align: left; padding: 7px 10px; background: #fff; }
+.pr-picker-list button:hover { background: #f7f5f0; }
+.pr-picker-list span { font-size: 11px; color: #888; }
+.pr-addline { margin: 4px 0 10px; }
+.pr-totals { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
+.pr-totals > div { background: #f7f5f0; border-radius: 8px; padding: 7px 12px; display: flex; flex-direction: column; min-width: 110px; }
+.pr-totals span { font-size: 11px; color: #777; }
+.pr-totals b { font-size: 16px; }
+.pr-totals small { font-size: 11px; color: #A3532D; }
+.pr-bids td { vertical-align: middle; }
+.pr-quote { position: relative; white-space: nowrap; }
+.pr-quote.best { background: #e7f2e1; font-weight: 700; color: #2E7D32; }
+.pr-quote.award { box-shadow: inset 0 0 0 2px #3c5a3f; }
+.pr-award { display: block; margin: 2px 0 0 auto; border: none; background: none; padding: 0; font-size: 10.5px; color: #185FA5; cursor: pointer; }
+.pr-quote:not(:hover) .pr-award:not(:focus) { visibility: hidden; }
+.pr-quote.award .pr-award { visibility: visible; }
+.pr-none { color: #ccc; }
+.pr-up { color: #C62828; }
+.pr-down { color: #2E7D32; }
+.pr-modal { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.pr-modal-box { background: #fff; border-radius: 12px; padding: 16px; width: min(560px, 100%); box-shadow: 0 12px 36px rgba(0,0,0,.3); }
+.pr-modal-box .hd-field input, .pr-modal-box .hd-field select { width: 100%; box-sizing: border-box; }
+.pr-drawer-wrap { position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,.25); display: flex; justify-content: flex-end; }
+.pr-drawer { position: relative; width: min(760px, 100%); height: 100%; overflow-y: auto; background: #fff; padding: 18px; box-sizing: border-box; box-shadow: -8px 0 24px rgba(0,0,0,.2); }
+.pr-drawer .hd-field input, .pr-drawer .hd-field select { width: 100%; box-sizing: border-box; }
+.pr-merge { margin-top: 10px; padding: 10px; background: #f7f5f0; border-radius: 8px; }
+.pr-qtable { min-width: 0; }
+.pr-awardrow td { background: #f2f7ee; }
+.pr-sellers { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; margin-top: 8px; }
+.pr-seller { border: 0.5px solid #ddd8cc; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.pr-seller-head { display: flex; flex-direction: column; }
+.pr-seller textarea, .pr-seller input { font: inherit; font-size: 13px; width: 100%; box-sizing: border-box; padding: 6px 8px; border: 0.5px solid #ddd8cc; border-radius: 6px; }
+.pr-pre { white-space: pre-wrap; font-size: 13px; }
+.pr-skipped { font-size: 12px; color: #666; margin: 6px 0 0; padding-left: 18px; }
