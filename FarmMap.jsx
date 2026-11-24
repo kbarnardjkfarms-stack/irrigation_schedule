@@ -65,6 +65,9 @@ export default function FarmMap({ userRole }) {
   const [farm, setFarm] = useState('all')
   const [focus, setFocus] = useState(null)
   const [selId, setSelId] = useState(null)
+  const [multi, setMulti] = useState(() => new Set()) // fields picked for the selection summary
+  const [picking, setPicking] = useState(false) // "Select fields" mode: a click adds / removes
+  const [inViewReq, setInViewReq] = useState(0)
   const [layers, setLayers] = useState({ labels: true, points: true, other: true, satellite: true })
   const [search, setSearch] = useState('')
   const [edit, setEdit] = useState(null) // { id|null, mode: 'edit'|'draw'|'circle', pts }
@@ -142,6 +145,40 @@ export default function FarmMap({ userRole }) {
   }, [planRows, thisYear])
   const farms = useMemo(() => [...new Set(fields.map((f) => f.farm).filter(Boolean))].sort(), [fields])
   const sel = fields.find((f) => f.id === selId) || null
+
+  // Selection summary: acres by crop → variety for the chosen year. Acres
+  // follow the legend (plan acres once per plan row, else the outline);
+  // variety is Agworld's for that season, else the plan's, else a yield record's.
+  const toggleMulti = (id) => setMulti((m) => { const n = new Set(m); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const summary = useMemo(() => {
+    if (!multi.size) return null
+    const seen = new Set(), crops = {}, farmsAc = {}
+    let total = 0, count = 0
+    const list = fields.filter((f) => multi.has(f.id))
+    list.forEach((f) => {
+      count++
+      const id = f.plan ? f.plan.key : f.id
+      if (seen.has(id)) return
+      seen.add(id)
+      const ac = (f.plan && f.plan.acres) || f.acres || 0
+      const ag = f.ag && agCrops[f.ag.id]
+      const crop = cropFor(f, year).crop || (ag ? canonCrop(ag.cropName) : null) || (f.kind === 'other' ? 'OTHER AREA' : 'none')
+      const rec = (f.yieldRecs || []).find((r) => String(r.year) === String(year))
+      const variety = (ag && ag.varietyName) || (f.plan && year >= (f.plan.planYear || 0) && f.plan.variety) || (rec && rec.variety) || null
+      const c = (crops[crop] = crops[crop] || { acres: 0, n: 0, vars: {} })
+      c.acres += ac; c.n++
+      const v = (c.vars[variety || ''] = c.vars[variety || ''] || { acres: 0, n: 0 })
+      v.acres += ac; v.n++
+      farmsAc[f.farm || 'No farm'] = (farmsAc[f.farm || 'No farm'] || 0) + ac
+      total += ac
+    })
+    return {
+      count, total, list,
+      crops: Object.entries(crops).sort((a, b) => b[1].acres - a[1].acres)
+        .map(([crop, c]) => ({ crop, ...c, vars: Object.entries(c.vars).sort((a, b) => b[1].acres - a[1].acres) })),
+      farms: Object.entries(farmsAc).sort((a, b) => b[1] - a[1])
+    }
+  }, [multi, fields, agCrops, year])
 
   // legend: acres by crop (plan acres once per plan row) or by rotation bucket
   const legend = useMemo(() => {
@@ -267,6 +304,14 @@ export default function FarmMap({ userRole }) {
                 ))}
               </div>
               <div className="fm-tools">
+                <div className="fm-lab">Select</div>
+                <button className={picking ? 'active' : ''} disabled={!!edit || !!pinDraft} onClick={() => { setPicking((x) => !x); setSelId(null); setPinId(null) }}>
+                  {picking ? '✓ Selecting — click fields' : '☑ Select fields'}
+                </button>
+                {picking && <button onClick={() => setInViewReq((n) => n + 1)}>Add every field in view</button>}
+                {!picking && <div className="contracts-sub" style={{ marginTop: 0 }}>Or Shift / Ctrl-click fields.</div>}
+              </div>
+              <div className="fm-tools">
                 <div className="fm-lab">Measure</div>
                 <button disabled={!!edit || !!pinDraft} onClick={() => { setSelId(null); setPinId(null); setEdit({ id: null, mode: 'draw', pts: [], name: '', farm: farm !== 'all' ? farm : '', measure: true }) }}>📐 Measure area</button>
                 <button disabled={!!edit || !!pinDraft} onClick={() => { setSelId(null); setPinId(null); setEdit({ id: null, mode: 'circle', pts: [], name: '', farm: farm !== 'all' ? farm : '', measure: true }) }}>◯ Measure a pivot circle</button>
@@ -282,7 +327,13 @@ export default function FarmMap({ userRole }) {
             </aside>
             <div className="fm-mapbox">
               <LeafletMap fields={fields} points={points} year={year} mode={mode} farm={farm} focus={focus} farms={farms}
-                selId={selId} onSelect={(id) => { if (!edit && !pinDraft) { setSelId(id); setPinId(null) } }} layers={layers} edit={edit} setEdit={setEdit}
+                selId={selId} multi={multi} inViewReq={inViewReq} onInView={(ids) => setMulti((m) => new Set([...m, ...ids]))}
+                onSelect={(id, ev) => {
+                  if (edit || pinDraft) return
+                  const add = ev && ev.originalEvent && (ev.originalEvent.shiftKey || ev.originalEvent.ctrlKey || ev.originalEvent.metaKey)
+                  if (picking || add) { toggleMulti(id); setSelId(null); setPinId(null); return }
+                  setSelId(id); setPinId(null)
+                }} layers={layers} edit={edit} setEdit={setEdit}
                 pinId={pinId} onPin={(id) => { if (!edit && !pinDraft) { setPinId(id); setSelId(null) } }} pinDraft={pinDraft} setPinDraft={setPinDraft} />
               {edit && !edit.measure && <EditBar edit={edit} setEdit={setEdit} farms={farms} onSave={saveShape} />}
               {edit && edit.measure && <MeasureBar edit={edit} setEdit={setEdit} canEdit={canEdit} />}
@@ -290,6 +341,10 @@ export default function FarmMap({ userRole }) {
               {selPin && !pinDraft && !edit && (
                 <PinCard pin={selPin} canEdit={canEdit} onClose={() => setPinId(null)} onDelete={() => deletePin(selPin)}
                   onEdit={(move) => setPinDraft({ id: selPin.id, name: selPin.name || '', type: selPin.type || 'Other', farm: selPin.farm || '', notes: selPin.notes || '', lat: move ? null : selPin.lat, lng: move ? null : selPin.lng, moving: move })} />
+              )}
+              {summary && !sel && !edit && !pinDraft && !selPin && (
+                <SelectionCard s={summary} year={year} onRemove={toggleMulti} onOpen={(id) => setSelId(id)}
+                  onClear={() => setMulti(new Set())} onDone={() => { setPicking(false); setMulti(new Set()) }} />
               )}
               {sel && !edit && !pinDraft && (
                 <FieldCard f={sel} year={year} agCrop={sel.ag && agCrops[sel.ag.id] ? agCrops[sel.ag.id] : null} agSeasonName={agSeason && agSeason.name}
@@ -314,7 +369,7 @@ export const farmColor = (f, farms) => FARM_PALETTE[Math.max(0, farms.indexOf(f)
 // ---------------------------------------------------------------------------
 // The Leaflet map
 // ---------------------------------------------------------------------------
-function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onSelect, layers, edit, setEdit, pinId, onPin, pinDraft, setPinDraft }) {
+function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, multi, inViewReq, onInView, onSelect, layers, edit, setEdit, pinId, onPin, pinDraft, setPinDraft }) {
   const onPinRef = useRef(onPin)
   onPinRef.current = onPin
   const box = useRef(null)
@@ -361,7 +416,7 @@ function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onS
         // while drawing, measuring or placing a pin, a click on a field is a click on the map
         if (st.current.onPinClick) return st.current.onPinClick(e)
         if (st.current.onMapClick) return st.current.onMapClick(e)
-        onSelectRef.current(f.id)
+        onSelectRef.current(f.id, e)
       })
       layer.bindTooltip(f.name, { permanent: true, direction: 'center', className: 'fm-label', interactive: false })
       polys.addLayer(layer)
@@ -384,12 +439,12 @@ function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onS
   const onSelectRef = useRef(onSelect)
   onSelectRef.current = onSelect
   const styleArgs = useRef({})
-  styleArgs.current = { year, mode, farm, focus, farms, selId, layers }
+  styleArgs.current = { year, mode, farm, focus, farms, selId, layers, multi }
 
   function restyle() {
     const { map } = st.current
     if (!map) return
-    const { year, mode, farm, focus, farms, selId, layers } = styleArgs.current
+    const { year, mode, farm, focus, farms, selId, layers, multi } = styleArgs.current
     Object.values(st.current.byId).forEach(({ layer, f }) => {
       const other = f.kind === 'other'
       const crop = cropFor(f, year).crop
@@ -397,12 +452,13 @@ function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onS
       const fill = other ? '#bdb9ac' : mode === 'crop' ? (crop ? cropColor(crop) : '#d7d3c6') : mode === 'pot' ? POT_BUCKETS[+key][1] : farmColor(f.farm, farms)
       const hidden = (other && !layers.other)
       const dim = (farm !== 'all' && f.farm !== farm) || (focus != null && (other || key !== focus))
+      const picked = multi && multi.has(f.id)
       layer.setStyle({
         fillColor: fill, fillOpacity: hidden ? 0 : dim ? 0.12 : other ? 0.35 : 0.72,
-        color: f.id === selId ? '#ffffff' : '#1d1d1b', weight: f.id === selId ? 3 : 1, opacity: hidden ? 0 : dim ? 0.3 : 0.8,
+        color: f.id === selId ? '#ffffff' : picked ? '#FFD54F' : '#1d1d1b', weight: f.id === selId || picked ? 3 : 1, opacity: hidden ? 0 : picked ? 1 : dim ? 0.3 : 0.8,
         dashArray: other ? '3 3' : null
       })
-      if (f.id === selId) layer.bringToFront()
+      if (f.id === selId || picked) layer.bringToFront()
     })
     applyLabels()
   }
@@ -419,7 +475,22 @@ function LeafletMap({ fields, points, year, mode, farm, focus, farms, selId, onS
       if (!show && layer.isTooltipOpen()) layer.closeTooltip()
     })
   }
-  useEffect(() => { if (ready) restyle() }, [ready, year, mode, farm, focus, selId, layers.other, layers.labels, fields]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (ready) restyle() }, [ready, year, mode, farm, focus, selId, layers.other, layers.labels, fields, multi]) // eslint-disable-line react-hooks/exhaustive-deps
+  // "Add every field in view": the fields showing (not dimmed or hidden) whose middle is on screen
+  useEffect(() => {
+    if (!ready || !inViewReq) return
+    const { map } = st.current
+    const b = map.getBounds()
+    const { year: y, mode: md, farm: fm, focus: fc } = styleArgs.current
+    const ids = Object.values(st.current.byId).filter(({ f }) => {
+      if (f.kind === 'other' || !f.center) return false
+      const crop = cropFor(f, y).crop
+      const key = md === 'crop' ? (crop || 'none') : md === 'pot' ? String(potBucket(f, y)) : f.farm
+      if ((fm !== 'all' && f.farm !== fm) || (fc != null && key !== fc)) return false
+      return b.contains([f.center[1], f.center[0]])
+    }).map(({ f }) => f.id)
+    onInView(ids)
+  }, [inViewReq]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // fly to the selected field / farm
   useEffect(() => {
@@ -588,6 +659,65 @@ function PinCard({ pin, draft, setDraft, canEdit, farms, onClose, onEdit, onDele
           <button onClick={onDelete}>Delete</button>
         </div>
       )}
+    </div>
+  )
+}
+
+// The selection summary: acres by crop and variety as fields are picked.
+function SelectionCard({ s, year, onRemove, onOpen, onClear, onDone }) {
+  const [copied, setCopied] = useState(false)
+  const [byFarm, setByFarm] = useState(false)
+  const ac = (n) => `${(Math.round(n * 10) / 10).toLocaleString()} ac`
+  const label = (c) => (c === 'none' ? 'No crop recorded' : c === 'OTHER AREA' ? 'Other area' : cropLabel(c))
+  function copy() {
+    const lines = [`${s.count} field${s.count === 1 ? '' : 's'} · ${ac(s.total)} · ${year}`]
+    s.crops.forEach((c) => {
+      lines.push(`${label(c.crop)}: ${ac(c.acres)}`)
+      c.vars.forEach(([v, x]) => { if (v || c.vars.length > 1) lines.push(`  ${v || 'No variety'}: ${ac(x.acres)}`) })
+    })
+    lines.push('', 'Fields: ' + s.list.map((f) => f.name).join(', '))
+    navigator.clipboard.writeText(lines.join('\n')).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => {})
+  }
+  return (
+    <div className="fm-card fm-selcard">
+      <button className="fm-x" onClick={onDone} aria-label="Close">×</button>
+      <div className="fm-sel-total"><b>{ac(s.total)}</b><span>{s.count} field{s.count === 1 ? '' : 's'} selected · {year}</span></div>
+      <div className="fm-sel-tabs">
+        <button className={!byFarm ? 'active' : ''} onClick={() => setByFarm(false)}>Crop &amp; variety</button>
+        <button className={byFarm ? 'active' : ''} onClick={() => setByFarm(true)}>Farm</button>
+      </div>
+      {!byFarm ? (
+        <table className="fm-sel-table">
+          <tbody>
+            {s.crops.map((c) => (
+              <Fragment key={c.crop}>
+                <tr className="crop">
+                  <td><span className="fm-sel-name"><span className="fm-sw" style={{ background: c.crop === 'none' || c.crop === 'OTHER AREA' ? 'var(--fm-none)' : cropColor(c.crop) }} />{label(c.crop)}</span></td>
+                  <td className="num">{c.n}</td><td className="num"><b>{ac(c.acres)}</b></td>
+                  <td className="num">{s.total ? Math.round((c.acres / s.total) * 100) : 0}%</td>
+                </tr>
+                {(c.vars.length > 1 || c.vars[0][0]) && c.vars.map(([v, x]) => (
+                  <tr key={v} className="var"><td>{v || <i>No variety</i>}</td><td className="num">{x.n}</td><td className="num">{ac(x.acres)}</td><td /></tr>
+                ))}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <table className="fm-sel-table">
+          <tbody>{s.farms.map(([fm, a]) => <tr key={fm} className="crop"><td>{fm}</td><td /><td className="num"><b>{ac(a)}</b></td><td className="num">{s.total ? Math.round((a / s.total) * 100) : 0}%</td></tr>)}</tbody>
+        </table>
+      )}
+      <div className="fm-chips">
+        {s.list.map((f) => (
+          <span key={f.id} className="fm-sel-chip"><button className="link-btn" onClick={() => onOpen(f.id)}>{f.name}</button><button className="fm-sel-x" onClick={() => onRemove(f.id)} aria-label={`Remove ${f.name}`}>×</button></span>
+        ))}
+      </div>
+      <div className="fm-card-actions">
+        <button onClick={copy}>{copied ? 'Copied' : 'Copy summary'}</button>
+        <button onClick={onClear}>Clear</button>
+        <button className="save" onClick={onDone}>Done</button>
+      </div>
     </div>
   )
 }
