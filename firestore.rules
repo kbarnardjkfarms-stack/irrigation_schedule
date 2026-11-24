@@ -370,6 +370,25 @@ service cloud.firestore {
       allow write: if signedIn() && isAdminOrOwner();
     }
     // Contracts: varieties added by hand to the contract / field pick lists.
+    // Planning › Prices & bids (PlanningPrices.jsx): products, every price by
+    // season and seller, sellers' discount programs and each season's bid
+    // list. Same audience as Contracts: Farm managers view, Admin/Owner edit.
+    match /priceProducts/{docId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow write: if signedIn() && isAdminOrOwner();
+    }
+    match /priceQuotes/{docId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow write: if signedIn() && isAdminOrOwner();
+    }
+    match /priceSellers/{docId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow write: if signedIn() && isAdminOrOwner();
+    }
+    match /priceBids/{docId} {
+      allow read: if signedIn() && canViewContracts() && hasModule('contracts');
+      allow write: if signedIn() && isAdminOrOwner();
+    }
     match /contractSettings/{docId} {
       allow read: if signedIn() && canViewContracts() && hasModule('contracts');
       allow write: if signedIn() && isAdminOrOwner();
