@@ -363,12 +363,14 @@ function History({ products, quotesByKey, setOpenKey }) {
       const ag = qs.filter((x) => x.seller === 'Agworld').sort((a, b) => b.season - a.season)[0]
       const last = series[series.length - 1]
       const slips = unitSlips(qs, p).size
-      return { p, n: qs.length, last, change: changePct(series), ag: ag ? quoteMath(ag, p.family) : null, agQ: ag, conflict: qs.some((x) => x.conflict), slips }
+      return { p, n: qs.length, series, last, change: changePct(series), ag: ag ? quoteMath(ag, p.family) : null, agQ: ag, conflict: qs.some((x) => x.conflict), slips }
     })
     .filter((r) => !onlyCheck || r.conflict || r.slips)
     .sort((a, b) => sort === 'change' ? (Math.abs(b.change || 0) - Math.abs(a.change || 0)) : sort === 'count' ? b.n - a.n : a.p.name.localeCompare(b.p.name)), [products, quotesByKey, q, cls, kind, sort, onlyCheck])
   const classes = [...new Set(products.map((p) => p.class).filter(Boolean))].sort()
   return (
+    <>
+    {q.trim().length >= 2 && <TrendChart rows={rows} setOpenKey={setOpenKey} />}
     <div className="yields-card">
       <div className="yields-card-head">
         <div>
@@ -401,6 +403,82 @@ function History({ products, quotesByKey, setOpenKey }) {
             {rows.length > 400 && <tr><td colSpan={8} className="contracts-sub">{rows.length - 400} more — narrow the search.</td></tr>}
           </tbody>
         </table>
+      </div>
+    </div>
+    </>
+  )
+}
+
+// The price trend for what the search found: one matching product → a line
+// per seller plus the cheapest each season; several → the cheapest price of
+// each (up to 6, the ones with the longest history). "Indexed" puts every
+// line at 100 in its first season so a $5/lb and a $900/gal product can be
+// compared on how much they've moved.
+function TrendChart({ rows, setOpenKey }) {
+  const [mode, setMode] = useState('price')
+  const withHist = rows.filter((r) => r.series.length >= 2).sort((a, b) => b.series.length - a.series.length || b.n - a.n)
+  if (!withHist.length) {
+    return rows.length ? <div className="yields-card pr-trend"><div className="contracts-sub" style={{ marginTop: 0 }}>Not enough seasons of prices to chart {rows.length === 1 ? `“${rows[0].p.name}”` : 'these products'} — it takes at least two.</div></div> : null
+  }
+  const single = withHist.length === 1
+  const shown = withHist.slice(0, 6)
+  // Fertilizer is talked about per ton, so dry fert shows $/ton (2000 × $/lb).
+  const perTon = (p) => p.family === 'wt' && /fert/i.test(p.class || '')
+  const unitOf = (p) => (perTon(p) ? 'ton' : p.family === 'wt' ? 'lb' : p.family === 'vol' ? 'gal' : 'unit')
+  const mult = (p) => (perTon(p) ? 2000 : 1)
+  const index = (series, k) => { const first = series.find((x) => x[k] != null); return first ? (v) => (v == null ? null : (v / first[k]) * 100) : () => null }
+  let lines, data
+  if (single) {
+    const r = shown[0]
+    const sellers = [...new Set(r.series.flatMap((x) => Object.keys(x).filter((k) => k !== 'season' && k !== 'best')))]
+    lines = [{ key: 'best', name: 'Cheapest', color: '#1d1d1b', width: 3, dash: '5 3' }, ...sellers.map((sl, i) => ({ key: sl, name: sl, color: SELLER_COLORS[i % SELLER_COLORS.length], width: 2 }))]
+    const ix = Object.fromEntries(lines.map((l) => [l.key, index(r.series, l.key)]))
+    const m = mult(r.p)
+    data = r.series.map((x) => Object.fromEntries([['season', x.season], ...lines.map((l) => [l.key, mode === 'index' ? ix[l.key](x[l.key]) : x[l.key] != null ? x[l.key] * m : null])]))
+  } else {
+    lines = shown.map((r, i) => ({ key: r.p.key, name: `${r.p.name} ($/${unitOf(r.p)})`, color: SELLER_COLORS[i % SELLER_COLORS.length], width: 2 }))
+    const seasons = [...new Set(shown.flatMap((r) => r.series.map((x) => x.season)))].sort()
+    data = seasons.map((season) => {
+      const o = { season }
+      shown.forEach((r) => {
+        const x = r.series.find((y) => y.season === season)
+        o[r.p.key] = x ? (mode === 'index' ? index(r.series, 'best')(x.best) : x.best * mult(r.p)) : null
+      })
+      return o
+    })
+  }
+  const first = single ? shown[0].series[0] : null
+  const last = single ? shown[0].series[shown[0].series.length - 1] : null
+  const fmtV = (v) => (mode === 'index' ? `${Math.round(v)}` : fmt$(v))
+  return (
+    <div className="yields-card pr-trend">
+      <div className="yields-card-head">
+        <div>
+          <div className="yields-card-title">
+            {single ? <>Price trend — <button className="link-btn" onClick={() => setOpenKey(shown[0].p.key)}>{shown[0].p.name}</button></> : `Price trend — ${shown.length} of ${withHist.length} products`}
+          </div>
+          <div className="contracts-sub">
+            {single
+              ? `Per ${unitOf(shown[0].p)} after discount, by seller. ${first.season} → ${last.season}: ${fmt$(first.best * mult(shown[0].p))} → ${fmt$(last.best * mult(shown[0].p))} (${pctStr((last.best - first.best) / first.best)}).`
+              : `Cheapest price each season after discount.${withHist.length > 6 ? ' Narrow the search to see others.' : ''} Click a line’s name to open it.`}
+          </div>
+        </div>
+        <div className="agronomy-view-toggle" style={{ margin: 0 }}>
+          <button className={mode === 'price' ? 'active' : ''} onClick={() => setMode('price')}>Price</button>
+          <button className={mode === 'index' ? 'active' : ''} onClick={() => setMode('index')} title="First season = 100, so products at very different prices can be compared">Indexed</button>
+        </div>
+      </div>
+      <div style={{ height: 260 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 8, right: 16, left: 4, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#eee9de" />
+            <XAxis dataKey="season" type="number" domain={['dataMin', 'dataMax']} ticks={data.map((d) => d.season)} allowDecimals={false} tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} width={64} tickFormatter={(v) => (mode === 'index' ? v : `$${v >= 100 ? Math.round(v) : v}`)} domain={['auto', 'auto']} />
+            <Tooltip formatter={(v, name) => [v == null ? '—' : fmtV(v), name]} labelFormatter={(l) => `Season ${l}`} />
+            <Legend wrapperStyle={{ fontSize: 11, cursor: single ? 'default' : 'pointer' }} onClick={(e) => { if (!single && e && e.dataKey) setOpenKey(e.dataKey) }} />
+            {lines.map((l) => <Line key={l.key} type="monotone" isAnimationActive={false} dataKey={l.key} name={l.name} stroke={l.color} strokeWidth={l.width} strokeDasharray={l.dash} dot={{ r: 3 }} connectNulls />)}
+          </LineChart>
+        </ResponsiveContainer>
       </div>
     </div>
   )

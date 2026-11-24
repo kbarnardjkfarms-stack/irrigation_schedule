@@ -1827,3 +1827,4 @@ body.spray-dark:has(.ops-hub) { background: #f7f5f0; }
 .pr-seller textarea, .pr-seller input { font: inherit; font-size: 13px; width: 100%; box-sizing: border-box; padding: 6px 8px; border: 0.5px solid #ddd8cc; border-radius: 6px; }
 .pr-pre { white-space: pre-wrap; font-size: 13px; }
 .pr-skipped { font-size: 12px; color: #666; margin: 6px 0 0; padding-left: 18px; }
+.pr-trend { margin-bottom: 10px; }
