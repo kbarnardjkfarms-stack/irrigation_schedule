@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { collection, deleteDoc, doc, onSnapshot, setDoc, updateDoc, writeBatch } from 'firebase/firestore'
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { auth, db } from './firebase.js'
+import BidRounds from './PlanningBidRounds.jsx'
 import {
   CLASSES, buildProducts, changePct, compareQuotes, docKey, familyOf, fmt$, matchKey, money, normSeller, normUnit, parseAgworld,
   parseComparison, pct, productKey, quoteMath, quoteSig, seasonSeries, toOrder, unitLabel, unitSlips
@@ -28,7 +29,9 @@ import {
 //   priceQuotes/{id}        one price: productKey, season, seller, price, unit,
 //                           rate, rateUnit, discount, award, invoicePrice, source
 //   priceSellers/{key}      discount %, programs / terms, contact, notes
-//   priceBids/{season}__{productKey}  bid line: volume, onHand, location, notes
+//   priceBids/{season}__{productKey}  bid line: volume, onHand, commit, notes
+//   bidRounds/{id}          a round sent to vendors through no-login links
+//                           (PlanningBidRounds.jsx, functions/bidLinks.js)
 
 const who = () => (auth.currentUser ? auth.currentUser.email || auth.currentUser.uid : null)
 const SEASON_NOW = new Date().getFullYear() + (new Date().getMonth() >= 7 ? 1 : 0)
@@ -44,6 +47,7 @@ export default function PlanningPrices({ userRole }) {
   const [quotes, setQuotes] = useState([])
   const [sellers, setSellers] = useState([])
   const [bids, setBids] = useState([])
+  const [rounds, setRounds] = useState([])
   const [error, setError] = useState(null)
   const [msg, setMsg] = useState(null)
   const [openKey, setOpenKey] = useState(null)
@@ -55,7 +59,8 @@ export default function PlanningPrices({ userRole }) {
       onSnapshot(collection(db, 'priceProducts'), list(setProducts), onErr),
       onSnapshot(collection(db, 'priceQuotes'), list(setQuotes), onErr),
       onSnapshot(collection(db, 'priceSellers'), list(setSellers), onErr),
-      onSnapshot(collection(db, 'priceBids'), list(setBids), onErr)
+      onSnapshot(collection(db, 'priceBids'), list(setBids), onErr),
+      onSnapshot(collection(db, 'bidRounds'), list(setRounds), () => setRounds([]))
     ]
     return () => u.forEach((x) => x())
   }, [])
@@ -114,7 +119,7 @@ export default function PlanningPrices({ userRole }) {
     }, `Merged “${byKey[fromKey]?.name}” into “${byKey[intoKey]?.name}”.`)
   }
 
-  const ctx = { products: products || [], byKey, quotes, quotesByKey, sellers, sellerNames, bids, canEdit, writes, setOpenKey, setView }
+  const ctx = { products: products || [], byKey, quotes, quotesByKey, sellers, sellerNames, bids, rounds, canEdit, writes, setOpenKey, setView }
   const tabs = [['bids', 'Bids'], ['history', 'Price history'], ['sellers', 'Sellers & discounts'], ['account', 'Supplier accountability'], ...(canEdit ? [['import', 'Import']] : [])]
   const open = openKey ? byKey[openKey] : null
 
@@ -170,7 +175,7 @@ function ProductPicker({ products, onPick, placeholder = 'Find a product…', ex
 // ---------------------------------------------------------------------------
 // Bids
 // ---------------------------------------------------------------------------
-function Bids({ products, byKey, quotesByKey, sellerNames, bids, canEdit, writes, setOpenKey }) {
+function Bids({ products, byKey, quotesByKey, sellerNames, sellers, bids, rounds, canEdit, writes, setOpenKey }) {
   const seasons = useMemo(() => {
     const s = new Set([SEASON_NOW, SEASON_NOW - 1])
     bids.forEach((b) => s.add(b.season))
@@ -197,7 +202,7 @@ function Bids({ products, byKey, quotesByKey, sellerNames, bids, canEdit, writes
     const awarded = now.find((q) => q.award) || null
     const series = seasonSeries(all.filter((q) => q.season < season && q.seller !== 'Agworld'), p)
     const last = series.length ? series[series.length - 1] : null
-    const order = toOrder(l)
+    const order = l.commit != null ? Number(l.commit) : toOrder(l)
     return { l, p, bySeller, best, awarded, last, order }
   }).filter((r) => cls === 'all' || r.p.class === cls)
     .sort((a, b) => (a.p.class || '').localeCompare(b.p.class || '') || a.p.name.localeCompare(b.p.name))
@@ -236,7 +241,7 @@ function Bids({ products, byKey, quotesByKey, sellerNames, bids, canEdit, writes
       <div className="yields-card-head">
         <div>
           <div className="yields-card-title">Bids for {season}</div>
-          <div className="contracts-sub">Prices after each seller’s discount, per gallon or pound so different package sizes line up. Green = cheapest. Volumes in gal / lb; to order = (needed − on hand) × 95%.</div>
+          <div className="contracts-sub">Prices after each seller’s discount, per gallon or pound so different package sizes line up. Green = cheapest; • = came in through a bid link. Volumes in gal / lb; commit = what we’ll buy, (needed − on hand) × 95% unless you type one.</div>
         </div>
         <div className="agronomy-filter-bar" style={{ margin: 0 }}>
           <select value={season} onChange={(e) => setSeason(+e.target.value)}>{seasons.map((y) => <option key={y} value={y}>{y}</option>)}</select>
@@ -244,6 +249,7 @@ function Bids({ products, byKey, quotesByKey, sellerNames, bids, canEdit, writes
           {canEdit && <button onClick={() => startFrom(season - 1)} title={`Copies ${season - 1}’s bid list (or every product priced in ${season - 1})`}>Start from {season - 1}</button>}
         </div>
       </div>
+      {canEdit && <BidRounds season={season} rounds={rounds} lines={lines} byKey={byKey} quotesByKey={quotesByKey} sellerNames={sellerNames} sellers={sellers} writes={writes} />}
       {canEdit && <div className="pr-addline"><ProductPicker products={products} placeholder="Add a product to this bid…" onPick={(p) => writes.saveBid(season, p.key, {})} /></div>}
 
       {rows.length > 0 && (
@@ -258,7 +264,7 @@ function Bids({ products, byKey, quotesByKey, sellerNames, bids, canEdit, writes
         <table className="contracts-table contracts-table-auto pr-bids">
           <thead>
             <tr>
-              <th>Product</th><th className="num">Need</th><th className="num">On hand</th><th className="num">To order</th>
+              <th>Product</th><th className="num">Need</th><th className="num">On hand</th><th className="num" title="What we commit to buy: (need − on hand) × 95%, or type a number">Commit</th>
               <th className="num" title="Cheapest price the season before">Last yr</th>
               {sellersIn.map((s) => <th key={s} className="num">{s}</th>)}
               <th className="num">Change</th><th className="num">Est. $</th>{canEdit && <th />}
@@ -273,15 +279,15 @@ function Bids({ products, byKey, quotesByKey, sellerNames, bids, canEdit, writes
                   <td><button className="link-btn" onClick={() => setOpenKey(r.p.key)}>{r.p.name}</button><div className="contracts-sub" style={{ marginTop: 0 }}>{[r.p.class, r.p.ai].filter(Boolean).join(' · ')}</div></td>
                   <td className="num">{canEdit ? <NumIn v={r.l.volume} on={(v) => writes.saveBid(season, r.p.key, { volume: v })} /> : r.l.volume ?? ''}<small> {bu}</small></td>
                   <td className="num">{canEdit ? <NumIn v={r.l.onHand} on={(v) => writes.saveBid(season, r.p.key, { onHand: v })} /> : r.l.onHand ?? ''}</td>
-                  <td className="num">{r.order ? Math.round(r.order).toLocaleString() : '—'}</td>
+                  <td className="num">{canEdit ? <NumIn v={r.l.commit} placeholder={toOrder(r.l) ? String(Math.round(toOrder(r.l))) : ''} on={(v) => writes.saveBid(season, r.p.key, { commit: v })} /> : (r.order ? Math.round(r.order).toLocaleString() : '—')}</td>
                   <td className="num">{r.last ? fmt$(r.last.best) : '—'}</td>
                   {sellersIn.map((s) => {
                     const q = r.bySeller[s]
                     if (!q) return <td key={s} className="num pr-none">—</td>
                     const isBest = r.best && q.id === r.best.id
                     return (
-                      <td key={s} className={`num pr-quote${isBest ? ' best' : ''}${q.award ? ' award' : ''}`} title={`${fmt$(q.price)}/${unitLabel(q.unit)}${q.discount ? ` less ${Math.round(q.discount * 1000) / 10}%` : ''}${q.perAcre != null ? ` · ${fmt$(q.perAcre)}/ac at ${q.rate} ${unitLabel(q.rateUnit)}` : ''}${q.conflict ? ` · ⚠ also ${q.conflict}` : ''}`}>
-                        {fmt$(q.net)}{q.award && ' ★'}
+                      <td key={s} className={`num pr-quote${isBest ? ' best' : ''}${q.award ? ' award' : ''}`} title={`${fmt$(q.price)}/${unitLabel(q.unit)}${q.discount ? ` less ${Math.round(q.discount * 1000) / 10}%` : ''}${q.perAcre != null ? ` · ${fmt$(q.perAcre)}/ac at ${q.rate} ${unitLabel(q.rateUnit)}` : ''}${q.conflict ? ` · ⚠ also ${q.conflict}` : ''}${q.source === 'Bid link' ? ' · from their bid link' : ''}${q.altProduct ? ` · offers instead: ${q.altProduct}` : ''}${q.note ? ` · ${q.note}` : ''}`}>
+                        {q.source === 'Bid link' && <span className="pr-viabid">•</span>}{fmt$(q.net)}{q.award && ' ★'}{(q.altProduct || q.note) && <span className="pr-hasnote" title={[q.altProduct && `Alternative: ${q.altProduct}`, q.note].filter(Boolean).join(' · ')}>ⓘ</span>}
                         {canEdit && <button className="pr-award" onClick={() => award(r, q)} title={q.award ? 'Take the award back' : `Award to ${s}`}>{q.award ? 'awarded' : 'award'}</button>}
                       </td>
                     )
@@ -301,10 +307,10 @@ function Bids({ products, byKey, quotesByKey, sellerNames, bids, canEdit, writes
   )
 }
 
-function NumIn({ v, on, w = 80 }) {
+function NumIn({ v, on, w = 80, placeholder = '' }) {
   const [s, setS] = useState(v ?? '')
   useEffect(() => { setS(v ?? '') }, [v])
-  return <input className="yields-cell-input" style={{ width: w }} inputMode="decimal" value={s} onChange={(e) => setS(e.target.value)}
+  return <input className="yields-cell-input" style={{ width: w }} inputMode="decimal" placeholder={placeholder} value={s} onChange={(e) => setS(e.target.value)}
     onBlur={() => { const n = s === '' ? null : Number(s); if ((n ?? null) !== (v ?? null) && (n == null || isFinite(n))) on(n) }} />
 }
 
@@ -597,6 +603,7 @@ function Sellers({ sellers, sellerNames, quotes, canEdit, writes }) {
               <div className="hd-grid">
                 <label className="hd-field"><span>Usual discount %</span>{canEdit ? <NumIn v={d.discount != null ? Math.round(d.discount * 1000) / 10 : null} on={(v) => writes.saveSeller(name, { discount: v == null ? null : v / 100 })} /> : (d.discount != null ? `${d.discount * 100}%` : '—')}</label>
                 <label className="hd-field"><span>Contact</span>{canEdit ? <TextIn v={d.contact} on={(v) => writes.saveSeller(name, { contact: v })} /> : d.contact || '—'}</label>
+                <label className="hd-field"><span>Bid email</span>{canEdit ? <TextIn v={d.email} on={(v) => writes.saveSeller(name, { email: v })} /> : d.email || '—'}</label>
               </div>
               <label className="hd-field"><span>Programs & terms</span>{canEdit ? <TextIn area v={d.programs} on={(v) => writes.saveSeller(name, { programs: v })} placeholder="e.g. 3% early pay + 3% patronage; Emesto Silver and Admire Pro $75/gal off" /> : <div className="pr-pre">{d.programs || '—'}</div>}</label>
             </div>

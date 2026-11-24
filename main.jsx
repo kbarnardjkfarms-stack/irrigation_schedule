@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import PublicScheduleView from './PublicScheduleView.jsx'
 import { SprayCrew } from './Spray.jsx'
+import BidPortal from './BidPortal.jsx'
 import './styles.css'
 import './theme.css' // light / dark mode from the device setting
 // (flat layout: no src/ folder — everything lives at the project root)
@@ -13,9 +14,11 @@ import './theme.css' // light / dark mode from the device setting
 const watchMatch = window.location.pathname.match(/^\/watch\/([^/]+)\/?$/)
 // A /crew/<code> URL is a spray crew member's no-login link (Spray.jsx SprayCrew, functions/sprayCrewLinks.js).
 const crewMatch = window.location.pathname.match(/^\/crew\/([A-Za-z0-9_-]+)\/?$/)
+// A /bid/<code> URL is a vendor's no-login bid page (BidPortal.jsx, functions/bidLinks.js).
+const bidMatch = window.location.pathname.match(/^\/bid\/([A-Za-z0-9_-]+)\/?$/)
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    {watchMatch ? <PublicScheduleView slug={watchMatch[1]} /> : crewMatch ? <SprayCrew code={crewMatch[1]} /> : <App />}
+    {watchMatch ? <PublicScheduleView slug={watchMatch[1]} /> : crewMatch ? <SprayCrew code={crewMatch[1]} /> : bidMatch ? <BidPortal code={bidMatch[1]} /> : <App />}
   </React.StrictMode>
 )
